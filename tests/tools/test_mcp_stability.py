@@ -3,7 +3,7 @@
 import asyncio
 import os
 import signal
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
@@ -219,7 +219,7 @@ class TestStdioPidTracking:
             _lock,
             MCPServerTask,
         )
-        from unittest.mock import patch, MagicMock, AsyncMock
+        from unittest.mock import AsyncMock, patch, MagicMock, AsyncMock
 
         # Seed an orphan PID that belongs to a prior failed connection.
         fake_pid = 999999997
@@ -582,6 +582,156 @@ class TestStdioPgroupReaping:
             _time.sleep(0.05)
         assert not psutil.pid_exists(grandchild_pid), (
             "grandchild survived killpg-based reaping (issue #23799 regression)"
+        )
+
+
+class TestCancelledStdioConnectCleanup:
+    """A cancelled stdio connect reaps its own child and only its own (#72887)."""
+
+    def _make_server(self, name):
+        from tools.mcp_tool import MCPServerTask
+
+        server = MCPServerTask.__new__(MCPServerTask)
+        server.name = name
+        server._ready = MagicMock()
+        server._shutdown_event = MagicMock()
+        server._shutdown_event.is_set.return_value = True
+        server._reconnect_event = MagicMock()
+        server._sampling = None
+        server._elicitation = None
+        server._registered_tool_names = []
+        return server
+
+    def _reset_state(self):
+        from tools.mcp_tool import (
+            _lock,
+            _orphan_stdio_pid_servers,
+            _orphan_stdio_pids,
+            _stdio_pgids,
+            _stdio_pids,
+        )
+
+        with _lock:
+            _stdio_pids.clear()
+            _stdio_pgids.clear()
+            _orphan_stdio_pids.clear()
+            _orphan_stdio_pid_servers.clear()
+
+    @pytest.mark.skipif(os.name != "posix", reason="killpg is POSIX-only")
+    def test_cancelled_connect_signals_its_own_surviving_pgroup(self):
+        """The survivor is SIGTERMed at cancel time, not just queued for a sweep.
+
+        The MCP SDK escalates to killpg only on TimeoutError; under
+        cancellation ``await process.wait()`` raises the cancelled exception
+        instead, so its process-tree teardown never runs. Deferring to the
+        orphan sweep is not enough because that sweep only runs at the head of
+        the next _run_stdio, which never happens for a server that stops
+        reconnecting.
+        """
+        from tools.mcp_tool import _lock, _orphan_stdio_pids, _stdio_pgids
+
+        self._reset_state()
+        surviving_pid = 999999996
+        surviving_pgid = 888888886
+        killpg_calls = []
+
+        server = self._make_server("test-cancelled-connect")
+
+        async def _run():
+            session = MagicMock()
+            session.initialize = AsyncMock(side_effect=asyncio.CancelledError())
+            session_cm = MagicMock()
+            session_cm.__aenter__ = AsyncMock(return_value=session)
+            session_cm.__aexit__ = AsyncMock(return_value=False)
+            stdio_cm = MagicMock()
+            stdio_cm.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+            stdio_cm.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("tools.mcp_tool.ClientSession", return_value=session_cm), \
+                 patch("tools.mcp_tool._MCP_AVAILABLE", True), \
+                 patch("tools.mcp_tool._build_safe_env", return_value={}), \
+                 patch("tools.mcp_tool._resolve_stdio_command", return_value=("echo", {})), \
+                 patch("tools.mcp_tool._write_stderr_log_header"), \
+                 patch("tools.mcp_tool._get_mcp_stderr_log", return_value=None), \
+                 patch("tools.osv_check.check_package_for_malware", return_value=None), \
+                 patch("tools.mcp_tool._kill_orphaned_mcp_children"), \
+                 patch("tools.mcp_tool._snapshot_child_pids",
+                       side_effect=[set(), {surviving_pid}]), \
+                 patch("tools.mcp_tool._filter_mcp_children", side_effect=lambda pids: pids), \
+                 patch("os.getpgid", return_value=surviving_pgid), \
+                 patch("gateway.status._pid_exists", return_value=True), \
+                 patch("os.killpg", side_effect=lambda pgid, sig: killpg_calls.append((pgid, sig))), \
+                 patch("tools.mcp_tool.stdio_client", return_value=stdio_cm):
+                with pytest.raises(asyncio.CancelledError):
+                    await server._run_stdio({"command": "echo", "args": []})
+
+        asyncio.run(_run())
+
+        assert (surviving_pgid, signal.SIGTERM) in killpg_calls, (
+            f"cancelled connect did not SIGTERM its survivor; calls={killpg_calls}"
+        )
+        with _lock:
+            assert surviving_pid in _orphan_stdio_pids
+            _orphan_stdio_pids.discard(surviving_pid)
+            _stdio_pgids.pop(surviving_pid, None)
+
+    def test_spawn_window_is_serialised_against_concurrent_connects(self):
+        """The PID-attribution window must be held under a lock.
+
+        _run_stdio derives its spawned PID from a delta over *all* gateway
+        children, and background discovery connects every configured server
+        concurrently on one loop. If the window from the pre-spawn snapshot to
+        PID registration is not serialised, one server's delta contains a
+        peer's child — it then orphan-tracks and (on a cancelled connect)
+        terminates a process it does not own.
+        """
+        from tools import mcp_tool
+
+        self._reset_state()
+        lock_state_during_window = []
+        server = self._make_server("test-spawn-window")
+
+        async def _run():
+            spawn_lock = mcp_tool._get_stdio_spawn_lock()
+
+            def _snapshot():
+                # Sampled at both ends of the attribution window.
+                lock_state_during_window.append(spawn_lock.locked())
+                return set()
+
+            stdio_cm = MagicMock()
+            stdio_cm.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+            stdio_cm.__aexit__ = AsyncMock(return_value=False)
+            session_cm = MagicMock()
+            session_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("stop here"))
+            session_cm.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("tools.mcp_tool.ClientSession", return_value=session_cm), \
+                 patch("tools.mcp_tool._MCP_AVAILABLE", True), \
+                 patch("tools.mcp_tool._build_safe_env", return_value={}), \
+                 patch("tools.mcp_tool._resolve_stdio_command", return_value=("echo", {})), \
+                 patch("tools.mcp_tool._write_stderr_log_header"), \
+                 patch("tools.mcp_tool._get_mcp_stderr_log", return_value=None), \
+                 patch("tools.osv_check.check_package_for_malware", return_value=None), \
+                 patch("tools.mcp_tool._kill_orphaned_mcp_children"), \
+                 patch("tools.mcp_tool._snapshot_child_pids", side_effect=_snapshot), \
+                 patch("tools.mcp_tool._filter_mcp_children", side_effect=lambda pids: pids), \
+                 patch("tools.mcp_tool.stdio_client", return_value=stdio_cm):
+                try:
+                    await server._run_stdio({"command": "echo", "args": []})
+                except Exception:
+                    pass
+            # Released before returning, so a later spawn is never blocked by
+            # a peer still in its (up to connect_timeout) handshake.
+            assert not spawn_lock.locked()
+
+        asyncio.run(_run())
+
+        assert lock_state_during_window, "snapshot was never taken"
+        assert all(lock_state_during_window), (
+            "the spawn/PID-attribution window ran without the spawn lock held, "
+            "so a concurrent connect could be misattributed; "
+            f"observed lock states={lock_state_during_window}"
         )
 
 

@@ -2438,6 +2438,23 @@ class MCPServerTask:
         # exist, which would otherwise stall the shared MCP event loop.
         await asyncio.to_thread(_kill_orphaned_mcp_children)
 
+        # Serialise the spawn window. Background discovery connects every
+        # configured server in PARALLEL on this single loop, and the PID delta
+        # below is a difference over *all* gateway children — so without this
+        # lock server A's window straddles server B's spawn and A claims B's
+        # child as its own. Serialising is cheap: the window covers only the
+        # subprocess spawn and is released before the handshake, which may
+        # block for up to connect_timeout.
+        spawn_lock = _get_stdio_spawn_lock()
+        spawn_lock_released = False
+
+        def _release_spawn_lock() -> None:
+            nonlocal spawn_lock_released
+            if not spawn_lock_released:
+                spawn_lock_released = True
+                spawn_lock.release()
+
+        await spawn_lock.acquire()
         # Snapshot child PIDs before spawning so we can track the new one.
         pids_before = _snapshot_child_pids()
         new_pids: set = set()
@@ -2479,6 +2496,10 @@ class MCPServerTask:
                         for _pid in new_pids:
                             _stdio_pids[_pid] = self.name
                         _stdio_pgids.update(new_pgids)
+                # PIDs are attributed to this server now, so let the next
+                # server spawn. Holding this across the handshake below would
+                # serialise parallel discovery on connect_timeout.
+                _release_spawn_lock()
                 async with ClientSession(
                     read_stream, write_stream, **sampling_kwargs
                 ) as session:
@@ -2518,14 +2539,25 @@ class MCPServerTask:
                     # consistency with _run_http.
                     return await self._wait_for_lifecycle_event()
         finally:
+            # Covers the paths that raised before the in-band release above.
+            _release_spawn_lock()
             # Runs on clean exit, exceptions, AND asyncio cancellation.
             # If any of the spawned PIDs are still alive, the SDK's
             # teardown failed (common when the task is cancelled mid-way
             # on Linux, where setsid() children escape the parent cgroup).
             # Mark them as orphans so the next cleanup sweep can reap them.
             if new_pids:
+                import signal as _signal
+
                 from gateway.status import _pid_exists
                 _killpg = getattr(os, "killpg", None)
+                # Never signal our own process group: killpg would deliver to
+                # the gateway itself and crash it (#47134). The shutdown sweep
+                # applies the same guard.
+                try:
+                    _my_pgid = os.getpgrp()
+                except (AttributeError, OSError):
+                    _my_pgid = None
                 with _lock:
                     for _pid in new_pids:
                         _stdio_pids.pop(_pid, None)
@@ -2548,6 +2580,35 @@ class MCPServerTask:
                         if pid_alive or pgroup_alive:
                             _orphan_stdio_pids.add(pid)
                             _orphan_stdio_pid_servers[pid] = self.name
+                            # Signal the survivor NOW instead of only deferring
+                            # it. The MCP SDK escalates to killpg only on
+                            # TimeoutError, but under cancellation
+                            # ``await process.wait()`` raises the cancelled
+                            # exception instead, so its process-tree teardown is
+                            # skipped entirely and the child is left running.
+                            # The orphan sweep that would reap it runs at the
+                            # head of the next _run_stdio, so a server that
+                            # never reconnects is never swept — and if it holds
+                            # an exclusive resource (single-writer DB lock) it
+                            # blocks every later attempt, which then cancels the
+                            # same way. Permanent stall (#72887).
+                            #
+                            # SIGTERM only, and deliberately without waiting:
+                            # the watchdog wrapper's own handler performs the
+                            # SIGTERM/grace/SIGKILL escalation against the real
+                            # server's process group in its own process, so the
+                            # shared MCP event loop is never blocked here. The
+                            # orphan bookkeeping above is retained so the next
+                            # sweep still escalates if this signal did not take.
+                            if (
+                                _killpg is not None
+                                and pgid is not None
+                                and pgid != _my_pgid
+                            ):
+                                try:
+                                    _killpg(pgid, _signal.SIGTERM)
+                                except (ProcessLookupError, PermissionError, OSError):
+                                    pass
                         else:
                             # Nothing left to reap — drop the pgid entry so
                             # PID-reuse can't surface stale pgroup state later.
@@ -4122,6 +4183,21 @@ _orphan_stdio_pid_servers: Dict[int, str] = {}
 # exited and been removed from the active map.  Empty on Windows
 # (``os.getpgid`` is POSIX-only).
 _stdio_pgids: Dict[int, int] = {}  # pid -> pgid
+
+
+# Serialises the stdio spawn window so concurrent _run_stdio calls cannot
+# claim each other's children. Created lazily because every _run_stdio runs on
+# the shared MCP loop, and binding an asyncio primitive at import time would
+# tie it to whichever loop happened to be current then.
+_stdio_spawn_lock: Optional["asyncio.Lock"] = None
+
+
+def _get_stdio_spawn_lock() -> "asyncio.Lock":
+    """Return the process-wide stdio spawn lock, creating it on first use."""
+    global _stdio_spawn_lock
+    if _stdio_spawn_lock is None:
+        _stdio_spawn_lock = asyncio.Lock()
+    return _stdio_spawn_lock
 
 
 def _snapshot_child_pids() -> set:
