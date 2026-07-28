@@ -49,7 +49,7 @@ from agent.prompt_builder import (
     drain_truncation_warnings,
 )
 from agent.runtime_cwd import resolve_context_cwd
-from hermes_constants import get_hermes_home
+from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -418,16 +418,24 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             "you to."
         )
     else:
+        # get_hermes_home() is already scoped to <root>/profiles/<active_profile>
+        # here (see _resolve_active_profile_name above) — do not append the
+        # profile segment again. The default profile's data lives at the
+        # root, not at this profile's home, so it needs get_default_hermes_root().
+        # Do not restate the cross_profile=True bypass here: file_safety.
+        # get_cross_profile_warning() already discloses it reactively, at the
+        # exact moment a cross-profile write is attempted and blocked. Stating
+        # it proactively in every session's system prompt would hand a prompt
+        # injection the bypass keyword and the target path together for free.
+        default_root = get_default_hermes_root()
         post_workspace_parts.append(
             f"Active Hermes profile: {active_profile}. This session reads "
-            f"and writes {get_hermes_home()}/profiles/{active_profile}/. The default "
-            f"profile's data lives at {get_hermes_home()}/skills/, {get_hermes_home()}/plugins/, "
-            f"{get_hermes_home()}/cron/, {get_hermes_home()}/memories/ — those belong to a "
+            f"and writes {get_hermes_home()}/. The default "
+            f"profile's data lives at {default_root}/skills/, {default_root}/plugins/, "
+            f"{default_root}/cron/, {default_root}/memories/ — those belong to a "
             f"different session run from a different shell. Do NOT modify "
             f"another profile's skills/plugins/cron/memories unless the user "
-            f"explicitly directs you to. The cross-profile write guard will "
-            f"refuse such writes by default; pass cross_profile=True only "
-            f"after explicit direction."
+            f"explicitly directs you to."
         )
 
     platform_key = (agent.platform or "").lower().strip()

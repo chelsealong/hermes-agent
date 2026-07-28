@@ -91,6 +91,38 @@ def _init_code_repo(path):
     (path / "main.py").write_text("print('hi')\n")
 
 
+class TestActiveProfileHint:
+    """Regression test for #72894 — named-profile hint doubled the profile
+    path and pointed the default-profile pointers at the active profile's
+    own home instead of the root."""
+
+    def test_named_profile_does_not_double_path(self, monkeypatch):
+        # get_hermes_home() is already scoped to <root>/profiles/<name> when
+        # a named profile is active — that's the real shape production code
+        # hands back (see hermes_constants.get_hermes_home / get_default_hermes_root).
+        monkeypatch.setattr(
+            "agent.system_prompt.get_hermes_home", lambda: Path("/hermes/profiles/mac")
+        )
+        monkeypatch.setattr(
+            "agent.system_prompt.get_default_hermes_root", lambda: Path("/hermes")
+        )
+        agent = _make_agent()
+        with patch("agent.file_safety._resolve_active_profile_name", return_value="mac"):
+            # No valid_tool_names => coding_workspace_parts stays empty, so
+            # the profile hint lands in the stable tier (see the
+            # coding_workspace_parts branch above build_system_prompt_parts).
+            stable = _prompt_parts(agent)["stable"]
+
+        assert "/hermes/profiles/mac/profiles/mac/" not in stable
+        assert "This session reads and writes /hermes/profiles/mac/." in stable
+        assert "The default profile's data lives at /hermes/skills/, /hermes/plugins/, " in stable
+        assert "/hermes/cron/, /hermes/memories/" in stable
+        # file_safety.get_cross_profile_warning() already discloses the
+        # cross_profile=True bypass reactively when a write is actually
+        # blocked — the system prompt must not restate it proactively.
+        assert "cross_profile=True" not in stable
+
+
 class TestCodingContextBlock:
     def test_injected_when_active(self, monkeypatch, tmp_path):
         _init_code_repo(tmp_path)
