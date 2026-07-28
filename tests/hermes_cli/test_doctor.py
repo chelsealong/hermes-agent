@@ -321,6 +321,76 @@ def test_check_gateway_service_linger_skips_when_service_not_installed(monkeypat
     assert issues == []
 
 
+# ── Orphaned venv.stale.runtime-* backups (#73109) ──
+
+
+def _make_stale_backup(tmp_path, suffix, mtime_offset, size_bytes=0):
+    backup = tmp_path / f"venv.stale.runtime-{suffix}"
+    backup.mkdir()
+    if size_bytes:
+        (backup / "payload.bin").write_bytes(b"x" * size_bytes)
+    ts = 1_700_000_000 + mtime_offset
+    os.utime(backup, (ts, ts))
+    return backup
+
+
+def test_stale_runtime_backups_no_backups_is_noop(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=False)
+
+    assert fixed == 0
+    assert issues == []
+    assert capsys.readouterr().out == ""
+
+
+def test_stale_runtime_backups_single_backup_is_kept(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    _make_stale_backup(tmp_path, "1", mtime_offset=1)
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=False)
+
+    assert fixed == 0
+    assert issues == []
+    assert capsys.readouterr().out == ""
+
+
+def test_stale_runtime_backups_reports_without_fix(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    older = _make_stale_backup(tmp_path, "1", mtime_offset=1, size_bytes=1024 * 1024)
+    newer = _make_stale_backup(tmp_path, "2", mtime_offset=2)
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=False)
+
+    out = capsys.readouterr().out
+    assert fixed == 0
+    assert older.exists() and newer.exists()
+    assert len(issues) == 1
+    assert "1 orphaned" in issues[0]
+    assert "hermes doctor --fix" in issues[0]
+    assert "orphaned runtime backup" in out
+
+
+def test_stale_runtime_backups_removes_all_but_newest_with_fix(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    oldest = _make_stale_backup(tmp_path, "1", mtime_offset=1)
+    middle = _make_stale_backup(tmp_path, "2", mtime_offset=2)
+    newest = _make_stale_backup(tmp_path, "3", mtime_offset=3)
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=True)
+
+    assert fixed == 2
+    assert not oldest.exists()
+    assert not middle.exists()
+    assert newest.exists()
+    assert issues == []
+    assert "Removed 2 orphaned runtime backup venv(s)" in capsys.readouterr().out
+
+
 # ── Memory provider section (doctor should only check the *active* provider) ──
 
 

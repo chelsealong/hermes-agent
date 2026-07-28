@@ -575,6 +575,63 @@ def _check_gateway_service_linger(issues: list[str]) -> None:
         check_warn("Could not verify systemd linger", f"({linger_detail})")
 
 
+def _check_stale_runtime_venv_backups(issues: list[str], should_fix: bool) -> int:
+    """Detect orphaned ``venv.stale.runtime-*`` backups from runtime repairs.
+
+    ``managed_uv._cut_over_candidate()`` parks the pre-repair venv next to the
+    live one before promoting a repaired runtime, as a rollback safety net —
+    but nothing else ever reclaims it (#73109), so a successful repair leaves
+    a complete extra venv on disk indefinitely. The newest backup is kept
+    (it's the one guarding the most recent cutover); anything older predates
+    that rollback window and is safe to remove.
+
+    Returns the number of backups removed (0 unless ``should_fix``).
+    """
+    venv_dir = PROJECT_ROOT / "venv"
+    try:
+        backups = sorted(
+            (p for p in PROJECT_ROOT.glob(f"{venv_dir.name}.stale.runtime-*") if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+        )
+    except OSError:
+        return 0
+    if len(backups) <= 1:
+        return 0
+
+    stale = backups[:-1]
+    total_bytes = 0
+    for backup in stale:
+        for f in backup.rglob("*"):
+            try:
+                if f.is_file():
+                    total_bytes += f.stat().st_size
+            except OSError:
+                pass
+    size_mb = total_bytes // (1024 * 1024)
+
+    if not should_fix:
+        check_warn(
+            f"{len(stale)} orphaned runtime backup venv(s) (~{size_mb} MB)",
+            "run 'hermes doctor --fix' to remove",
+        )
+        issues.append(
+            f"{len(stale)} orphaned venv.stale.runtime-* backup(s) using "
+            f"~{size_mb} MB — run 'hermes doctor --fix' to remove"
+        )
+        return 0
+
+    removed = 0
+    for backup in stale:
+        try:
+            backup.resolve().relative_to(PROJECT_ROOT.resolve())
+        except (OSError, ValueError):
+            continue
+        shutil.rmtree(backup, ignore_errors=True)
+        removed += 1
+    check_ok(f"Removed {removed} orphaned runtime backup venv(s) (~{size_mb} MB)")
+    return removed
+
+
 _APIKEY_PROVIDERS_CACHE: list | None = None
 
 
@@ -863,6 +920,8 @@ def run_doctor(args):
         check_ok("Virtual environment active")
     else:
         check_warn("Not in virtual environment", "(recommended)")
+
+    fixed_count += _check_stale_runtime_venv_backups(issues, should_fix)
 
     # Detect drift between pyproject.toml and hermes_cli/__init__.py versions
     # (a git conflict resolution can silently revert one but not the other).
