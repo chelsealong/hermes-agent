@@ -336,6 +336,7 @@ def _make_stale_backup(tmp_path, suffix, mtime_offset, size_bytes=0):
 
 def test_stale_runtime_backups_no_backups_is_noop(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(doctor, "_stale_backup_in_use", lambda backup: False)
 
     issues = []
     fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=False)
@@ -347,6 +348,7 @@ def test_stale_runtime_backups_no_backups_is_noop(monkeypatch, tmp_path, capsys)
 
 def test_stale_runtime_backups_single_backup_is_kept(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(doctor, "_stale_backup_in_use", lambda backup: False)
     _make_stale_backup(tmp_path, "1", mtime_offset=1)
 
     issues = []
@@ -359,6 +361,7 @@ def test_stale_runtime_backups_single_backup_is_kept(monkeypatch, tmp_path, caps
 
 def test_stale_runtime_backups_reports_without_fix(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(doctor, "_stale_backup_in_use", lambda backup: False)
     older = _make_stale_backup(tmp_path, "1", mtime_offset=1, size_bytes=1024 * 1024)
     newer = _make_stale_backup(tmp_path, "2", mtime_offset=2)
 
@@ -376,6 +379,7 @@ def test_stale_runtime_backups_reports_without_fix(monkeypatch, tmp_path, capsys
 
 def test_stale_runtime_backups_removes_all_but_newest_with_fix(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(doctor, "_stale_backup_in_use", lambda backup: False)
     oldest = _make_stale_backup(tmp_path, "1", mtime_offset=1)
     middle = _make_stale_backup(tmp_path, "2", mtime_offset=2)
     newest = _make_stale_backup(tmp_path, "3", mtime_offset=3)
@@ -389,6 +393,58 @@ def test_stale_runtime_backups_removes_all_but_newest_with_fix(monkeypatch, tmp_
     assert newest.exists()
     assert issues == []
     assert "Removed 2 orphaned runtime backup venv(s)" in capsys.readouterr().out
+
+
+def test_stale_runtime_backups_never_deletes_newest_even_when_unused(monkeypatch, tmp_path, capsys):
+    """The single newest backup is never a removal candidate, in-use or not."""
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(doctor, "_stale_backup_in_use", lambda backup: False)
+    newest = _make_stale_backup(tmp_path, "1", mtime_offset=1)
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=True)
+
+    assert fixed == 0
+    assert newest.exists()
+
+
+def test_stale_runtime_backups_skips_backup_still_in_use(monkeypatch, tmp_path, capsys):
+    """A backup a live process may still be running from is never deleted,
+    even with --fix, even though it isn't the newest (#73109 regression:
+    a naive keep-newest-only policy would otherwise remove it)."""
+    monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+    held = _make_stale_backup(tmp_path, "1", mtime_offset=1)
+    orphaned = _make_stale_backup(tmp_path, "2", mtime_offset=2)
+    newest = _make_stale_backup(tmp_path, "3", mtime_offset=3)
+
+    monkeypatch.setattr(
+        doctor, "_stale_backup_in_use", lambda backup: backup == held
+    )
+
+    issues = []
+    fixed = doctor._check_stale_runtime_venv_backups(issues, should_fix=True)
+
+    out = capsys.readouterr().out
+    assert fixed == 1
+    assert held.exists()
+    assert not orphaned.exists()
+    assert newest.exists()
+    assert "still held by a running process" in out
+
+
+def test_stale_backup_in_use_defaults_to_true_without_psutil(monkeypatch, tmp_path):
+    """Liveness can't be disproven without psutil, so assume it's still in use."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "psutil":
+            raise ImportError("no psutil")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert doctor._stale_backup_in_use(tmp_path) is True
 
 
 # ── Memory provider section (doctor should only check the *active* provider) ──

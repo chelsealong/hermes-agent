@@ -575,15 +575,46 @@ def _check_gateway_service_linger(issues: list[str]) -> None:
         check_warn("Could not verify systemd linger", f"({linger_detail})")
 
 
+def _stale_backup_in_use(backup: Path) -> bool:
+    """Best-effort: is any running process's interpreter inside ``backup``?
+
+    A process started from a since-repaired venv keeps its interpreter
+    binary at the parked backup path until it is restarted — see
+    ``managed_uv._cut_over_candidate()`` and the "keep it until all older
+    Hermes processes have exited" guidance surfaced on a successful repair.
+    That is the entire reason the backup is kept; never delete one that a
+    live process may still be running (or re-exec'ing subprocesses) from.
+    When liveness can't be verified, assume it's still in use.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return True
+
+    try:
+        resolved = backup.resolve()
+    except OSError:
+        return True
+
+    for proc in psutil.process_iter(["exe"]):
+        try:
+            exe = proc.info.get("exe")
+            if exe and Path(exe).resolve().is_relative_to(resolved):
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError, ValueError):
+            continue
+    return False
+
+
 def _check_stale_runtime_venv_backups(issues: list[str], should_fix: bool) -> int:
     """Detect orphaned ``venv.stale.runtime-*`` backups from runtime repairs.
 
     ``managed_uv._cut_over_candidate()`` parks the pre-repair venv next to the
     live one before promoting a repaired runtime, as a rollback safety net —
     but nothing else ever reclaims it (#73109), so a successful repair leaves
-    a complete extra venv on disk indefinitely. The newest backup is kept
-    (it's the one guarding the most recent cutover); anything older predates
-    that rollback window and is safe to remove.
+    a complete extra venv on disk indefinitely. The newest backup is never
+    touched (it's the one guarding the most recent cutover); older ones are
+    reclaimable once no running process is still using them.
 
     Returns the number of backups removed (0 unless ``should_fix``).
     """
@@ -598,9 +629,19 @@ def _check_stale_runtime_venv_backups(issues: list[str], should_fix: bool) -> in
     if len(backups) <= 1:
         return 0
 
-    stale = backups[:-1]
+    candidates = backups[:-1]
+    removable = [b for b in candidates if not _stale_backup_in_use(b)]
+    in_use = len(candidates) - len(removable)
+    if not removable:
+        if in_use:
+            check_info(
+                f"{in_use} older runtime backup(s) still held by a running "
+                "process — restart it, then re-run doctor to reclaim them"
+            )
+        return 0
+
     total_bytes = 0
-    for backup in stale:
+    for backup in removable:
         for f in backup.rglob("*"):
             try:
                 if f.is_file():
@@ -608,27 +649,28 @@ def _check_stale_runtime_venv_backups(issues: list[str], should_fix: bool) -> in
             except OSError:
                 pass
     size_mb = total_bytes // (1024 * 1024)
+    suffix = f" ({in_use} more still held by a running process)" if in_use else ""
 
     if not should_fix:
         check_warn(
-            f"{len(stale)} orphaned runtime backup venv(s) (~{size_mb} MB)",
+            f"{len(removable)} orphaned runtime backup venv(s) (~{size_mb} MB){suffix}",
             "run 'hermes doctor --fix' to remove",
         )
         issues.append(
-            f"{len(stale)} orphaned venv.stale.runtime-* backup(s) using "
+            f"{len(removable)} orphaned venv.stale.runtime-* backup(s) using "
             f"~{size_mb} MB — run 'hermes doctor --fix' to remove"
         )
         return 0
 
     removed = 0
-    for backup in stale:
+    for backup in removable:
         try:
             backup.resolve().relative_to(PROJECT_ROOT.resolve())
         except (OSError, ValueError):
             continue
         shutil.rmtree(backup, ignore_errors=True)
         removed += 1
-    check_ok(f"Removed {removed} orphaned runtime backup venv(s) (~{size_mb} MB)")
+    check_ok(f"Removed {removed} orphaned runtime backup venv(s) (~{size_mb} MB){suffix}")
     return removed
 
 
