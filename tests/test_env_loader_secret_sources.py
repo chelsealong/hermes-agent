@@ -210,6 +210,58 @@ def test_apply_external_secret_sources_dedupes_within_process(tmp_path, monkeypa
     assert call_count["n"] == 2
 
 
+def test_guarded_call_reapplies_cached_value_after_dotenv_clobber(tmp_path, monkeypatch):
+    """#74265: a later ``load_hermes_dotenv()`` call reloads ``.env`` with
+    ``override=True`` before reaching the applied-home guard, which
+    overwrites the just-resolved secret with the raw ``.env`` placeholder
+    (e.g. ``__BITWARDEN_MANAGED__``). The guarded (second+) call must
+    restore the cached resolved value instead of leaving the clobbered
+    placeholder in ``os.environ`` — without calling the backend again.
+    """
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("BWS_ACCESS_TOKEN", "0.test-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "__BITWARDEN_MANAGED__")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "secrets:\n"
+        "  bitwarden:\n"
+        "    enabled: true\n"
+        "    project_id: test-project\n"
+        "    access_token_env: BWS_ACCESS_TOKEN\n",
+        encoding="utf-8",
+    )
+
+    call_count = {"n": 0}
+
+    def _fake_fetch(**_kwargs):
+        call_count["n"] += 1
+        return {"ANTHROPIC_API_KEY": "sk-ant-resolved"}, []
+
+    import agent.secret_sources.bitwarden as bw_module
+    monkeypatch.setattr(bw_module, "find_bws", lambda **_kw: Path("/fake/bws"))
+    monkeypatch.setattr(bw_module, "fetch_bitwarden_secrets", _fake_fetch)
+
+    from agent.secret_sources import registry as reg_module
+
+    reg_module._reset_registry_for_tests()
+
+    # First call (e.g. hermes_cli.main import): resolves the real secret.
+    env_loader._apply_external_secret_sources(tmp_path)
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-resolved"
+    assert call_count["n"] == 1
+
+    # A second ``load_hermes_dotenv()`` call (e.g. gateway/run.py import)
+    # re-runs its own ``override=True`` dotenv reload first, which puts the
+    # raw placeholder back into os.environ before calling us again.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "__BITWARDEN_MANAGED__")
+
+    env_loader._apply_external_secret_sources(tmp_path)
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-resolved"
+    assert call_count["n"] == 1, "must not re-fetch from the backend"
+
+
 def test_apply_external_secret_sources_status_line_suppresses_secret_names(
     tmp_path, monkeypatch, capsys
 ):

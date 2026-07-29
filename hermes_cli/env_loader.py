@@ -393,15 +393,25 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     UI surfaces read, and the startup status lines.
 
     Idempotent within a process: subsequent calls for the same
-    ``home_path`` are no-ops.  ``load_hermes_dotenv()`` runs at import
-    time from several hot modules (cli.py, hermes_cli/main.py,
-    run_agent.py, trajectory_compressor.py, ...), so without this guard
-    the status lines would print 3-5x per CLI startup.  Use
-    ``reset_secret_source_cache()`` if you need to force a re-pull
-    (tests, long-running processes after a config change).
+    ``home_path`` skip the fetch/config-parse/status-print work.
+    ``load_hermes_dotenv()`` runs at import time from several hot modules
+    (cli.py, hermes_cli/main.py, run_agent.py, trajectory_compressor.py,
+    ...), so without this guard the status lines would print 3-5x per CLI
+    startup.  Use ``reset_secret_source_cache()`` if you need to force a
+    re-pull (tests, long-running processes after a config change).
+
+    A later ``load_hermes_dotenv()`` call still re-runs its own
+    ``override=True`` dotenv reload before reaching this guard, which
+    would otherwise clobber an already-resolved secret back to its raw
+    ``.env`` placeholder (#74265) — so a guarded call re-applies the
+    values cached from the first successful apply instead of a bare
+    no-op, without touching the external source again.
     """
     home_key = str(Path(home_path).resolve())
     if home_key in _APPLIED_HOMES:
+        cached = _SECRET_SOURCE_VALUES_BY_HOME.get(home_key)
+        if cached:
+            os.environ.update(cached)
         return
 
     try:
