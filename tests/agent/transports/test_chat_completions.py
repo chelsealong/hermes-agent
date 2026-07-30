@@ -472,6 +472,74 @@ class TestChatCompletionsNormalize:
         assert nr.content == "hello"
         assert nr.provider_data is None
 
+    # ── Gemini textual tool-call leak recovery (#74771) ──────────────
+    _GEMINI_LEAK = (
+        "declaration:default_api:cet outil{demandes:[{assistant:run,"
+        "demande:{command:ls}}]}"
+    )
+
+    def _leak_response(self, content):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content, tool_calls=None, reasoning_content=None,
+                ),
+                finish_reason="stop",
+            )],
+            usage=None,
+        )
+
+    def test_gemini_toolcall_leak_suppressed(self, transport):
+        """A leaked tool call (DSL as content, no tool_calls) is blanked so the
+        empty-response retry ladder can re-elicit a native tool call, instead of
+        streaming the DSL to the user as the answer."""
+        nr = transport.normalize_response(self._leak_response(self._GEMINI_LEAK))
+        assert nr.content == ""
+        assert nr.tool_calls is None
+        assert nr.provider_data["gemini_toolcall_leak"] == self._GEMINI_LEAK
+
+    def test_gemini_toolcall_leak_detected_after_leading_whitespace(self, transport):
+        """The DSL sometimes arrives behind leading whitespace/newlines."""
+        nr = transport.normalize_response(
+            self._leak_response("\n  " + self._GEMINI_LEAK)
+        )
+        assert nr.content == ""
+        assert nr.provider_data["gemini_toolcall_leak"].startswith("\n  declaration")
+
+    def test_gemini_toolcall_leak_opt_out(self, transport, monkeypatch):
+        """The recovery is opt-out — the flag restores pass-through behavior."""
+        monkeypatch.setenv("HERMES_DISABLE_GEMINI_TOOLCALL_LEAK_RECOVERY", "1")
+        nr = transport.normalize_response(self._leak_response(self._GEMINI_LEAK))
+        assert nr.content == self._GEMINI_LEAK
+        assert nr.provider_data is None
+
+    def test_gemini_leak_recovery_ignores_normal_content(self, transport):
+        """A normal answer that merely mentions default_api is untouched."""
+        text = "You can call default_api functions like this: ..."
+        nr = transport.normalize_response(self._leak_response(text))
+        assert nr.content == text
+        assert nr.provider_data is None
+
+    def test_gemini_leak_recovery_skipped_when_tool_calls_present(self, transport):
+        """Never blank content that ships alongside real tool_calls."""
+        tc = SimpleNamespace(
+            id="call_1",
+            function=SimpleNamespace(name="terminal", arguments='{"command": "ls"}'),
+        )
+        r = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content=self._GEMINI_LEAK, tool_calls=[tc],
+                    reasoning_content=None,
+                ),
+                finish_reason="tool_calls",
+            )],
+            usage=None,
+        )
+        nr = transport.normalize_response(r)
+        assert nr.content == self._GEMINI_LEAK
+        assert len(nr.tool_calls) == 1
+
 
 
 

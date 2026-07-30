@@ -9,6 +9,7 @@ which has provider-specific conditionals for max_tokens defaults,
 reasoning configuration, temperature handling, and extra_body assembly.
 """
 
+import logging
 from typing import Any, Dict
 
 from agent.lmstudio_reasoning import resolve_lmstudio_effort
@@ -16,6 +17,17 @@ from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
 from agent.prompt_builder import DEVELOPER_ROLE_MODELS
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall, Usage
+from utils import env_var_enabled
+
+logger = logging.getLogger(__name__)
+
+# Prefix of Gemini's textual tool-call leak. An OpenAI-compatible gateway
+# (e.g. LiteLLM) fronting a Gemini model intermittently returns what should be
+# a native tool call as plain assistant *content*, in an internal DSL that
+# begins with this token and carries no ``tool_calls`` entry — the same
+# ``default_api``/``tool_code`` leak family handled for the Codex Responses
+# API in ``codex_responses_adapter._TOOL_CALL_LEAK_PATTERN``. See #74771.
+_GEMINI_TOOLCALL_LEAK_PREFIX = "declaration:default_api"
 
 
 def _reasoning_config_for_model(model: str, reasoning_config: dict | None) -> dict | None:
@@ -756,6 +768,38 @@ class ChatCompletionsTransport(ProviderTransport):
                 content = refusal
                 if finish_reason in (None, "stop"):
                     finish_reason = "content_filter"
+
+        # ── Gemini textual tool-call leak recovery (#74771) ──────────
+        # A Gemini model fronted by an OpenAI-compatible gateway (e.g.
+        # LiteLLM) intermittently emits what should be a native tool call as
+        # plain assistant content in an internal DSL that begins with
+        # ``declaration:default_api``, leaving ``tool_calls`` empty. Passed
+        # through, the DSL is streamed verbatim to the user as the answer and
+        # the tool never runs. Mirror the Codex Responses adapter's
+        # leaked-tool-call handling: blank the leaked text so it is not
+        # surfaced, which drops the turn into the existing empty-response
+        # retry ladder to re-elicit a proper tool call. The leak is
+        # non-deterministic on an identical request, so the retry usually
+        # succeeds. The prefix check (after leading whitespace) makes this a
+        # no-op for normal answers. Opt out with
+        # ``HERMES_DISABLE_GEMINI_TOOLCALL_LEAK_RECOVERY=1`` to restore the
+        # pass-through behavior.
+        if (
+            not tool_calls
+            and isinstance(content, str)
+            and content.lstrip().startswith(_GEMINI_TOOLCALL_LEAK_PREFIX)
+            and not env_var_enabled("HERMES_DISABLE_GEMINI_TOOLCALL_LEAK_RECOVERY")
+        ):
+            logger.warning(
+                "Assistant content is a Gemini textual tool-call leak "
+                "(starts with %r, no structured tool_calls); suppressing it "
+                "so the empty-response retry can re-elicit a native tool "
+                "call. Leaked snippet: %r",
+                _GEMINI_TOOLCALL_LEAK_PREFIX,
+                content[:300],
+            )
+            provider_data["gemini_toolcall_leak"] = content[:2000]
+            content = ""
 
         return NormalizedResponse(
             content=content,
