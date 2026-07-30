@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -22,6 +23,18 @@ logger = logging.getLogger(__name__)
 
 _skill_commands: Dict[str, Dict[str, Any]] = {}
 _skill_commands_platform: Optional[str] = None
+# Guards reads/writes of the two globals above so they always change
+# together. scan_skill_commands() builds its result in a local dict (never
+# mutating _skill_commands in place) and takes this lock only to publish the
+# finished result; get_skill_commands() takes it only to snapshot both
+# values before deciding whether to rescan. Neither call holds it across a
+# scan, so one thread's (I/O-bound) scan can never block another thread on
+# this lock — only the concurrent *scans themselves* used to race, when the
+# TUI gateway's main-thread "commands.catalog" handler and its pool-thread
+# "complete.slash" handler (see tui_gateway/server.py's _LONG_HANDLERS)
+# fired close together at startup and both mutated the same shared dict,
+# producing "already claimed by itself" warnings for every skill (#74574).
+_skill_commands_lock = threading.Lock()
 # Patterns for sanitizing skill names into clean hyphen-separated slugs.
 _SKILL_INVALID_CHARS = re.compile(r"[^a-z0-9-]")
 _SKILL_MULTI_HYPHEN = re.compile(r"-{2,}")
@@ -378,8 +391,17 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         Dict mapping "/skill-name" to {name, description, skill_md_path, skill_dir}.
     """
     global _skill_commands, _skill_commands_platform
-    _skill_commands_platform = _resolve_skill_commands_platform()
-    _skill_commands = {}
+    # Scan into a local dict — never the shared global — so two concurrent
+    # scans (e.g. the TUI gateway's main-thread "commands.catalog" handler
+    # racing a pool-thread "complete.slash" scan, see #74574) each build
+    # their own independent result with no shared mutable state to race on.
+    # The lock below is held only for the final swap, not the (I/O-bound)
+    # scan itself, so a slow scan on one thread can't stall another thread
+    # waiting on the lock — see _LONG_HANDLERS in tui_gateway/server.py for
+    # why that stall would matter (it exists to keep the stdin dispatch loop
+    # from blocking on exactly this kind of scan).
+    platform = _resolve_skill_commands_platform()
+    new_commands: Dict[str, Dict[str, Any]] = {}
     try:
         from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, skill_matches_environment, _get_disabled_skill_names
         from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
@@ -447,14 +469,14 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     # slug (e.g. "git_helper" vs "git-helper"). First-wins
                     # preserves local-before-external precedence.
                     cmd_key = f"/{cmd_name}"
-                    if cmd_key in _skill_commands:
+                    if cmd_key in new_commands:
                         logger.warning(
                             "Skill %r maps to slash command %s already claimed "
                             "by %r; keeping the first and skipping this one.",
-                            name, cmd_key, _skill_commands[cmd_key]["name"],
+                            name, cmd_key, new_commands[cmd_key]["name"],
                         )
                         continue
-                    _skill_commands[cmd_key] = {
+                    new_commands[cmd_key] = {
                         "name": name,
                         "description": description or f"Invoke the {name} skill",
                         "skill_md_path": str(skill_md),
@@ -464,6 +486,11 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     continue
     except Exception:
         pass
+    # Publish platform + commands together so a concurrent reader (see
+    # get_skill_commands()) never observes one updated without the other.
+    with _skill_commands_lock:
+        _skill_commands_platform = platform
+        _skill_commands = new_commands
     return _skill_commands
 
 
@@ -474,12 +501,18 @@ def get_skill_commands() -> Dict[str, Dict[str, Any]]:
     process serving Telegram and Discord concurrently) so each platform
     sees its own ``skills.platform_disabled`` view (#14536).
     """
-    if (
-        not _skill_commands
-        or _skill_commands_platform != _resolve_skill_commands_platform()
-    ):
-        scan_skill_commands()
-    return _skill_commands
+    with _skill_commands_lock:
+        stale = (
+            not _skill_commands
+            or _skill_commands_platform != _resolve_skill_commands_platform()
+        )
+        current = _skill_commands
+    if stale:
+        # Never scan while holding the lock — scan_skill_commands() only
+        # takes it briefly at the very end to publish its result, and this
+        # lock is not reentrant.
+        return scan_skill_commands()
+    return current
 
 
 def reload_skills() -> Dict[str, Any]:
