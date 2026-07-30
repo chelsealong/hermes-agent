@@ -97,6 +97,40 @@ class TestTextBatching:
         assert "split by Telegram" in dispatched.text
 
     @pytest.mark.asyncio
+    async def test_large_sub_4000_burst_crossing_normal_window_aggregated(self):
+        """Two long-but-sub-4000 messages fired as a rapid burst merge.
+
+        Regression for #74752: a 2566-char first message followed by a
+        3955-char message across a gap longer than the 0.3s normal window (but
+        within the large-message grace) must dispatch once with both texts,
+        instead of flushing the first alone and mishandling the second as a
+        busy-time steer.  Neither chunk reaches _SPLIT_THRESHOLD (4000), so the
+        old split-delay branch never engaged.
+        """
+        adapter = _make_adapter()
+        adapter._text_batch_delay_seconds = 0.05  # normal window
+        adapter._text_batch_split_delay_seconds = 0.05
+        adapter._text_batch_large_delay_seconds = 0.8  # large-message grace
+
+        first = _make_event("a" * 2566)
+        second = _make_event("b" * 3955)
+
+        adapter._enqueue_text_event(first)
+        # Gap exceeds the 0.05s normal window but stays inside the 0.8s grace.
+        await asyncio.sleep(0.2)
+        adapter._enqueue_text_event(second)
+
+        # The first message must not have flushed on its own during the gap.
+        adapter.handle_message.assert_not_called()
+
+        await asyncio.sleep(1.0)  # let the grace elapse
+
+        adapter.handle_message.assert_called_once()
+        text = adapter.handle_message.call_args[0][0].text
+        assert "a" * 2566 in text
+        assert "b" * 3955 in text
+
+    @pytest.mark.asyncio
     async def test_three_way_split_aggregated(self):
         """Three rapid messages should all merge."""
         adapter = _make_adapter()

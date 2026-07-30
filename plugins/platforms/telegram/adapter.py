@@ -642,6 +642,13 @@ class TelegramAdapter(BasePlatformAdapter):
     _TEXT_BATCH_FAST_DELAY_S = 0.18
     _TEXT_BATCH_SHORT_LEN = 1024
     _TEXT_BATCH_SHORT_DELAY_S = 0.24
+    # A single chunk larger than half the client-side split point is substantial
+    # enough that a rapid follow-up message is plausible, even though it never
+    # reaches _SPLIT_THRESHOLD.  Two long-but-sub-4000 messages fired as one
+    # burst (e.g. 2566 then 3955 chars ~1.2s apart, #74752) would otherwise
+    # flush the first alone after the 0.3s normal window and mis-handle the
+    # second as a busy-time steer.
+    _TEXT_BATCH_LARGE_LEN = 2000
 
     @staticmethod
     def _env_float_clamped(
@@ -738,6 +745,20 @@ class TelegramAdapter(BasePlatformAdapter):
         self._text_batch_split_delay_seconds = self._env_float_clamped(
             "HERMES_TELEGRAM_TEXT_BATCH_SPLIT_DELAY_SECONDS",
             1.0,
+            min_value=self._text_batch_delay_seconds,
+            max_value=4.0,
+        )
+        # A large sub-split chunk (>= _TEXT_BATCH_LARGE_LEN but below the split
+        # threshold) gets a wider grace than the 0.3s normal window so a rapid
+        # burst of two long messages is aggregated instead of flushing the first
+        # alone (#74752).  It can run longer than the split delay because
+        # separate user messages in a burst arrive with a wider gap (~1.2s
+        # observed) than a single message's client-side split chunks.  Bounded
+        # and env-configurable like its siblings; clamped to at least the normal
+        # delay so an operator lowering the cap still lowers this tier's floor.
+        self._text_batch_large_delay_seconds = self._env_float_clamped(
+            "HERMES_TELEGRAM_TEXT_BATCH_LARGE_DELAY_SECONDS",
+            1.5,
             min_value=self._text_batch_delay_seconds,
             max_value=4.0,
         )
@@ -8841,6 +8862,10 @@ class TelegramAdapter(BasePlatformAdapter):
             # Adaptive delay tiers:
             #  - last chunk ≥ _SPLIT_THRESHOLD: a continuation is almost
             #    certain → wait the longer split delay.
+            #  - last chunk ≥ _TEXT_BATCH_LARGE_LEN (~2000 cp): a large
+            #    sub-split message that may lead a rapid burst → wait the
+            #    large-message grace so a follow-up crossing the 0.3s window
+            #    is still aggregated (#74752).
             #  - total accumulated text ≤ _TEXT_BATCH_FAST_LEN (~320 cp):
             #    short message → cap delay at _TEXT_BATCH_FAST_DELAY_S
             #    so the agent sees the text near-instantly.
@@ -8855,6 +8880,8 @@ class TelegramAdapter(BasePlatformAdapter):
             total_len = len(getattr(pending, "text", "") or "") if pending else 0
             if last_len >= self._SPLIT_THRESHOLD:
                 delay = self._text_batch_split_delay_seconds
+            elif last_len >= self._TEXT_BATCH_LARGE_LEN:
+                delay = self._text_batch_large_delay_seconds
             elif total_len <= self._TEXT_BATCH_FAST_LEN:
                 delay = min(self._text_batch_delay_seconds, self._TEXT_BATCH_FAST_DELAY_S)
             elif total_len <= self._TEXT_BATCH_SHORT_LEN:
