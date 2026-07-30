@@ -826,6 +826,96 @@ def _rewrite_system_content_blocks(system_message: dict, effective: str) -> bool
     return False
 
 
+def _account_discarded_response_usage(agent, response) -> None:
+    """Record token/cost accounting for a response invalidated pre-parse.
+
+    A ``response_invalid`` response (malformed output, terminal provider
+    failure) is discarded and the turn retries or fails over — but the
+    provider has often already billed for the tokens in its ``usage``
+    block. The retry loop used to ``continue`` straight past the normal
+    accounting code further down, silently losing that spend from session
+    totals and the session DB's ``/insights`` figures.
+    """
+    response_usage = getattr(response, "usage", None) if response else None
+    if not response_usage:
+        return
+    canonical_usage = normalize_usage(
+        response_usage, provider=agent.provider, api_mode=agent.api_mode
+    )
+    if canonical_usage.total_tokens == 0:
+        return
+
+    agent.session_prompt_tokens += canonical_usage.prompt_tokens
+    agent.session_completion_tokens += canonical_usage.output_tokens
+    agent.session_total_tokens += canonical_usage.total_tokens
+    agent.session_api_calls += 1
+    agent.session_input_tokens += canonical_usage.input_tokens
+    agent.session_output_tokens += canonical_usage.output_tokens
+    agent.session_cache_read_tokens += canonical_usage.cache_read_tokens
+    agent.session_cache_write_tokens += canonical_usage.cache_write_tokens
+    agent.session_reasoning_tokens += canonical_usage.reasoning_tokens
+
+    # On the MoA path, agent.model/provider are the virtual preset name
+    # ("closed") and "moa", which have no pricing entry — price the turn at
+    # the real aggregator model/provider instead, same as the normal
+    # accounting block below does for a successfully-parsed response.
+    _cost_model = agent.model
+    _cost_provider = agent.provider
+    _cost_base_url = agent.base_url
+    _moa_client = getattr(agent, "client", None)
+    _agg_slot = getattr(_moa_client, "last_aggregator_slot", None) if _moa_client is not None else None
+    if _agg_slot and _agg_slot.get("model"):
+        _cost_model = _agg_slot["model"]
+        _cost_provider = _agg_slot.get("provider") or agent.provider
+        _cost_base_url = _agg_slot.get("base_url") or agent.base_url
+
+    cost_result = estimate_usage_cost(
+        _cost_model,
+        canonical_usage,
+        provider=_cost_provider,
+        base_url=_cost_base_url,
+        api_key=getattr(agent, "api_key", ""),
+    )
+    cost_delta = float(cost_result.amount_usd) if cost_result.amount_usd is not None else None
+    if cost_delta is not None:
+        agent.session_estimated_cost_usd += cost_delta
+    agent.session_cost_status = cost_result.status
+    agent.session_cost_source = cost_result.source
+
+    if agent._session_db and agent.session_id:
+        try:
+            if not agent._session_db_created:
+                agent._ensure_db_session()
+            agent._session_db.queue_token_counts(
+                agent.session_id,
+                input_tokens=canonical_usage.input_tokens,
+                output_tokens=canonical_usage.output_tokens,
+                cache_read_tokens=canonical_usage.cache_read_tokens,
+                cache_write_tokens=canonical_usage.cache_write_tokens,
+                reasoning_tokens=canonical_usage.reasoning_tokens,
+                estimated_cost_usd=cost_delta,
+                cost_status=cost_result.status,
+                cost_source=cost_result.source,
+                billing_provider=agent.provider,
+                billing_base_url=agent.base_url,
+                billing_mode="subscription_included" if cost_result.status == "included" else None,
+                model=agent.model,
+                api_call_count=1,
+            )
+        except Exception as e:
+            logger.debug(
+                "Discarded-response token persistence failed (session=%s): %s",
+                agent.session_id, e,
+            )
+
+    logger.info(
+        "Discarded invalid API response still billed: model=%s provider=%s in=%d out=%d total=%d",
+        agent.model, agent.provider or "unknown",
+        canonical_usage.input_tokens, canonical_usage.output_tokens,
+        canonical_usage.total_tokens,
+    )
+
+
 def _sync_failover_system_message(agent, api_messages, active_system_prompt):
     """Refresh the in-flight system message after a provider failover.
 
@@ -2419,6 +2509,7 @@ def run_conversation(
                             error_details.append("response.choices is empty")
 
                 if response_invalid:
+                    _account_discarded_response_usage(agent, response)
                     agent._invoke_api_request_error_hook(
                         task_id=effective_task_id,
                         turn_id=turn_id,
