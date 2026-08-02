@@ -274,6 +274,84 @@ class TestChatCompletionsBuildKwargs:
         assert "temperature" not in kw
 
 
+class TestChatCompletionsOpenRouterXaiOnlineWebSearch:
+    """Regression tests for #76481 — OpenRouter's xAI ``:online`` suffix adds
+    a server-side ``web_search`` tool, colliding with Hermes' client
+    ``web_search`` tool and getting the whole request rejected with
+    ``HTTP 400: Duplicate tool names: web_search``.
+    """
+
+    _TOOLS = [
+        {"type": "function", "function": {"name": "web_search", "parameters": {}}},
+        {"type": "function", "function": {"name": "web_extract", "parameters": {}}},
+        {"type": "function", "function": {"name": "terminal", "parameters": {}}},
+    ]
+
+    def test_openrouter_xai_online_drops_client_web_search(self, transport):
+        from providers import get_provider_profile
+        profile = get_provider_profile("openrouter")
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="x-ai/grok-4.5:online", messages=msgs, tools=self._TOOLS,
+            provider_profile=profile,
+        )
+        names = [t["function"]["name"] for t in kw["tools"]]
+        assert "web_search" not in names
+        assert "web_extract" in names
+        assert "terminal" in names
+
+    def test_openrouter_xai_online_legacy_flag_path_drops_client_web_search(self, transport):
+        """Same collision, reached via the legacy is_openrouter flag path
+        (no provider_profile — unregistered/unknown provider fallback)."""
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="x-ai/grok-4.5:online", messages=msgs, tools=self._TOOLS,
+            is_openrouter=True,
+        )
+        names = [t["function"]["name"] for t in kw["tools"]]
+        assert "web_search" not in names
+        assert "web_extract" in names
+
+    def test_bare_xai_model_keeps_client_web_search(self, transport):
+        """No ``:online`` suffix — OpenRouter does not inject its own
+        server-side search tool, so Hermes' client tool must stay."""
+        from providers import get_provider_profile
+        profile = get_provider_profile("openrouter")
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="x-ai/grok-4.5", messages=msgs, tools=self._TOOLS,
+            provider_profile=profile,
+        )
+        names = [t["function"]["name"] for t in kw["tools"]]
+        assert "web_search" in names
+
+    def test_non_openrouter_xai_online_keeps_client_web_search(self, transport):
+        """A non-OpenRouter provider never adds a server-side ``web_search``
+        tool for ``:online``, so nothing should be stripped."""
+        from providers import get_provider_profile
+        profile = get_provider_profile("custom")
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="x-ai/grok-4.5:online", messages=msgs, tools=self._TOOLS,
+            provider_profile=profile,
+        )
+        names = [t["function"]["name"] for t in kw["tools"]]
+        assert "web_search" in names
+
+    def test_openrouter_non_xai_online_keeps_client_web_search(self, transport):
+        """``:online`` on a non-xAI OpenRouter model doesn't hit the xAI
+        duplicate-tool-name bug — leave the client tool alone."""
+        from providers import get_provider_profile
+        profile = get_provider_profile("openrouter")
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="deepseek/deepseek-chat:online", messages=msgs, tools=self._TOOLS,
+            provider_profile=profile,
+        )
+        names = [t["function"]["name"] for t in kw["tools"]]
+        assert "web_search" in names
+
+
 class TestChatCompletionsKimi:
     """Regression tests for the Kimi/Moonshot quirks migrated into the transport."""
 

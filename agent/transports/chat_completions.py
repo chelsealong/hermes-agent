@@ -128,6 +128,36 @@ def _model_consumes_thought_signature(model: Any) -> bool:
     return "gemini" in m or "gemma" in m
 
 
+def _tool_name(tool: Any) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    fn = tool.get("function")
+    if isinstance(fn, dict) and fn.get("name"):
+        return str(fn["name"])
+    return str(tool.get("name") or "")
+
+
+def _strip_openrouter_xai_online_web_search(
+    tools: list[dict[str, Any]], model: str, is_openrouter: bool
+) -> list[dict[str, Any]]:
+    """Drop the client ``web_search`` tool for OpenRouter xAI ``:online`` requests.
+
+    OpenRouter's ``:online`` suffix on an ``x-ai/`` model adds a server-side
+    web-search tool also named ``web_search``. Sending Hermes' client
+    ``web_search`` tool alongside it makes xAI reject the whole request with
+    ``HTTP 400: Duplicate tool names: web_search``. Every other client tool
+    (including ``web_extract``) is unaffected, and non-OpenRouter or
+    non-``:online`` requests keep the client tool unchanged.
+    """
+    if not is_openrouter or not tools:
+        return tools
+    model_lower = str(model or "").lower()
+    if not (model_lower.startswith("x-ai/") and model_lower.endswith(":online")):
+        return tools
+    filtered = [t for t in tools if _tool_name(t) != "web_search"]
+    return filtered if len(filtered) != len(tools) else tools
+
+
 class ChatCompletionsTransport(ProviderTransport):
     """Transport for api_mode='chat_completions'.
 
@@ -371,6 +401,9 @@ class ChatCompletionsTransport(ProviderTransport):
             # etc.) compatible, in addition to direct moonshot.ai endpoints.
             if is_moonshot_model(model):
                 tools = sanitize_moonshot_tools(tools)
+            tools = _strip_openrouter_xai_online_web_search(
+                tools, model, params.get("is_openrouter", False)
+            )
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > provider default
@@ -556,6 +589,9 @@ class ChatCompletionsTransport(ProviderTransport):
         if tools:
             if is_moonshot_model(model):
                 tools = sanitize_moonshot_tools(tools)
+            tools = _strip_openrouter_xai_online_web_search(
+                tools, model, profile.name == "openrouter"
+            )
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > profile default
