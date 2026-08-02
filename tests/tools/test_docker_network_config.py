@@ -22,15 +22,18 @@ def test_sibling_container_config_sites_carry_docker_network():
     """Every container_config dict that carries docker_run_as_host_user must
     also carry docker_network — otherwise that code path silently falls back
     to networked containers while the terminal path honors the lockdown
-    (the probe/exec asymmetry reported on issue #46358).
+    (the probe/exec asymmetry reported on issue #46358, and again on #76906
+    for the backend-probe container `agent.prompt_builder._probe_remote_backend`
+    builds — hence that module joining this scan).
     """
     import ast
     import inspect
 
+    import agent.prompt_builder as prompt_builder
     import tools.code_execution_tool as code_execution_tool
     import tools.file_tools as file_tools
 
-    for module in (terminal_tool, file_tools, code_execution_tool):
+    for module in (terminal_tool, file_tools, code_execution_tool, prompt_builder):
         tree = ast.parse(inspect.getsource(module))
         sites = 0
         for node in ast.walk(tree):
