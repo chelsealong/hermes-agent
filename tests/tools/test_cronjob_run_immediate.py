@@ -53,3 +53,35 @@ class TestCronjobRunExecutesImmediately:
         assert res["success"] is False
         assert "boom" in res["error"]
         m_mark.assert_called_once()
+
+    def test_run_now_polls_activity_heartbeat_while_job_thread_is_alive(self):
+        """#76502: a long-running job must not go silent to the watchdog.
+
+        Before this fix, ``run_one_job`` ran directly on the calling
+        (parent) thread with no intermediate activity touch, so a
+        30+ minute job looked identical to a hung tool call and the
+        gateway's inactivity watchdog killed the parent turn even though
+        the job was progressing normally. Now the job runs off-thread
+        while the calling thread polls ``touch_activity_if_due`` so a
+        slow job still keeps the watchdog's heartbeat alive.
+        """
+        import time as time_mod
+
+        def _slow_run(job):
+            time_mod.sleep(0.3)
+            return True
+
+        ran = {"last_status": "ok", "last_error": None}
+        with patch("tools.cronjob_tools.claim_job_for_fire", return_value=True), \
+             patch("cron.scheduler.run_one_job", side_effect=_slow_run), \
+             patch("tools.cronjob_tools.get_job", return_value=ran), \
+             patch("tools.environments.base.touch_activity_if_due") as m_touch:
+            res = _execute_job_now(dict(_JOB))
+
+        assert res["claimed"] is True
+        assert res["success"] is True
+        # The heartbeat loop must have polled at least once while run_one_job
+        # was still executing on the background thread — proving a long job
+        # keeps producing activity ticks instead of going silent for its
+        # entire duration.
+        assert m_touch.called

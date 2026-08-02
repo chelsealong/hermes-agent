@@ -9,6 +9,8 @@ import json
 import logging
 import re
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -606,9 +608,38 @@ def _execute_job_now(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = "Job is already being fired by the scheduler; not run again."
             return {"claimed": False, "success": False, "error": reason}
 
-        # run_one_job records last_run_at/last_status via mark_job_run (which
-        # also clears the fire claim) and returns True iff it processed the job.
-        processed = run_one_job(job)
+        # run_one_job runs the job's own agent loop synchronously and only
+        # touches THAT agent's activity — not the calling turn's. A long job
+        # (30+ min is common) then looks identical to a hung tool call to the
+        # gateway's inactivity watchdog, which kills the calling turn even
+        # though the job is progressing normally (#76502). Run it off-thread
+        # and forward heartbeats through the same thread-local activity
+        # callback the terminal tool uses for long-running commands, via the
+        # shared touch_activity_if_due helper.
+        from tools.environments.base import touch_activity_if_due
+
+        _outcome: Dict[str, Any] = {}
+
+        def _run_job_now() -> None:
+            try:
+                _outcome["processed"] = run_one_job(job)
+            except BaseException as run_err:  # re-raised on the calling thread below
+                _outcome["exc"] = run_err
+
+        _job_thread = threading.Thread(
+            target=_run_job_now, name=f"cron-run-now-{job_id}", daemon=True
+        )
+        _job_thread.start()
+        _heartbeat_state = {"start": time.monotonic(), "last_touch": time.monotonic()}
+        while _job_thread.is_alive():
+            touch_activity_if_due(
+                _heartbeat_state, f"running cron job '{job.get('name', job_id)}'"
+            )
+            _job_thread.join(timeout=1.0)
+
+        if "exc" in _outcome:
+            raise _outcome["exc"]
+        processed = _outcome.get("processed", False)
         refreshed = get_job(job_id) or {}
         ok = refreshed.get("last_status") == "ok"
         return {
