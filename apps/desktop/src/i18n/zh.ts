@@ -688,7 +688,11 @@ export const zh: Translations = {
       terminal: {
         cwd: '工具与终端操作的默认项目目录。',
         persistentShell: '当后端支持时，在命令之间保留 Shell 状态。',
-        envPassthrough: '传入工具执行的环境变量。'
+        envPassthrough: '传入工具执行的环境变量。',
+        dockerImage: '执行后端为 Docker 时使用的容器镜像。',
+        singularityImage: '执行后端为 Singularity 时使用的镜像。',
+        modalImage: '执行后端为 Modal 时使用的镜像。',
+        daytonaImage: '执行后端为 Daytona 时使用的镜像。'
       },
       codeExecution: {
         mode: '代码执行被限定到当前项目的严格程度。'
@@ -783,7 +787,7 @@ export const zh: Translations = {
       enabledTitle: '快速输入',
       enabledDesc: '用全局快捷键在任何地方唤出一个小输入框，无需打开 Hermes 即可发送提示。',
       shortcutTitle: '快速输入快捷键',
-      shortcutDesc: '至少需要一个修饰键，例如 CommandOrControl+Shift+Space。',
+      shortcutDesc: '至少需要一个修饰键，例如 Command or Control + Shift + Space。',
       active: '快捷键已生效。',
       takenBy: '此快捷键已被其他应用占用，请换一个。',
       invalidShortcut: '不是有效的快捷键。请至少包含一个修饰键。'

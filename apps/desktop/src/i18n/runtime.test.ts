@@ -53,6 +53,21 @@ describe('desktop i18n runtime translator', () => {
     expect(fieldCopyForSchemaKey(zh.settings.fieldDescriptions, field)).toBe('当后端提供推理内容时予以显示。')
   })
 
+  it('translates terminal execution-backend image descriptions for zh (#77523)', () => {
+    expect(fieldCopyForSchemaKey(zh.settings.fieldDescriptions, 'terminal.docker_image')).toBe(
+      '执行后端为 Docker 时使用的容器镜像。'
+    )
+    expect(fieldCopyForSchemaKey(zh.settings.fieldDescriptions, 'terminal.singularity_image')).toBe(
+      '执行后端为 Singularity 时使用的镜像。'
+    )
+    expect(fieldCopyForSchemaKey(zh.settings.fieldDescriptions, 'terminal.modal_image')).toBe(
+      '执行后端为 Modal 时使用的镜像。'
+    )
+    expect(fieldCopyForSchemaKey(zh.settings.fieldDescriptions, 'terminal.daytona_image')).toBe(
+      '执行后端为 Daytona 时使用的镜像。'
+    )
+  })
+
   it('falls back to English when the active locale cannot resolve a key', () => {
     const boot = TRANSLATIONS.ja.boot as { ready?: string }
     const originalReady = boot.ready

@@ -668,7 +668,7 @@ export const ja = defineLocale({
       enabledDesc:
         'グローバルショートカットで小さな入力欄をどこからでも呼び出し、Hermes を開かずにプロンプトを送信します。',
       shortcutTitle: 'クイック入力のショートカット',
-      shortcutDesc: '修飾キーが 1 つ以上必要です（例: CommandOrControl+Shift+Space）。',
+      shortcutDesc: '修飾キーが 1 つ以上必要です（例: Command or Control + Shift + Space）。',
       active: 'ショートカットは有効です。',
       takenBy: 'このショートカットは他のアプリが使用しています。別のものを選んでください。',
       invalidShortcut: '有効なショートカットではありません。修飾キーを 1 つ以上含めてください。'
