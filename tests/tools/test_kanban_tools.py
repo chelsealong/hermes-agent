@@ -869,6 +869,115 @@ def test_maybe_auto_subscribe_swallows_add_notify_sub_failure(monkeypatch, worke
 # ---------------------------------------------------------------------------
 
 
+def test_attach_roundtrips_bytes_to_row_and_disk(worker_env):
+    """kanban_attach decodes base64, writes the blob, and records the row."""
+    import base64
+    from pathlib import Path
+
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    content = b"hello attachment from a tool"
+    out = kt._handle_attach({
+        "filename": "notes.txt",
+        "content_base64": base64.b64encode(content).decode(),
+        "content_type": "text/plain",
+    })
+    d = json.loads(out)
+    assert d.get("ok") is True, out
+    assert d["size"] == len(content)
+
+    conn = kb.connect()
+    try:
+        atts = kb.list_attachments(conn, worker_env)
+        assert [a.filename for a in atts] == ["notes.txt"]
+        assert Path(atts[0].stored_path).read_bytes() == content
+    finally:
+        conn.close()
+
+
+def test_attach_rejects_bad_base64(worker_env):
+    from tools import kanban_tools as kt
+
+    out = kt._handle_attach({"filename": "x.txt", "content_base64": "not base64!!!"})
+    d = json.loads(out)
+    assert "error" in d and "base64" in d["error"]
+
+
+def test_attach_requires_filename_and_content(worker_env):
+    from tools import kanban_tools as kt
+
+    assert "error" in json.loads(kt._handle_attach({"content_base64": "QQ=="}))
+    assert "error" in json.loads(kt._handle_attach({"filename": "x.txt"}))
+
+
+def test_attach_accepts_line_wrapped_base64(worker_env):
+    """coreutils `base64 <file>` wraps output at 76 chars — must still decode.
+
+    Regression test for #77215: `validate=True` rejects any non-alphabet
+    character, including the newlines RFC 2045-style wrapping introduces.
+    """
+    import base64
+
+    from tools import kanban_tools as kt
+
+    content = b"hello attachment from a tool" * 10
+    encoded = base64.b64encode(content).decode()
+    wrapped = "\n".join(encoded[i : i + 76] for i in range(0, len(encoded), 76))
+
+    out = kt._handle_attach({"filename": "wrapped.bin", "content_base64": wrapped})
+    d = json.loads(out)
+    assert d.get("ok") is True, out
+    assert d["size"] == len(content)
+
+
+def test_attach_accepts_data_uri_prefixed_base64(worker_env):
+    """A `data:<mime>;base64,` URI prefix must be stripped before decoding.
+
+    Regression test for #77215.
+    """
+    import base64
+
+    from tools import kanban_tools as kt
+
+    content = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+    encoded = base64.b64encode(content).decode()
+
+    out = kt._handle_attach({
+        "filename": "photo.png",
+        "content_base64": f"data:image/png;base64,{encoded}",
+    })
+    d = json.loads(out)
+    assert d.get("ok") is True, out
+    assert d["size"] == len(content)
+
+
+def test_attach_still_rejects_corrupt_base64_after_normalization(worker_env):
+    """Prefix/whitespace stripping must not mask genuinely invalid payloads."""
+    from tools import kanban_tools as kt
+
+    out = kt._handle_attach({
+        "filename": "x.txt",
+        "content_base64": "data:text/plain;base64,not base64!!!",
+    })
+    d = json.loads(out)
+    assert "error" in d and "base64" in d["error"]
+
+
+def test_attach_rejects_payload_that_is_empty_after_normalization(worker_env):
+    """A non-empty string that normalizes to "" must error, not attach a
+    silent 0-byte file. E.g. a `data:;base64,` prefix with nothing after it
+    passes the raw non-empty check but strips down to an empty payload."""
+    from tools import kanban_tools as kt
+
+    out = kt._handle_attach({"filename": "x.txt", "content_base64": "data:;base64,"})
+    d = json.loads(out)
+    assert "error" in d and "base64" in d["error"]
+
+    conn_check = json.loads(kt._handle_attachments({}))
+    assert conn_check.get("attachments", []) == []
+
+
 @pytest.fixture
 def allow_private_urls(monkeypatch):
     """Opt the SSRF guard into private/loopback targets for local fixtures.

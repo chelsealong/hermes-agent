@@ -998,8 +998,19 @@ def _handle_attach(args: dict, **kw) -> str:
         return tool_error("content_base64 is required")
     import base64
     import binascii
+    import re
+    # Strip whitespace/newlines (e.g. from coreutils `base64`'s 76-column
+    # line wrapping) and then a `data:<mime>;base64,` URI prefix before the
+    # strict decode below — both are common, valid encodings that
+    # `validate=True` otherwise rejects outright. Whitespace goes first so a
+    # header/payload boundary broken by a stray newline still normalizes to
+    # a matchable prefix.
+    normalized_b64 = re.sub(r"\s+", "", str(content_b64))
+    normalized_b64 = re.sub(r"^data:[^,]*;base64,", "", normalized_b64)
+    if not normalized_b64:
+        return tool_error("content_base64 is not valid base64: empty after normalization")
     try:
-        data = base64.b64decode(str(content_b64), validate=True)
+        data = base64.b64decode(normalized_b64, validate=True)
     except (binascii.Error, ValueError) as e:
         return tool_error(f"content_base64 is not valid base64: {e}")
     content_type = args.get("content_type")
