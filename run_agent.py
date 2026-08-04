@@ -2487,7 +2487,32 @@ class AIAgent:
         return str(value)
 
     @staticmethod
-    def _summarize_api_error(error: Exception) -> str:
+    def _summarize_api_error(
+        error: Exception,
+        *,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> str:
+        """Extract a human-readable one-liner from an API error, annotated
+        with the requested model on a 404.
+
+        ``model``/``provider`` are optional context. A 404 response — even a
+        plain-text "page not found" page carried via ``error.response.text``,
+        which is the shape real SDK ``NotFoundError``s use — names nothing
+        that failed to resolve, so a user reads it as an outage or auth
+        failure rather than a bad model id (#78796). When ``model`` is given
+        and isn't already named in the underlying summary, prefix it there.
+        """
+        summary = AIAgent._summarize_api_error_body(error)
+        if model and str(model) not in summary:
+            status_code = getattr(error, "status_code", None)
+            if status_code == 404:
+                who = f", provider={provider}" if provider else ""
+                return f"HTTP 404 (model={model}{who}): {summary}"
+        return summary
+
+    @staticmethod
+    def _summarize_api_error_body(error: Exception) -> str:
         """Extract a human-readable one-liner from an API error.
 
         Handles Cloudflare HTML error pages (502, 503, etc.) by pulling the
