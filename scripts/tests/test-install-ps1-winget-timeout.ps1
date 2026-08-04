@@ -6,11 +6,12 @@
 #
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/test-install-ps1-winget-timeout.ps1
 #
-# This test extracts ONLY the Invoke-WithWallClockTimeout function from
-# install.ps1 (via the PowerShell AST, not a hand-copied duplicate) and
-# exercises it directly with fake fast/slow script blocks. It deliberately
-# does NOT run the whole install.ps1 file (dot-sourcing it would fall
-# through to Main() and attempt a real install) or invoke real winget.
+# This test extracts ONLY the Invoke-ProcessWithWallClockTimeout function
+# from install.ps1 (via the PowerShell AST, not a hand-copied duplicate) and
+# exercises it directly against a real child process (not real winget). It
+# deliberately does NOT run the whole install.ps1 file (dot-sourcing it
+# would fall through to Main() and attempt a real install) or invoke real
+# winget.
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
@@ -46,12 +47,12 @@ function Assert-True {
 }
 
 # -----------------------------------------------------------------------------
-# Extract Invoke-WithWallClockTimeout from install.ps1 via the AST and load
-# just that function -- proves the shipped source defines it, without
+# Extract Invoke-ProcessWithWallClockTimeout from install.ps1 via the AST and
+# load just that function -- proves the shipped source defines it, without
 # executing the rest of the (side-effecting) installer script.
 # -----------------------------------------------------------------------------
 Write-Host ""
-Write-Host "-- extracting Invoke-WithWallClockTimeout from install.ps1 --"
+Write-Host "-- extracting Invoke-ProcessWithWallClockTimeout from install.ps1 --"
 
 $tokens = $null
 $parseErrors = $null
@@ -61,45 +62,77 @@ Assert-Equal -Expected 0 -Actual $parseErrors.Count -Label "install.ps1 parses w
 $fnAst = $ast.Find({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -eq "Invoke-WithWallClockTimeout"
+    $node.Name -eq "Invoke-ProcessWithWallClockTimeout"
 }, $true)
 
-Assert-True ($null -ne $fnAst) -Label "install.ps1 defines Invoke-WithWallClockTimeout"
+Assert-True ($null -ne $fnAst) -Label "install.ps1 defines Invoke-ProcessWithWallClockTimeout"
 
 if (-not $fnAst) {
     Write-Host ""
-    Write-Host "FAILED: Invoke-WithWallClockTimeout is missing -- winget installs have no timeout guard (#78085)." -ForegroundColor Red
+    Write-Host "FAILED: Invoke-ProcessWithWallClockTimeout is missing -- winget installs have no timeout guard (#78085)." -ForegroundColor Red
     exit 1
 }
 
 . ([scriptblock]::Create($fnAst.Extent.Text))
-Assert-True (Get-Command Invoke-WithWallClockTimeout -ErrorAction SilentlyContinue) -Label "Invoke-WithWallClockTimeout is callable after extraction"
+Assert-True (Get-Command Invoke-ProcessWithWallClockTimeout -ErrorAction SilentlyContinue) -Label "Invoke-ProcessWithWallClockTimeout is callable after extraction"
+
+# Use the currently-running PowerShell host itself as the "real command" to
+# launch -- it's a genuine external process (not a job, not a builtin) on
+# both Windows and non-Windows hosts, which is what lets this test run the
+# same way in CI as it does against a real `winget install` on Windows.
+$hostExe = (Get-Process -Id $PID).Path
 
 # -----------------------------------------------------------------------------
-# Test: a fast script block completes normally and returns its exit code
+# Test: a fast child process completes normally and returns its exit code
 # -----------------------------------------------------------------------------
 Write-Host ""
-Write-Host "-- fast script block --"
-$fastResult = Invoke-WithWallClockTimeout -TimeoutSec 15 -ScriptBlock { 0 }
-Assert-Equal -Expected $false -Actual $fastResult.TimedOut -Label "fast job does not time out"
-Assert-Equal -Expected 0 -Actual $fastResult.ExitCode -Label "fast job returns its exit code"
+Write-Host "-- fast child process --"
+$fastOut = [System.IO.Path]::GetTempFileName()
+$fastErr = [System.IO.Path]::GetTempFileName()
+try {
+    $fastResult = Invoke-ProcessWithWallClockTimeout -FilePath $hostExe `
+        -ArgumentList @("-NoProfile", "-Command", "exit 0") -TimeoutSec 15 `
+        -RedirectStandardOutput $fastOut -RedirectStandardError $fastErr
+    Assert-Equal -Expected $false -Actual $fastResult.TimedOut -Label "fast process does not time out"
+    Assert-Equal -Expected 0 -Actual $fastResult.ExitCode -Label "fast process returns its exit code"
+} finally {
+    Remove-Item -Path $fastOut, $fastErr -ErrorAction SilentlyContinue
+}
 
 # -----------------------------------------------------------------------------
-# Test: a hanging script block is killed at the timeout instead of hanging
+# Test: a hanging child process is killed at the timeout instead of hanging
 # forever -- this is the actual bug from #78085 (winget "Installing ripgrep
 # ... via winget..." never returning). Uses a short 2s timeout against a
-# script block that sleeps far longer, and asserts the CALL ITSELF returns
-# well within a generous wall-clock bound instead of blocking indefinitely.
+# process that sleeps far longer, and asserts the CALL ITSELF returns well
+# within a generous wall-clock bound instead of blocking indefinitely, AND
+# (the gap the previous job-based implementation had) that the actual spawned
+# process is gone afterward, not merely detached from.
 # -----------------------------------------------------------------------------
 Write-Host ""
-Write-Host "-- hanging script block (simulates a stuck winget install) --"
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$hangResult = Invoke-WithWallClockTimeout -TimeoutSec 2 -ScriptBlock { Start-Sleep -Seconds 120; 0 }
-$sw.Stop()
+Write-Host "-- hanging child process (simulates a stuck winget install) --"
+$hangOut = [System.IO.Path]::GetTempFileName()
+$hangErr = [System.IO.Path]::GetTempFileName()
+try {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $hangResult = Invoke-ProcessWithWallClockTimeout -FilePath $hostExe `
+        -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 120; exit 0") -TimeoutSec 2 `
+        -RedirectStandardOutput $hangOut -RedirectStandardError $hangErr
+    $sw.Stop()
 
-Assert-Equal -Expected $true -Actual $hangResult.TimedOut -Label "hanging job is reported as timed out"
-Assert-Equal -Expected $null -Actual $hangResult.ExitCode -Label "timed-out job has no exit code"
-Assert-True ($sw.Elapsed.TotalSeconds -lt 30) -Label "call returns promptly instead of hanging (took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s, must be < 30s for a 2s timeout)"
+    Assert-Equal -Expected $true -Actual $hangResult.TimedOut -Label "hanging process is reported as timed out"
+    Assert-Equal -Expected $null -Actual $hangResult.ExitCode -Label "timed-out process has no exit code"
+    Assert-True ($sw.Elapsed.TotalSeconds -lt 30) -Label "call returns promptly instead of hanging (took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s, must be < 30s for a 2s timeout)"
+
+    # Give the OS a moment to finish tearing the process down, then confirm
+    # it's actually gone -- Stop-Job/Remove-Job (the old implementation)
+    # only tears down the wrapping job, never the real process it launched.
+    Start-Sleep -Seconds 1
+    $stillAlive = $false
+    try { $null = Get-Process -Id $hangResult.ProcessId -ErrorAction Stop; $stillAlive = $true } catch { }
+    Assert-True (-not $stillAlive) -Label "timed-out process (PID $($hangResult.ProcessId)) is actually killed, not just detached from"
+} finally {
+    Remove-Item -Path $hangOut, $hangErr -ErrorAction SilentlyContinue
+}
 
 # -----------------------------------------------------------------------------
 # Test: the winget install call site inside Install-SystemPackages actually
@@ -114,8 +147,8 @@ $installFnAst = $ast.Find({
 }, $true)
 Assert-True ($null -ne $installFnAst) -Label "install.ps1 defines Install-SystemPackages"
 if ($installFnAst) {
-    Assert-True ($installFnAst.Extent.Text -match "Invoke-WithWallClockTimeout") `
-        -Label "Install-SystemPackages calls Invoke-WithWallClockTimeout around the winget install"
+    Assert-True ($installFnAst.Extent.Text -match "Invoke-ProcessWithWallClockTimeout") `
+        -Label "Install-SystemPackages calls Invoke-ProcessWithWallClockTimeout around the winget install"
 }
 
 # -----------------------------------------------------------------------------

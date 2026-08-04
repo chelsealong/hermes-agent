@@ -1377,38 +1377,61 @@ function Update-ProcessPathForPackages {
     $env:Path = [string]::Join(';', $ordered)
 }
 
-function Invoke-WithWallClockTimeout {
-    # Run $ScriptBlock in a background job and enforce a hard wall-clock
-    # timeout, killing the job if it doesn't finish in time.  Mirrors the
-    # bash installer's run_with_timeout so a stalled installer step (e.g.
-    # winget waiting on a source update, a stuck download, or a UAC prompt
-    # that never gets answered when invoked non-interactively via
+function Invoke-ProcessWithWallClockTimeout {
+    # Launch $FilePath as a genuine child process (NOT wrapped in a
+    # PowerShell background job) and enforce a hard wall-clock timeout,
+    # killing the whole process tree if it doesn't finish in time. Mirrors
+    # the bash installer's run_with_timeout so a stalled installer step
+    # (e.g. winget waiting on a source update, a stuck download, or a UAC
+    # prompt that never gets answered when invoked non-interactively via
     # `irm | iex`) can't hang the installer indefinitely (see #78085).
     #
+    # This intentionally does NOT use Start-Job/Wait-Job/Stop-Job: a
+    # background job's Stop-Job only tears down the job's own runspace, it
+    # does not recursively kill native child processes the script block
+    # spawned (verified directly -- a process started inside a job via
+    # Start-Process is still alive after Stop-Job + Remove-Job -Force).
+    # For winget specifically that would leave the real winget.exe (and
+    # anything IT spawns, e.g. an elevated installer or msiexec) orphaned
+    # and running in the background instead of actually terminated, and
+    # able to collide with the next package's winget invocation via
+    # winget's own single-instance lock. Launching the real process
+    # ourselves gives us its PID so we can kill the whole tree on timeout.
+    #
     # Returns a hashtable:
-    #   TimedOut -- $true if the timeout fired before the job finished
-    #   ExitCode -- the script block's last output value, or $null if it
-    #               timed out or the job itself failed to run
+    #   TimedOut -- $true if the timeout fired before the process exited
+    #   ExitCode -- the process's exit code, or $null if it timed out
     param(
-        [Parameter(Mandatory=$true)] [scriptblock]$ScriptBlock,
+        [Parameter(Mandatory=$true)] [string]$FilePath,
+        [string[]]$ArgumentList = @(),
         [Parameter(Mandatory=$true)] [int]$TimeoutSec,
-        [object[]]$ArgumentList = @()
+        [string]$RedirectStandardOutput,
+        [string]$RedirectStandardError
     )
-    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
-    $finished = Wait-Job $job -Timeout $TimeoutSec
-    if ($null -eq $finished) {
-        Stop-Job $job -ErrorAction SilentlyContinue
-        Remove-Job $job -Force -ErrorAction SilentlyContinue
-        return @{ TimedOut = $true; ExitCode = $null }
+    $startArgs = @{
+        FilePath     = $FilePath
+        ArgumentList = $ArgumentList
+        PassThru     = $true
+        NoNewWindow  = $true
     }
-    $result = Receive-Job $job -ErrorAction SilentlyContinue
-    $jobFailed = $finished.State -eq 'Failed'
-    Remove-Job $job -ErrorAction SilentlyContinue
-    if ($jobFailed) {
-        return @{ TimedOut = $false; ExitCode = $null }
+    if ($RedirectStandardOutput) { $startArgs.RedirectStandardOutput = $RedirectStandardOutput }
+    if ($RedirectStandardError) { $startArgs.RedirectStandardError = $RedirectStandardError }
+    $proc = Start-Process @startArgs
+    $exited = $proc.WaitForExit($TimeoutSec * 1000)
+    if (-not $exited) {
+        # Kill the whole tree rooted at $proc, not just $proc itself.
+        # Process.Kill(bool) with recursive-tree support needs .NET Core 3+
+        # (pwsh 6+); Windows PowerShell 5.1 runs on .NET Framework and lacks
+        # that overload, so fall back to `taskkill /T` there -- both paths
+        # are Windows-only anyway (WinPS 5.1 never runs elsewhere).
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            try { $proc.Kill($true) } catch { }
+        } else {
+            & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
+        }
+        return @{ TimedOut = $true; ExitCode = $null; ProcessId = $proc.Id }
     }
-    $code = if ($result -is [array]) { $result[-1] } else { $result }
-    return @{ TimedOut = $false; ExitCode = $code }
+    return @{ TimedOut = $false; ExitCode = $proc.ExitCode; ProcessId = $proc.Id }
 }
 
 function Install-SystemPackages {
@@ -1471,6 +1494,8 @@ function Install-SystemPackages {
         foreach ($pkg in $wingetPkgs) {
             $log = "$env:TEMP\hermes-winget-$($pkg -replace '[^A-Za-z0-9]','_')-$(Get-Random).log"
             $pkgLogs[$pkg] = $log
+            $stdOutPath = "$log.stdout.tmp"
+            $stdErrPath = "$log.stderr.tmp"
             # --source winget pins us to the github-backed source.  Without this,
             # a broken msstore source (cert validation failures like 0x8a15005e
             # are common on Windows-on-ARM and some corporate networks) makes
@@ -1478,20 +1503,26 @@ function Install-SystemPackages {
             # install -- and it exits 0, so the surrounding try/catch never fires.
             # We don't ship anything from msstore, so pinning is safe.
             #
-            # Run through Invoke-WithWallClockTimeout: winget can hang
+            # Run through Invoke-ProcessWithWallClockTimeout: winget can hang
             # indefinitely (a stalled source update, a stuck download, or a
             # UAC prompt that never gets answered when the installer is
             # invoked non-interactively via `irm | iex`), which previously
             # froze the whole installer on "Installing ripgrep ... via
             # winget..." forever (#78085).
+            $commonArgs = @("install", "--exact", "--id", $pkg, "--source", "winget", "--silent")
+            $agreementArgs = @("--accept-package-agreements", "--accept-source-agreements")
             try {
-                $wingetResult = Invoke-WithWallClockTimeout -TimeoutSec 120 -ArgumentList $pkg, $log -ScriptBlock {
-                    param($pkgId, $logPath)
-                    $output = winget install --exact --id $pkgId --source winget --silent `
-                        --accept-package-agreements --accept-source-agreements 2>&1
-                    $code = $LASTEXITCODE
-                    $output | Out-File -FilePath $logPath -Encoding utf8
-                    "winget exit: $code" | Out-File -FilePath $logPath -Encoding utf8 -Append
+                $wingetResult = Invoke-ProcessWithWallClockTimeout -FilePath "winget" `
+                    -ArgumentList ($commonArgs + $agreementArgs) -TimeoutSec 120 `
+                    -RedirectStandardOutput $stdOutPath -RedirectStandardError $stdErrPath
+                Get-Content -Path $stdOutPath, $stdErrPath -ErrorAction SilentlyContinue |
+                    Out-File -FilePath $log -Encoding utf8
+                Remove-Item -Path $stdOutPath, $stdErrPath -ErrorAction SilentlyContinue
+                if ($wingetResult.TimedOut) {
+                    "winget exit: <timed out after 120s>" | Out-File -FilePath $log -Encoding utf8 -Append
+                } else {
+                    $code = $wingetResult.ExitCode
+                    "winget exit: $code" | Out-File -FilePath $log -Encoding utf8 -Append
                     # 0x8A15002B (-1978335189) = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
                     # winget treats `install` on a package it already has registered as
                     # an *upgrade*, finds no newer version, and bails with this code --
@@ -1501,21 +1532,25 @@ function Install-SystemPackages {
                     # dead-ends forever. Force a reinstall to repair the registration so
                     # the shim reappears.
                     if ($code -eq -1978335189) {
-                        "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $logPath -Encoding utf8 -Append
-                        $output = winget install --exact --id $pkgId --source winget --silent --force `
-                            --accept-package-agreements --accept-source-agreements 2>&1
-                        $code = $LASTEXITCODE
-                        $output | Out-File -FilePath $logPath -Encoding utf8 -Append
-                        "winget exit (force): $code" | Out-File -FilePath $logPath -Encoding utf8 -Append
+                        "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $log -Encoding utf8 -Append
+                        $forceResult = Invoke-ProcessWithWallClockTimeout -FilePath "winget" `
+                            -ArgumentList ($commonArgs + @("--force") + $agreementArgs) -TimeoutSec 120 `
+                            -RedirectStandardOutput $stdOutPath -RedirectStandardError $stdErrPath
+                        Get-Content -Path $stdOutPath, $stdErrPath -ErrorAction SilentlyContinue |
+                            Out-File -FilePath $log -Encoding utf8 -Append
+                        Remove-Item -Path $stdOutPath, $stdErrPath -ErrorAction SilentlyContinue
+                        if ($forceResult.TimedOut) {
+                            "winget exit (force): <timed out after 120s>" | Out-File -FilePath $log -Encoding utf8 -Append
+                        } else {
+                            "winget exit (force): $($forceResult.ExitCode)" | Out-File -FilePath $log -Encoding utf8 -Append
+                        }
                     }
-                    $code
-                }
-                if ($wingetResult.TimedOut) {
-                    "winget exit: <timed out after 120s>" | Out-File -FilePath $log -Encoding utf8 -Append
                 }
             } catch {
                 $_ | Out-File -FilePath $log -Encoding utf8 -Append
                 "winget exit: <exception>" | Out-File -FilePath $log -Encoding utf8 -Append
+            } finally {
+                Remove-Item -Path $stdOutPath, $stdErrPath -ErrorAction SilentlyContinue
             }
         }
         # Refresh PATH so packages winget exposed via "command line aliases" in
