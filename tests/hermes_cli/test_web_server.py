@@ -1173,8 +1173,14 @@ class TestWebServerEndpoints:
             Platform._value2member_map_.pop("pseudofake", None)
             Platform._member_map_.pop("PSEUDOFAKE", None)
 
-
-
+    def test_relay_connector_has_docs_url(self):
+        """Regression: the relay entry in _PLATFORM_OVERRIDES shipped with an
+        empty docs_url, so the desktop Channels UI showed no "learn more" link
+        for it while every other connector had one.
+        """
+        resp = self.client.get("/api/messaging/platforms")
+        ids = {row["id"]: row for row in resp.json()["platforms"]}
+        assert ids["relay"]["docs_url"]
 
 
 
