@@ -1377,6 +1377,40 @@ function Update-ProcessPathForPackages {
     $env:Path = [string]::Join(';', $ordered)
 }
 
+function Invoke-WithWallClockTimeout {
+    # Run $ScriptBlock in a background job and enforce a hard wall-clock
+    # timeout, killing the job if it doesn't finish in time.  Mirrors the
+    # bash installer's run_with_timeout so a stalled installer step (e.g.
+    # winget waiting on a source update, a stuck download, or a UAC prompt
+    # that never gets answered when invoked non-interactively via
+    # `irm | iex`) can't hang the installer indefinitely (see #78085).
+    #
+    # Returns a hashtable:
+    #   TimedOut -- $true if the timeout fired before the job finished
+    #   ExitCode -- the script block's last output value, or $null if it
+    #               timed out or the job itself failed to run
+    param(
+        [Parameter(Mandatory=$true)] [scriptblock]$ScriptBlock,
+        [Parameter(Mandatory=$true)] [int]$TimeoutSec,
+        [object[]]$ArgumentList = @()
+    )
+    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+    $finished = Wait-Job $job -Timeout $TimeoutSec
+    if ($null -eq $finished) {
+        Stop-Job $job -ErrorAction SilentlyContinue
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+        return @{ TimedOut = $true; ExitCode = $null }
+    }
+    $result = Receive-Job $job -ErrorAction SilentlyContinue
+    $jobFailed = $finished.State -eq 'Failed'
+    Remove-Job $job -ErrorAction SilentlyContinue
+    if ($jobFailed) {
+        return @{ TimedOut = $false; ExitCode = $null }
+    }
+    $code = if ($result -is [array]) { $result[-1] } else { $result }
+    return @{ TimedOut = $false; ExitCode = $code }
+}
+
 function Install-SystemPackages {
     $script:HasRipgrep = $false
     $script:HasFfmpeg = $false
@@ -1443,26 +1477,41 @@ function Install-SystemPackages {
             # winget bail with "please specify --source" *before* attempting any
             # install -- and it exits 0, so the surrounding try/catch never fires.
             # We don't ship anything from msstore, so pinning is safe.
+            #
+            # Run through Invoke-WithWallClockTimeout: winget can hang
+            # indefinitely (a stalled source update, a stuck download, or a
+            # UAC prompt that never gets answered when the installer is
+            # invoked non-interactively via `irm | iex`), which previously
+            # froze the whole installer on "Installing ripgrep ... via
+            # winget..." forever (#78085).
             try {
-                $output = winget install --exact --id $pkg --source winget --silent `
-                    --accept-package-agreements --accept-source-agreements 2>&1
-                $code = $LASTEXITCODE
-                $output | Out-File -FilePath $log -Encoding utf8
-                "winget exit: $code" | Out-File -FilePath $log -Encoding utf8 -Append
-                # 0x8A15002B (-1978335189) = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
-                # winget treats `install` on a package it already has registered as
-                # an *upgrade*, finds no newer version, and bails with this code --
-                # even when the binary is gone from disk/PATH (stale registration,
-                # files removed outside winget, or a missing alias shim). We KNOW the
-                # command was missing (that's why we're here), so a plain install
-                # dead-ends forever. Force a reinstall to repair the registration so
-                # the shim reappears.
-                if ($code -eq -1978335189) {
-                    "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $log -Encoding utf8 -Append
-                    $output = winget install --exact --id $pkg --source winget --silent --force `
+                $wingetResult = Invoke-WithWallClockTimeout -TimeoutSec 120 -ArgumentList $pkg, $log -ScriptBlock {
+                    param($pkgId, $logPath)
+                    $output = winget install --exact --id $pkgId --source winget --silent `
                         --accept-package-agreements --accept-source-agreements 2>&1
-                    $output | Out-File -FilePath $log -Encoding utf8 -Append
-                    "winget exit (force): $LASTEXITCODE" | Out-File -FilePath $log -Encoding utf8 -Append
+                    $code = $LASTEXITCODE
+                    $output | Out-File -FilePath $logPath -Encoding utf8
+                    "winget exit: $code" | Out-File -FilePath $logPath -Encoding utf8 -Append
+                    # 0x8A15002B (-1978335189) = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
+                    # winget treats `install` on a package it already has registered as
+                    # an *upgrade*, finds no newer version, and bails with this code --
+                    # even when the binary is gone from disk/PATH (stale registration,
+                    # files removed outside winget, or a missing alias shim). We KNOW the
+                    # command was missing (that's why we're here), so a plain install
+                    # dead-ends forever. Force a reinstall to repair the registration so
+                    # the shim reappears.
+                    if ($code -eq -1978335189) {
+                        "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $logPath -Encoding utf8 -Append
+                        $output = winget install --exact --id $pkgId --source winget --silent --force `
+                            --accept-package-agreements --accept-source-agreements 2>&1
+                        $code = $LASTEXITCODE
+                        $output | Out-File -FilePath $logPath -Encoding utf8 -Append
+                        "winget exit (force): $code" | Out-File -FilePath $logPath -Encoding utf8 -Append
+                    }
+                    $code
+                }
+                if ($wingetResult.TimedOut) {
+                    "winget exit: <timed out after 120s>" | Out-File -FilePath $log -Encoding utf8 -Append
                 }
             } catch {
                 $_ | Out-File -FilePath $log -Encoding utf8 -Append
