@@ -331,6 +331,9 @@ export interface HermesConfig {
     personality?: string
     skin?: string
     interim_assistant_messages?: boolean
+    code_blocks?: {
+      expand_ascii_diagrams?: boolean
+    }
   }
   desktop?: {
     repo_scan_enabled?: boolean

@@ -4,6 +4,7 @@ import { setTerminalFontFamilyFromConfig } from '@/app/right-sidebar/terminal/te
 import { getHermesConfig, getHermesConfigDefaults } from '@/hermes'
 import { BUILTIN_PERSONALITIES, normalizePersonalityValue, personalityNamesFromConfig } from '@/lib/chat-runtime'
 import { normalize } from '@/lib/text'
+import { applyExpandAsciiDiagramsFromConfig } from '@/store/code-block-prefs'
 import {
   getComposerSelectionGeneration,
   getCurrentModelSource,
@@ -113,6 +114,7 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
         applyAutoSpeakFromConfig(config)
         applyVoiceStopPhraseFromConfig(config)
         applyThinkingSoundFromConfig(config)
+        applyExpandAsciiDiagramsFromConfig(config)
       } catch {
         // Config is nice-to-have; chat still works without it.
       }

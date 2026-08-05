@@ -71,4 +71,21 @@ describe('ExpandableBlock', () => {
 
     expect(screen.getByRole('button', { name: 'Collapse' }).getAttribute('aria-expanded')).toBe('true')
   })
+
+  it('mounts expanded when defaultExpanded is set, and can still collapse', () => {
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+
+    render(
+      <ExpandableBlock defaultExpanded>
+        <pre data-testid="content">{'line\n'.repeat(20)}</pre>
+      </ExpandableBlock>
+    )
+
+    const toggle = screen.getByRole('button', { name: 'Collapse' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.click(toggle)
+
+    expect(screen.getByRole('button', { name: 'Expand' }).getAttribute('aria-expanded')).toBe('false')
+  })
 })

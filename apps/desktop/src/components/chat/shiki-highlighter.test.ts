@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunkByLines, exceedsHighlightBudget } from '@/components/chat/shiki-highlighter'
+import { chunkByLines, exceedsHighlightBudget, isAsciiDiagramLanguage } from '@/components/chat/shiki-highlighter'
 
 describe('exceedsHighlightBudget', () => {
   it('highlights normal-sized blocks', () => {
@@ -17,6 +17,23 @@ describe('exceedsHighlightBudget', () => {
 
   it('short-circuits on char budget before line loop', () => {
     expect(exceedsHighlightBudget('y\n'.repeat(250_000))).toBe(true)
+  })
+})
+
+describe('isAsciiDiagramLanguage', () => {
+  it('matches txt and console fences, case- and whitespace-insensitively', () => {
+    expect(isAsciiDiagramLanguage('txt')).toBe(true)
+    expect(isAsciiDiagramLanguage('console')).toBe(true)
+    expect(isAsciiDiagramLanguage('TXT')).toBe(true)
+    expect(isAsciiDiagramLanguage(' console ')).toBe(true)
+  })
+
+  it('does not match normal source-code or log languages', () => {
+    expect(isAsciiDiagramLanguage('python')).toBe(false)
+    expect(isAsciiDiagramLanguage('bash')).toBe(false)
+    expect(isAsciiDiagramLanguage('json')).toBe(false)
+    expect(isAsciiDiagramLanguage(undefined)).toBe(false)
+    expect(isAsciiDiagramLanguage('')).toBe(false)
   })
 })
 

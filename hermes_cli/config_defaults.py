@@ -1303,6 +1303,13 @@ DEFAULT_CONFIG = {
             # independently of scale.
             "unicode_cols": 0,
         },
+        "code_blocks": {
+            # Desktop only: `txt`/`console` fenced blocks (ASCII diagrams,
+            # directory trees, control-flow charts) start expanded instead of
+            # collapsed at the default 7.5rem. Other languages (source code,
+            # logs) keep the existing collapsed-by-default behavior.
+            "expand_ascii_diagrams": False,
+        },
     },
 
     # Web dashboard settings

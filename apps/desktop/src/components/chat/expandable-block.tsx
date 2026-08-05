@@ -9,11 +9,14 @@ import { cn } from '@/lib/utils'
 interface ExpandableBlockProps {
   children: ReactNode
   className?: string
+  /** Mount already expanded (e.g. ASCII diagrams, meant to be read whole)
+   *  instead of the default collapsed-at-7.5rem start state. */
+  defaultExpanded?: boolean
 }
 
-export function ExpandableBlock({ children, className }: ExpandableBlockProps) {
+export function ExpandableBlock({ children, className, defaultExpanded = false }: ExpandableBlockProps) {
   const innerRef = useRef<HTMLDivElement>(null)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [overflowing, setOverflowing] = useState(false)
 
   // Measure inside ResizeObserver timing only (layout is clean there). A

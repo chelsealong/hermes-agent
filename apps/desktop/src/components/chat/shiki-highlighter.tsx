@@ -1,6 +1,7 @@
 'use client'
 
 import type { SyntaxHighlighterProps } from '@assistant-ui/react-streamdown'
+import { useStore } from '@nanostores/react'
 import { type ComponentProps, type FC, lazy, Suspense, useMemo } from 'react'
 import type ShikiHighlighter from 'react-shiki'
 
@@ -9,6 +10,7 @@ import { ExpandableBlock } from '@/components/chat/expandable-block'
 import { CopyButton } from '@/components/ui/copy-button'
 import { useI18n } from '@/i18n'
 import { isLikelyProseCodeBlock } from '@/lib/markdown-code'
+import { $expandAsciiDiagrams } from '@/store/code-block-prefs'
 
 /**
  * Streamdown's code adapter renders header + body as inline siblings, so we
@@ -59,6 +61,15 @@ export const LazyShiki: FC<ComponentProps<typeof ShikiHighlighter>> = props => (
     <ShikiBlock {...props} />
   </Suspense>
 )
+
+// Fence languages used for ASCII diagrams / control-flow charts / directory
+// trees — meant to be read as a whole rather than scrolled through like a
+// source file or terminal log.
+const ASCII_DIAGRAM_LANGUAGES = new Set(['txt', 'console'])
+
+export function isAsciiDiagramLanguage(language: string | undefined): boolean {
+  return ASCII_DIAGRAM_LANGUAGES.has((language || '').trim().toLowerCase())
+}
 
 export function exceedsHighlightBudget(code: string): boolean {
   if (code.length > MAX_HIGHLIGHT_CHARS) {
@@ -130,6 +141,7 @@ export const SyntaxHighlighter: FC<HermesSyntaxHighlighterProps> = ({
   defer = false
 }) => {
   const { t } = useI18n()
+  const expandAsciiDiagrams = useStore($expandAsciiDiagrams)
   const trimmed = (code ?? '').replace(/^\n+/, '').trimEnd()
 
   // Streaming may hand us empty/incomplete fences — render nothing rather
@@ -155,7 +167,7 @@ export const SyntaxHighlighter: FC<HermesSyntaxHighlighterProps> = ({
         text={trimmed}
       />
       <CodeCardBody className="[&_pre]:px-3 [&_pre]:py-2.5">
-        <ExpandableBlock>
+        <ExpandableBlock defaultExpanded={expandAsciiDiagrams && isAsciiDiagramLanguage(language)}>
           <Pre className="aui-shiki m-0 overflow-hidden bg-transparent p-0">
             {plain ? (
               <PlainCode code={trimmed} />
