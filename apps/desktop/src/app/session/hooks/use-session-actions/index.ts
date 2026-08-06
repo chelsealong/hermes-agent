@@ -541,7 +541,10 @@ export function useSessionActions({
     async (storedSessionId: string, replaceRoute = false) => {
       const requestId = resumeRequestRef.current + 1
       resumeRequestRef.current = requestId
-      const resumedSameSelectedSession = selectedStoredSessionIdRef.current === storedSessionId
+      // Captured before any mutation below: whichever session this was, its
+      // effort (if any) is what's currently sitting in $currentReasoningEffort.
+      const previouslySelectedStoredSessionId = selectedStoredSessionIdRef.current
+      const resumedSameSelectedSession = previouslySelectedStoredSessionId === storedSessionId
       const resumeStartMessages = resumedSameSelectedSession ? $messages.get() : []
 
       const isCurrentResume = () =>
@@ -834,7 +837,15 @@ export function useSessionActions({
       const stored =
         $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId)) ?? storedForProfile
 
-      applyStoredSessionPreviewRuntimeInfo(stored)
+      // The leftover value belongs to the target session only when IT was the
+      // one last selected (nothing else could have overwritten it since — the
+      // common cross-launch-restart case). A prior DIFFERENT session leaves a
+      // stale, specific, wrong effort behind; previewing must not pass that off
+      // as this session's own (#79807 follow-up).
+      const effortBelongsToPreview =
+        previouslySelectedStoredSessionId === null || previouslySelectedStoredSessionId === storedSessionId
+
+      applyStoredSessionPreviewRuntimeInfo(stored, effortBelongsToPreview)
 
       if (stored) {
         applyStoredUsage(stored)

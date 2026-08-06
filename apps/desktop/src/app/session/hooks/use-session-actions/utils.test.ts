@@ -128,19 +128,35 @@ describe('applyStoredSessionPreviewRuntimeInfo', () => {
     setCurrentReasoningEffort('')
   })
 
-  it('previews the stored model but leaves reasoning effort alone', () => {
+  it('previews the stored model and leaves reasoning effort alone when it belongs to this session', () => {
     // A profile default ('ultra') differs from the session's actual last-known
     // effort ('max', persisted from a prior resume). The composer pill falls
     // back to the profile default whenever the live effort is empty, so
     // clearing it here — during the resume preview window, before
     // session.resume reports the real value — would flash 'ultra' even though
-    // the session is actually running at 'max' (#79807).
+    // the session is actually running at 'max' (#79807). `effortBelongsToPreview`
+    // is true here because nothing else claimed the field this run (or this is
+    // the same session being reopened), so the persisted value is trustworthy.
     setCurrentReasoningEffort('max')
 
-    applyStoredSessionPreviewRuntimeInfo({ model: 'qwen3.8' })
+    applyStoredSessionPreviewRuntimeInfo({ model: 'qwen3.8' }, true)
 
     expect($currentModel.get()).toBe('qwen3.8')
     expect($currentReasoningEffort.get()).toBe('max')
+  })
+
+  it('clears reasoning effort when the leftover value belongs to a different session', () => {
+    // Session A (effort 'max') was live earlier this run; the user now switches
+    // to session B, never opened this run, whose real effort is unknown here.
+    // The preview must not display A's 'max' as if it were B's effort — that's
+    // the same class of bug as the original flash, just relocated from "wrong
+    // because cleared" to "wrong because stale from a different session".
+    setCurrentReasoningEffort('max')
+
+    applyStoredSessionPreviewRuntimeInfo({ model: 'qwen3.8' }, false)
+
+    expect($currentModel.get()).toBe('qwen3.8')
+    expect($currentReasoningEffort.get()).toBe('')
   })
 })
 

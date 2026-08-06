@@ -981,6 +981,43 @@ describe('resumeSession failure recovery', () => {
     expect($activeSessionId.get()).toBe('runtime-1')
     expect($messages.get().length).toBe(1)
   })
+
+  it('does not leak a previous session\'s reasoning effort into a different cold session\'s preview (#79807 follow-up)', async () => {
+    // Session A was live earlier this run at 'max'; the user now clicks
+    // session B, never opened this run, whose real effort is unknown until
+    // session.resume reports it. The preview must not paint A's leftover
+    // 'max' as if it belonged to B.
+    setSessions([storedSession({ id: 'stored-B', model: 'qwen3.8' })])
+    setCurrentReasoningEffort('max')
+
+    const resumeGate = deferred<never>()
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'session.resume') {
+        return resumeGate.promise
+      }
+
+      return {} as never
+    })
+
+    vi.mocked(getSessionMessages).mockResolvedValue({ messages: [] } as never)
+
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(
+      <ResumeHarness onReady={r => (resume = r)} requestGateway={requestGateway} selectedStoredSessionId="stored-A" />
+    )
+    await waitFor(() => expect(resume).not.toBeNull())
+
+    const resumePromise = resume!('stored-B', true)
+
+    await waitFor(() => expect($currentReasoningEffort.get()).toBe(''))
+    // The model, unlike effort, IS on the lightweight list entry — the preview
+    // still seeds it immediately.
+    expect($currentModel.get()).toBe('qwen3.8')
+
+    resumeGate.resolve({ session_id: 'runtime-b', resumed: 'stored-B', messages: [], info: {} } as never)
+    await resumePromise
+  })
 })
 
 function BranchHarness({

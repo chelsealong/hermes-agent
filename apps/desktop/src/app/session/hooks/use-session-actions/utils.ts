@@ -1056,15 +1056,27 @@ export function applyRuntimeInfo(
   return sessionState
 }
 
-export function applyStoredSessionPreviewRuntimeInfo(stored: { model?: null | string } | undefined) {
+export function applyStoredSessionPreviewRuntimeInfo(
+  stored: { model?: null | string } | undefined,
+  effortBelongsToPreview: boolean
+) {
   setCurrentModel(stored?.model || '')
   setCurrentProvider('')
-  // Reasoning effort is intentionally left alone here (unlike the other
-  // fields): the composer pill falls back to the profile default whenever
-  // this is empty, so clearing it during the preview window flashes the
-  // profile default instead of the session's real effort. Leaving the prior
-  // (persisted) value in place means the pill keeps showing the last-known
-  // effort until session.resume reports the real one a moment later.
+  // Reasoning effort isn't on the lightweight stored-session list entry, so it
+  // can't be seeded the way model is. Whether it's safe to leave the field
+  // alone during the preview window depends on whose value is currently
+  // sitting there: `effortBelongsToPreview` is false only when a DIFFERENT
+  // session was live earlier this run, in which case the field holds THAT
+  // session's effort — clear it rather than pass off a specific wrong value as
+  // this session's own (#79807 follow-up). When it's true (nothing else has
+  // run yet, or this is the same session), the persisted value already is
+  // this session's own last-known effort, so clearing it would flash the
+  // profile default instead — leave it alone.
+
+  if (!effortBelongsToPreview) {
+    setCurrentReasoningEffort('')
+  }
+
   setCurrentServiceTier('')
   setCurrentFastMode(false)
   setYoloActive(false)
