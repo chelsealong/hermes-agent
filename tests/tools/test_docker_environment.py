@@ -1579,3 +1579,28 @@ def test_reuse_does_not_warn_when_image_and_mounts_match(monkeypatch, caplog):
     assert env._container_id == "reused-cid"
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert not any("configuration differences" in w for w in warnings), warnings
+
+
+def test_reuse_does_not_warn_for_matching_windows_bind_mount(monkeypatch, caplog):
+    """Bind-mount sources aren't directly comparable (Docker Desktop may
+    report a translated path, and a Windows host path's own colon defeats a
+    naive requested-source split), so a matching bind mount must not trigger
+    a mismatch warning even though the naive split of the requested spec
+    would only capture the drive letter."""
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    monkeypatch.setattr(docker_env, "_get_active_profile_name", lambda: "default")
+    _mock_subprocess_run_with_reuse_and_inspect(
+        monkeypatch,
+        actual_image="python:3.11",
+        mounts_json=r'[{"Type":"bind","Source":"C:\\Users\\x","Destination":"/workspace"}]',
+    )
+
+    with caplog.at_level(logging.WARNING, logger=docker_env.logger.name):
+        env = _make_dummy_env(
+            task_id="reuse-bind-match", image="python:3.11",
+            volumes=[r"C:\Users\x:/workspace"],
+        )
+
+    assert env._container_id == "reused-cid"
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("configuration differences" in w for w in warnings), warnings

@@ -1866,11 +1866,14 @@ class DockerEnvironment(BaseEnvironment):
         return value or None
 
     def _container_mount_sources_by_destination(self, container_id: str) -> dict:
-        """Return ``{destination: name-or-source}`` for the container's current mounts.
+        """Return ``{destination: (type, name-or-source)}`` for the container's mounts.
 
         Named volumes report a stable ``Name``; bind mounts fall back to
-        ``Source`` (which Docker Desktop may report translated — see
-        ``_reuse_config_mismatches``, which only trusts this for volumes).
+        ``Source``, which Docker Desktop may report translated and which a
+        requested Windows host path can't be unambiguously compared against
+        (its own colon defeats a naive split) — so ``_reuse_config_mismatches``
+        only compares the source value for volume-type mounts, treating
+        presence at the destination as the signal for binds.
         """
         raw = self._container_inspect_field(container_id, "{{json .Mounts}}")
         if not raw:
@@ -1886,7 +1889,7 @@ class DockerEnvironment(BaseEnvironment):
             dest = m.get("Destination")
             if not dest:
                 continue
-            by_dest[dest] = m.get("Name") or m.get("Source")
+            by_dest[dest] = (m.get("Type"), m.get("Name") or m.get("Source"))
         return by_dest
 
     def _reuse_config_mismatches(
@@ -1914,10 +1917,18 @@ class DockerEnvironment(BaseEnvironment):
         if requested:
             actual_by_dest = self._container_mount_sources_by_destination(container_id)
             for dest, requested_source in requested.items():
-                actual_source = actual_by_dest.get(dest)
-                if actual_source is None:
+                actual = actual_by_dest.get(dest)
+                if actual is None:
                     mismatches.append(f"mount {dest} missing (expected {requested_source!r})")
-                elif actual_source != requested_source:
+                    continue
+                actual_type, actual_source = actual
+                if actual_type != "volume":
+                    # Bind-mount sources aren't reliably comparable (Docker
+                    # Desktop may translate the path; requested Windows host
+                    # paths contain their own colon). Presence at the
+                    # destination is the only stable signal for binds.
+                    continue
+                if actual_source != requested_source:
                     mismatches.append(
                         f"mount {dest} source {actual_source!r} != configured {requested_source!r}"
                     )
