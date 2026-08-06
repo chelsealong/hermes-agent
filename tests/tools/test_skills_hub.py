@@ -657,6 +657,35 @@ class TestHermesIndexSearch:
         assert "NVIDIA/skills/skills/accelerated-computing-cudf" in ids
         assert "clawhub/unrelated" not in ids
 
+    def test_search_does_not_let_one_source_drown_out_a_tied_tier(self):
+        # ClawHub dominates the index by sheer count. If 20 clawhub hits and
+        # 2 github + 2 lobehub hits all tie at the same relevance score, a
+        # flat sort+truncate would keep the top `limit` in original index
+        # order — all clawhub, since they were indexed first — and silently
+        # drop every github/lobehub hit even though they matched equally
+        # well. The truncation must round-robin by source within a tied tier
+        # instead.
+        skills = [
+            {"name": f"tool-{i}", "description": "uses cuda for gpu", "source": "clawhub",
+             "identifier": f"clawhub/tool-{i}", "tags": []}
+            for i in range(20)
+        ] + [
+            {"name": f"helper-{c}", "description": "cuda accelerated", "source": "github",
+             "identifier": f"github/helper-{c}", "tags": []}
+            for c in "ab"
+        ] + [
+            {"name": f"widget-{c}", "description": "cuda enabled", "source": "lobehub",
+             "identifier": f"lobehub/widget-{c}", "tags": []}
+            for c in "ab"
+        ]
+        src = _make_index_source(skills)
+        hits = src.search("cuda", limit=5)
+        assert len(hits) == 5
+        sources = [h.source for h in hits]
+        assert "github" in sources
+        assert "lobehub" in sources
+        assert sources.count("clawhub") < 5
+
 class TestProviderFilter:
     def test_filter_results_by_provider_narrows_exactly(self):
         from tools.skills_hub import _filter_results_by_provider

@@ -4129,6 +4129,12 @@ class HermesIndexSource(SkillSource):
         truncated at the first ``limit`` hits — that earlier break-at-limit
         behaviour returned an arbitrary file-order slice and buried the most
         relevant skills.
+
+        When a relevance tier has more hits than the remaining slots, those
+        hits are round-robined across their origin ``source`` before being
+        truncated, so a single bulk source (ClawHub is ~76% of the index)
+        cannot claim every remaining slot and crowd out equally-relevant
+        hits from smaller sources (github, lobehub, ...).
         """
         index = self._ensure_loaded()
         skills = index.get("skills", [])
@@ -4170,7 +4176,44 @@ class HermesIndexSource(SkillSource):
             scored.append((score, i, s))
 
         scored.sort(key=lambda x: (x[0], x[1]))
-        return [self._to_meta(s) for _, _, s in scored[:limit]]
+        if limit <= 0 or len(scored) <= limit:
+            return [self._to_meta(s) for _, _, s in scored[:limit]]
+
+        selected: List[dict] = []
+        start = 0
+        total = len(scored)
+        while start < total and len(selected) < limit:
+            tier_score = scored[start][0]
+            end = start
+            while end < total and scored[end][0] == tier_score:
+                end += 1
+            tier = scored[start:end]
+            remaining = limit - len(selected)
+            if len(tier) <= remaining:
+                selected.extend(s for _, _, s in tier)
+            else:
+                by_source: Dict[str, List[dict]] = {}
+                source_order: List[str] = []
+                for _, _, s in tier:
+                    src_id = str(s.get("source", "hermes-index"))
+                    if src_id not in by_source:
+                        by_source[src_id] = []
+                        source_order.append(src_id)
+                    by_source[src_id].append(s)
+                while len(selected) < limit:
+                    picked_any = False
+                    for src_id in source_order:
+                        if len(selected) >= limit:
+                            break
+                        bucket = by_source[src_id]
+                        if bucket:
+                            selected.append(bucket.pop(0))
+                            picked_any = True
+                    if not picked_any:
+                        break
+            start = end
+
+        return [self._to_meta(s) for s in selected]
 
     def fetch(self, identifier: str) -> Optional[SkillBundle]:
         """Fetch a skill using the resolved path from the index.
