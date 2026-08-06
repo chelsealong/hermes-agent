@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { insertInlineRefsIntoEditor } from './inline-refs'
 import {
@@ -9,7 +9,8 @@ import {
   refChipElement,
   renderComposerContents,
   replaceBeforeCaret,
-  RICH_INPUT_SLOT
+  RICH_INPUT_SLOT,
+  scrollComposerCaretIntoView
 } from './rich-editor'
 
 const caretIn = (editor: HTMLElement) => {
@@ -303,6 +304,102 @@ describe('insertComposerContentsAtCaret', () => {
     insertComposerContentsAtCaret(editor, '/some-skill')
 
     expect(editor.querySelector('[data-slash-kind]')).not.toBeNull()
+
+    editor.remove()
+  })
+})
+
+describe('scrollComposerCaretIntoView', () => {
+  // jsdom doesn't implement Range#getClientRects at all (not even as a stub
+  // returning an empty list), so there's no existing method for vi.spyOn to
+  // wrap — install one directly and remove it after each test.
+  afterEach(() => {
+    vi.restoreAllMocks()
+    Reflect.deleteProperty(Range.prototype, 'getClientRects')
+  })
+
+  const stubRect = (overrides: Partial<DOMRect>): DOMRect => ({
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+    ...overrides
+  })
+
+  const stubCaretRect = (rect: DOMRect) => {
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList
+  }
+
+  it('scrolls down just enough to reveal a caret pushed below the visible viewport', () => {
+    const editor = document.createElement('div')
+    editor.dataset.slot = RICH_INPUT_SLOT
+    document.body.append(editor)
+    caretIn(editor)
+    editor.scrollTop = 0
+
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(stubRect({ bottom: 100, top: 0 }))
+    stubCaretRect(stubRect({ bottom: 160, top: 150 }))
+
+    scrollComposerCaretIntoView(editor)
+
+    expect(editor.scrollTop).toBe(60)
+
+    editor.remove()
+  })
+
+  it('scrolls up just enough to reveal a caret pushed above the visible viewport', () => {
+    const editor = document.createElement('div')
+    editor.dataset.slot = RICH_INPUT_SLOT
+    document.body.append(editor)
+    caretIn(editor)
+    editor.scrollTop = 200
+
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(stubRect({ bottom: 300, top: 100 }))
+    stubCaretRect(stubRect({ bottom: 70, top: 60 }))
+
+    scrollComposerCaretIntoView(editor)
+
+    expect(editor.scrollTop).toBe(160)
+
+    editor.remove()
+  })
+
+  it('leaves scroll untouched when the caret is already visible', () => {
+    const editor = document.createElement('div')
+    editor.dataset.slot = RICH_INPUT_SLOT
+    document.body.append(editor)
+    caretIn(editor)
+    editor.scrollTop = 40
+
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(stubRect({ bottom: 100, top: 0 }))
+    stubCaretRect(stubRect({ bottom: 80, top: 70 }))
+
+    scrollComposerCaretIntoView(editor)
+
+    expect(editor.scrollTop).toBe(40)
+
+    editor.remove()
+  })
+
+  it('a large paste at the end scrolls the caret into view without moving it off the insertion point', () => {
+    const editor = document.createElement('div')
+    editor.dataset.slot = RICH_INPUT_SLOT
+    document.body.append(editor)
+    caretIn(editor)
+    editor.scrollTop = 0
+
+    vi.spyOn(editor, 'getBoundingClientRect').mockReturnValue(stubRect({ bottom: 120, top: 0 }))
+    stubCaretRect(stubRect({ bottom: 500, top: 490 }))
+
+    insertComposerContentsAtCaret(editor, 'a very long dictated paragraph '.repeat(20))
+
+    expect(composerPlainText(editor)).toBe('a very long dictated paragraph '.repeat(20))
+    expect(editor.scrollTop).toBe(380)
 
     editor.remove()
   })

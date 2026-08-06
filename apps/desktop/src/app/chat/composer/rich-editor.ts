@@ -346,6 +346,45 @@ export function insertComposerContentsAtCaret(editor: HTMLElement, text: string,
     selection?.removeAllRanges()
     selection?.addRange(caret)
   }
+
+  // A typed keystroke gets Chromium's native "scroll the caret into view" for
+  // free. This insert moves the caret by rewriting the Selection/Range
+  // programmatically instead, which Chromium does NOT auto-scroll for — a
+  // large paste or a voice-to-text drop can land the caret well past the
+  // composer's visible, internally-scrolling viewport.
+  scrollComposerCaretIntoView(editor)
+}
+
+/** Scrolls `editor`'s own overflow viewport so the current caret stays
+ *  visible, without forcing it to the end — an insertion in the middle of
+ *  existing content keeps its position and only the minimum scroll needed
+ *  to reveal it. No-op when geometry isn't available (e.g. a detached editor,
+ *  or a test environment that doesn't lay out the DOM). */
+export function scrollComposerCaretIntoView(editor: HTMLElement) {
+  const selection = window.getSelection()
+  const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+
+  if (!range || !editor.contains(range.startContainer) || typeof range.getClientRects !== 'function') {
+    return
+  }
+
+  const rects = range.getClientRects()
+
+  const caretRect =
+    rects[rects.length - 1] ??
+    (typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null)
+
+  if (!caretRect || (!caretRect.top && !caretRect.bottom)) {
+    return
+  }
+
+  const editorRect = editor.getBoundingClientRect()
+
+  if (caretRect.bottom > editorRect.bottom) {
+    editor.scrollTop += caretRect.bottom - editorRect.bottom
+  } else if (caretRect.top < editorRect.top) {
+    editor.scrollTop -= editorRect.top - caretRect.top
+  }
 }
 
 /** Range covering exactly `length` serialized characters immediately before a
