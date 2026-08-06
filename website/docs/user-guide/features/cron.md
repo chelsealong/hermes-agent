@@ -126,6 +126,18 @@ cronjob(
 
 This is useful when you want a scheduled agent to inherit reusable workflows without stuffing the full skill text into the cron prompt itself.
 
+### Requiring a skill on every job
+
+If every agent-driven job in your setup should load a given skill (e.g. an output-formatting skill that enforces character limits and `[SILENT]` rules), declare it in config instead of relying on remembering to add it each time a job is created or edited:
+
+```yaml
+cron:
+  required_skills:
+    - cron-output
+```
+
+`cronjob(action="create"/"update")` and `hermes cron create`/`hermes cron edit` reject any job whose `skills` doesn't cover every entry in `required_skills` — including an update that clears skills. Jobs created with `no_agent=True` are always exempt, since a script-only job has no agent turn to load a skill into. Set `cron.required_skills_enforce: false` to downgrade the rejection to a warning log instead of blocking the operation.
+
 ## Running a job inside a project directory
 
 Cron jobs default to running detached from any repo — no `AGENTS.md`, `CLAUDE.md`, or `.cursorrules` is loaded, and the terminal / file / code-exec tools run from whatever working directory the gateway started in. Pass `--workdir` (CLI) or `workdir=` (tool call) to change that:

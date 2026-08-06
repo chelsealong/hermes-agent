@@ -552,6 +552,56 @@ def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
     return None
 
 
+def _missing_required_skills(skills: List[str], no_agent: bool) -> List[str]:
+    """Return the configured ``cron.required_skills`` entries absent from *skills*.
+
+    ``no_agent`` jobs are exempt — a script-only job has no agent turn to load a
+    presentation/output skill into. Returns ``[]`` (nothing missing, or
+    enforcement not configured) on any config-read failure — fail open, since
+    this is a quality nudge, not a security boundary.
+    """
+    if no_agent:
+        return []
+    try:
+        from hermes_cli.config import load_config_readonly
+        cron_config = load_config_readonly().get("cron") or {}
+    except Exception:
+        return []
+    if not isinstance(cron_config, dict):
+        return []
+    required = cron_config.get("required_skills") or []
+    if not isinstance(required, list):
+        return []
+    have = set(skills or [])
+    return [s for s in required if s not in have]
+
+
+def _cron_required_skills_enforce() -> bool:
+    """Whether a missing required skill hard-rejects (True) or only warns (False).
+
+    Only the literal YAML boolean ``false`` downgrades to a warning; missing,
+    malformed, or non-boolean values stay fail-closed (default True).
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        cron_config = load_config_readonly().get("cron") or {}
+    except Exception:
+        return True
+    if not isinstance(cron_config, dict):
+        return True
+    return cron_config.get("required_skills_enforce", True) is not False
+
+
+def _required_skills_error(missing: List[str]) -> str:
+    names = ", ".join(missing)
+    return (
+        f"Missing required skill(s): {names}. cron.required_skills mandates "
+        f"these skills on every agent-driven cron job. Add them to `skills`, "
+        f"or set cron.required_skills_enforce: false to downgrade this to a "
+        f"warning."
+    )
+
+
 def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
     prompt = str(job.get("prompt") or "")
     skills = _canonical_skills(job.get("skill"), job.get("skills"))
@@ -759,6 +809,15 @@ def cronjob(
                 scan_error = _scan_cron_prompt(prompt)
                 if scan_error:
                     return tool_error(scan_error, success=False)
+
+            missing_skills = _missing_required_skills(canonical_skills, _no_agent)
+            if missing_skills:
+                if _cron_required_skills_enforce():
+                    return tool_error(_required_skills_error(missing_skills), success=False)
+                logger.warning(
+                    "Cron job create missing required skill(s): %s",
+                    ", ".join(missing_skills),
+                )
 
             # Validate script path before storing
             if script:
@@ -998,6 +1057,24 @@ def cronjob(
                             success=False,
                         )
                 updates["no_agent"] = target_no_agent
+            # Re-validate the EFFECTIVE skills/no_agent on EVERY update, not only
+            # when this update touches `skills`/`skill`/`no_agent` — otherwise
+            # `--clear-skills` (which strips a required skill via `skills=[]`
+            # above) or a legacy job predating cron.required_skills would only
+            # ever get checked on the one update that happens to name it.
+            eff_skills = (
+                updates["skills"] if "skills" in updates
+                else _canonical_skills(job.get("skill"), job.get("skills"))
+            )
+            eff_no_agent = updates.get("no_agent") if "no_agent" in updates else bool(job.get("no_agent"))
+            missing_skills = _missing_required_skills(eff_skills, eff_no_agent)
+            if missing_skills:
+                if _cron_required_skills_enforce():
+                    return tool_error(_required_skills_error(missing_skills), success=False)
+                logger.warning(
+                    "Cron job update leaves missing required skill(s): %s",
+                    ", ".join(missing_skills),
+                )
             if repeat is not None:
                 # Normalize: treat 0 or negative as None (infinite)
                 normalized_repeat = None if repeat <= 0 else repeat

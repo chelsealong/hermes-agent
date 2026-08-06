@@ -2240,6 +2240,16 @@ DEFAULT_CONFIG = {
         # wedges the job's dispatch guard forever. Also overridable via
         # HERMES_CRON_SESSION_DB_TIMEOUT env var. 0 = unlimited (skip the bound).
         "session_db_timeout_seconds": 10,
+        # Skills every agent-driven cron job's `skills[]` must include (e.g.
+        # ["cron-output"] to guarantee output-formatting rules are loaded).
+        # Checked at create/update time in tools/cronjob_tools.py, alongside
+        # the existing prompt-injection scan. Empty list (default) = no
+        # enforcement. `no_agent` jobs are always exempt — a script-only job
+        # has no agent turn to load a skill into.
+        "required_skills": [],
+        # Hard-reject a create/update that leaves a required skill missing
+        # (True, default) vs. only logging a warning (False).
+        "required_skills_enforce": True,
     },
 
     # Kanban multi-agent coordination — controls the dispatcher loop that
