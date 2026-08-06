@@ -1059,7 +1059,12 @@ export function applyRuntimeInfo(
 export function applyStoredSessionPreviewRuntimeInfo(stored: { model?: null | string } | undefined) {
   setCurrentModel(stored?.model || '')
   setCurrentProvider('')
-  setCurrentReasoningEffort('')
+  // Reasoning effort is intentionally left alone here (unlike the other
+  // fields): the composer pill falls back to the profile default whenever
+  // this is empty, so clearing it during the preview window flashes the
+  // profile default instead of the session's real effort. Leaving the prior
+  // (persisted) value in place means the pill keeps showing the last-known
+  // effort until session.resume reports the real one a moment later.
   setCurrentServiceTier('')
   setCurrentFastMode(false)
   setYoloActive(false)

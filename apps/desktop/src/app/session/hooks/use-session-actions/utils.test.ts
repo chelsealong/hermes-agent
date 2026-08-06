@@ -5,12 +5,22 @@ import { type ChatMessage, type ChatMessagePart, chatMessageText } from '@/lib/c
 import { $approvalModes, approvalModeForProfile } from '@/store/approval-mode'
 import { $desktopOnboarding } from '@/store/onboarding'
 import { $activeGatewayProfile } from '@/store/profile'
-import { $currentBranch, $currentCwd, setCurrentBranch, setCurrentCwd } from '@/store/session'
+import {
+  $currentBranch,
+  $currentCwd,
+  $currentModel,
+  $currentReasoningEffort,
+  setCurrentBranch,
+  setCurrentCwd,
+  setCurrentModel,
+  setCurrentReasoningEffort
+} from '@/store/session'
 import type { SessionInfo } from '@/types/hermes'
 
 import {
   appendLiveSessionProjection,
   applyRuntimeInfo,
+  applyStoredSessionPreviewRuntimeInfo,
   chatMessageArraysEquivalent,
   chatMessagesEquivalent,
   chatPartsEquivalent,
@@ -109,6 +119,28 @@ describe('applyRuntimeInfo foreground scoping', () => {
     expect($currentBranch.get()).toBe('main')
     // ...while the caller still gets everything it needs for its own session.
     expect(patch).toMatchObject({ branch: 'bb/tile', cwd: '/other-worktree' })
+  })
+})
+
+describe('applyStoredSessionPreviewRuntimeInfo', () => {
+  afterEach(() => {
+    setCurrentModel('')
+    setCurrentReasoningEffort('')
+  })
+
+  it('previews the stored model but leaves reasoning effort alone', () => {
+    // A profile default ('ultra') differs from the session's actual last-known
+    // effort ('max', persisted from a prior resume). The composer pill falls
+    // back to the profile default whenever the live effort is empty, so
+    // clearing it here — during the resume preview window, before
+    // session.resume reports the real value — would flash 'ultra' even though
+    // the session is actually running at 'max' (#79807).
+    setCurrentReasoningEffort('max')
+
+    applyStoredSessionPreviewRuntimeInfo({ model: 'qwen3.8' })
+
+    expect($currentModel.get()).toBe('qwen3.8')
+    expect($currentReasoningEffort.get()).toBe('max')
   })
 })
 
