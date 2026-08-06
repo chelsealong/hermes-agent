@@ -110,7 +110,13 @@ def test_reuse_skips_inspect_when_network_enabled(monkeypatch):
     commands = _reuse_guard_harness(monkeypatch, existing_mode="none", network=True)
 
     # Default-network config never churns containers, even air-gapped ones
-    # (operators may have created them via docker_extra_args).
-    assert not any(cmd[1] == "inspect" for cmd in commands)
+    # (operators may have created them via docker_extra_args) — the NetworkMode
+    # probe itself must not run. A separate, unconditional image/mount inspect
+    # (for the reuse-mismatch warning) is expected here and is not what this
+    # test guards.
+    assert not any(
+        cmd[1] == "inspect" and "NetworkMode" in " ".join(str(p) for p in cmd)
+        for cmd in commands
+    )
     assert not any(cmd[1] == "rm" for cmd in commands)
     assert not any(cmd[1] == "run" for cmd in commands)

@@ -126,6 +126,29 @@ def _sanitize_label_value(value: str) -> str:
     return cleaned
 
 
+_MOUNT_MODE_SUFFIXES = frozenset({
+    "ro", "rw", "z", "Z", "delegated", "cached", "consistent",
+    "shared", "slave", "private", "rshared", "rslave", "rprivate",
+})
+
+
+def _volume_destination(vol: str) -> Optional[str]:
+    """Return the container-side destination from a ``host:container[:mode]`` spec.
+
+    Splits on every colon rather than the first/last one: a Windows host path
+    (``C:\\Users\\x:/dest``) has its own colon, so a naive split misidentifies
+    the destination. A trailing recognized mode token is dropped first; the
+    remaining last segment is the destination (container paths never contain
+    a colon).
+    """
+    parts = vol.split(":")
+    if len(parts) < 2:
+        return None
+    if len(parts) >= 3 and parts[-1] in _MOUNT_MODE_SUFFIXES:
+        parts = parts[:-1]
+    return parts[-1] or None
+
+
 def _get_active_profile_name() -> str:
     """Return the active Hermes profile name, or ``"default"`` on any error.
 
@@ -1449,6 +1472,23 @@ class DockerEnvironment(BaseEnvironment):
                         container_id[:12], task_label, profile_name, state,
                     )
                     reused = True
+                    # Reuse matches on labels only (task_id, profile, egress) —
+                    # it does not compare image or docker_volumes. Two profiles
+                    # that collapse to the same labels (e.g. both resolve to
+                    # profile "custom" via HERMES_HOME, see _get_active_profile_name)
+                    # can silently reuse each other's container, mixing volumes.
+                    # This is a visibility-only check: it never blocks reuse or
+                    # touches the container, it just names the difference.
+                    mismatches = self._reuse_config_mismatches(container_id, image, volumes)
+                    if mismatches:
+                        logger.warning(
+                            "Reusing container %s (task=%s, profile=%s) despite "
+                            "configuration differences: %s. Set "
+                            "terminal.docker_persist_across_processes: false to "
+                            "get a fresh container per process instead.",
+                            container_id[:12], task_label, profile_name,
+                            "; ".join(mismatches),
+                        )
 
         if not reused:
             # tini/catatonit as PID 1 reaps zombie children — but s6-overlay
@@ -1801,6 +1841,87 @@ class DockerEnvironment(BaseEnvironment):
             return None
         mode = result.stdout.strip()
         return mode or None
+
+    def _container_inspect_field(self, container_id: str, fmt: str) -> Optional[str]:
+        """Return a single ``docker inspect --format`` field, or ``None`` on failure."""
+        try:
+            result = subprocess.run(
+                [self._docker_exe, "inspect", "--format", fmt, container_id],
+                capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                timeout=10,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.debug("docker inspect %s failed: %s", fmt, e)
+            return None
+        if result.returncode != 0:
+            logger.debug(
+                "docker inspect %s returned %d: %s",
+                fmt, result.returncode, result.stderr.strip(),
+            )
+            return None
+        value = result.stdout.strip()
+        return value or None
+
+    def _container_mount_sources_by_destination(self, container_id: str) -> dict:
+        """Return ``{destination: name-or-source}`` for the container's current mounts.
+
+        Named volumes report a stable ``Name``; bind mounts fall back to
+        ``Source`` (which Docker Desktop may report translated — see
+        ``_reuse_config_mismatches``, which only trusts this for volumes).
+        """
+        raw = self._container_inspect_field(container_id, "{{json .Mounts}}")
+        if not raw:
+            return {}
+        try:
+            mounts = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        by_dest = {}
+        for m in mounts if isinstance(mounts, list) else []:
+            if not isinstance(m, dict):
+                continue
+            dest = m.get("Destination")
+            if not dest:
+                continue
+            by_dest[dest] = m.get("Name") or m.get("Source")
+        return by_dest
+
+    def _reuse_config_mismatches(
+        self, container_id: str, image: str, volumes: list,
+    ) -> list:
+        """Describe ways a reusable container's image/mounts differ from *this*
+        request's configuration (issue: cross-process reuse matches on labels
+        only, so a differently configured profile silently inherits another
+        profile's container). Best-effort and read-only — an inspect failure
+        yields no mismatch rather than blocking reuse.
+        """
+        mismatches = []
+        actual_image = self._container_inspect_field(container_id, "{{.Config.Image}}")
+        if actual_image and image and actual_image != image:
+            mismatches.append(f"image {actual_image!r} != configured {image!r}")
+
+        requested = {}
+        for vol in (volumes or []):
+            if not isinstance(vol, str) or ":" not in vol:
+                continue
+            dest = _volume_destination(vol)
+            if dest:
+                requested[dest] = vol.split(":", 1)[0]
+
+        if requested:
+            actual_by_dest = self._container_mount_sources_by_destination(container_id)
+            for dest, requested_source in requested.items():
+                actual_source = actual_by_dest.get(dest)
+                if actual_source is None:
+                    mismatches.append(f"mount {dest} missing (expected {requested_source!r})")
+                elif actual_source != requested_source:
+                    mismatches.append(
+                        f"mount {dest} source {actual_source!r} != configured {requested_source!r}"
+                    )
+        return mismatches
 
     def _find_reusable_container(
         self,

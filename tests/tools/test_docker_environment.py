@@ -1488,3 +1488,94 @@ def test_extra_args_set_shm_size_helper():
     assert docker_env._extra_args_set_shm_size(None) is False
     # non-string entries must not crash (config.yaml can be malformed)
     assert docker_env._extra_args_set_shm_size([42, None, "--shm-size=1g"]) is True
+
+
+def test_volume_destination_handles_named_volume_and_windows_drive():
+    assert docker_env._volume_destination("volA:/workspace") == "/workspace"
+    assert docker_env._volume_destination("volA:/workspace:ro") == "/workspace"
+    # Windows host path has its own colon after the drive letter; a naive
+    # split-on-first/last-colon would misidentify the destination.
+    assert docker_env._volume_destination(r"C:\Users\x:/workspace") == "/workspace"
+    assert docker_env._volume_destination(r"C:\Users\x:/workspace:ro") == "/workspace"
+    assert docker_env._volume_destination("no-colon-here") is None
+
+
+def _mock_subprocess_run_with_reuse_and_inspect(monkeypatch, actual_image, mounts_json):
+    """Like ``_mock_subprocess_run_with_reuse`` but also answers the
+    ``docker inspect`` probes the reuse-mismatch check issues."""
+    docker_env._cgroup_limits_ok = True
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append((list(cmd) if isinstance(cmd, list) else cmd, kwargs))
+        if isinstance(cmd, list) and len(cmd) >= 2:
+            sub = cmd[1]
+            if sub == "version":
+                return subprocess.CompletedProcess(cmd, 0, stdout="Docker version", stderr="")
+            if sub == "ps":
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="reused-cid\trunning\t<no value>\n", stderr="",
+                )
+            if sub == "inspect":
+                fmt = cmd[3] if len(cmd) > 3 else ""
+                if fmt == "{{.Config.Image}}":
+                    return subprocess.CompletedProcess(cmd, 0, stdout=actual_image + "\n", stderr="")
+                if fmt == "{{json .Mounts}}":
+                    return subprocess.CompletedProcess(cmd, 0, stdout=mounts_json + "\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if sub == "run":
+                return subprocess.CompletedProcess(cmd, 0, stdout="fresh-cid\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(docker_env.subprocess, "run", _run)
+    return calls
+
+
+def test_reuse_warns_when_image_and_mount_source_differ(monkeypatch, caplog):
+    """Reuse matches on labels only (task_id, profile, egress) — it does not
+    compare image or docker_volumes. Two differently configured profiles that
+    collapse to the same labels silently reuse each other's container, mixing
+    volumes with no warning. This is the "cheap, high value" fix from the
+    issue: name the mismatch instead of staying silent."""
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    monkeypatch.setattr(docker_env, "_get_active_profile_name", lambda: "custom")
+    calls = _mock_subprocess_run_with_reuse_and_inspect(
+        monkeypatch,
+        actual_image="python:3.10",
+        mounts_json='[{"Type":"volume","Name":"volB","Destination":"/workspace"}]',
+    )
+
+    with caplog.at_level(logging.WARNING, logger=docker_env.logger.name):
+        env = _make_dummy_env(
+            task_id="reuse-mismatch", image="python:3.11", volumes=["volA:/workspace"],
+        )
+
+    assert env._container_id == "reused-cid"
+    # Reuse still happens — this is a visibility fix, not an enforcement one.
+    run_invocations = [c for c in calls if isinstance(c[0], list) and len(c[0]) >= 2 and c[0][1] == "run"]
+    assert not run_invocations
+    rm_invocations = [c for c in calls if isinstance(c[0], list) and len(c[0]) >= 2 and c[0][1] == "rm"]
+    assert not rm_invocations
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("python:3.10" in w and "python:3.11" in w for w in warnings), warnings
+    assert any("volA" in w and "volB" in w for w in warnings), warnings
+
+
+def test_reuse_does_not_warn_when_image_and_mounts_match(monkeypatch, caplog):
+    monkeypatch.setattr(docker_env, "find_docker", lambda: "/usr/bin/docker")
+    monkeypatch.setattr(docker_env, "_get_active_profile_name", lambda: "default")
+    _mock_subprocess_run_with_reuse_and_inspect(
+        monkeypatch,
+        actual_image="python:3.11",
+        mounts_json='[{"Type":"volume","Name":"volA","Destination":"/workspace"}]',
+    )
+
+    with caplog.at_level(logging.WARNING, logger=docker_env.logger.name):
+        env = _make_dummy_env(
+            task_id="reuse-match", image="python:3.11", volumes=["volA:/workspace"],
+        )
+
+    assert env._container_id == "reused-cid"
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("configuration differences" in w for w in warnings), warnings
