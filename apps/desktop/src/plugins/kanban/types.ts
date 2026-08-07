@@ -89,6 +89,12 @@ export interface KanbanAttachment {
   id: number | string
   filename: string
   size?: null | number
+  /** Absolute on-disk path the backend reads/writes, from `_attachment_dict`
+   *  (plugin_api.py). Only safe to hand to an OS-native open/reveal action
+   *  when the connected backend's filesystem is local — check
+   *  `host.state.localFiles` first. Absent on attachments from older
+   *  backends that predate this field. */
+  stored_path?: null | string
 }
 
 /** Fields present only on the detail endpoint (beyond the card's KanbanTask).

@@ -36,6 +36,7 @@ describe('createPluginContext.os', () => {
 
     // jsdom has no window.hermesDesktop — the exact older-shell/browser case.
     await expect(ctx.os.openExternal('https://example.com')).resolves.toBe(false)
+    await expect(ctx.os.openPath('/tmp/notes.md')).resolves.toBe(false)
     await expect(ctx.os.revealPath('/tmp')).resolves.toBe(false)
     await expect(ctx.os.writeClipboard('hi')).resolves.toBe(false)
   })
@@ -55,6 +56,20 @@ describe('createPluginContext.os', () => {
       expect(bridge.openExternal).toHaveBeenCalledWith('https://example.com')
       await expect(ctx.os.revealPath('/tmp')).resolves.toBe(true)
       await expect(ctx.os.writeClipboard('hi')).resolves.toBe(false)
+    } finally {
+      delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+    }
+  })
+
+  it('openPath converts a filesystem path to a file:// URL before handing it to openExternal', async () => {
+    const bridge = { openExternal: vi.fn().mockResolvedValue(undefined) }
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = bridge
+
+    try {
+      const ctx = createPluginContext('demo')
+      await expect(ctx.os.openPath('/tmp/kanban/notes.md')).resolves.toBe(true)
+      expect(bridge.openExternal).toHaveBeenCalledWith('file:///tmp/kanban/notes.md')
     } finally {
       delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
     }

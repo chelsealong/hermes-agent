@@ -9,7 +9,7 @@
  * desktop's selection never flips the server-wide current-board pointer.
  */
 
-import { atom, type PluginRestOptions, type PluginStorage, queryClient } from '@hermes/plugin-sdk'
+import { atom, type PluginOs, type PluginRestOptions, type PluginStorage, queryClient } from '@hermes/plugin-sdk'
 
 import type {
   BoardMeta,
@@ -28,6 +28,7 @@ type Rest = <T>(path: string, opts?: PluginRestOptions) => Promise<T>
 type Socket = (path: string, onMessage: (data: unknown) => void) => () => void
 
 let rest: null | Rest = null
+let os: null | PluginOs = null
 
 /** Selected board slug ('' = the server's current board). Persisted. */
 export const $boardSlug = atom<string>('')
@@ -79,8 +80,9 @@ interface Persisted<T> {
  *  runs on unload/disable — so nothing (store sync, socket) survives a toggle
  *  or duplicates on re-enable. The events socket is pinned to a board at
  *  handshake, so a board switch closes + reopens it. */
-export function bindApi(r: Rest, storage: PluginStorage, socket: Socket): () => void {
+export function bindApi(r: Rest, storage: PluginStorage, socket: Socket, pluginOs: PluginOs): () => void {
   rest = r
+  os = pluginOs
   const unsubs: Array<() => void> = []
 
   // Hydrate an atom from storage and keep storage in sync with it.
@@ -108,7 +110,21 @@ export function bindApi(r: Rest, storage: PluginStorage, socket: Socket): () => 
     unsubs.forEach(unsub => unsub())
     close?.()
     rest = null
+    os = null
   }
+}
+
+/** Open an attachment's `stored_path` with the OS default application.
+ *  Callers must gate on `host.state.localFiles` first — a remote backend's
+ *  path isn't reachable from this machine's shell. */
+export function openAttachmentPath(path: string): Promise<boolean> {
+  return os ? os.openPath(path) : Promise.resolve(false)
+}
+
+/** Reveal an attachment's `stored_path` in the OS file manager. Same
+ *  local-only caveat as `openAttachmentPath`. */
+export function revealAttachmentPath(path: string): Promise<boolean> {
+  return os ? os.revealPath(path) : Promise.resolve(false)
 }
 
 function call<T>(path: string, opts?: PluginRestOptions): Promise<T> {

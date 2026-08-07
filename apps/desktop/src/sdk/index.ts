@@ -18,7 +18,7 @@
  *  - `ui.*` — the design language, so plugin UI looks native by default.
  */
 
-import { atom, type ReadableAtom } from 'nanostores'
+import { atom, computed, type ReadableAtom } from 'nanostores'
 
 import { $narrowViewport } from '@/components/pane-shell/tree/store'
 import { onGatewayEvent } from '@/contrib/events'
@@ -26,7 +26,7 @@ import { getLogs, getStatus } from '@/hermes'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
 import { $activeGatewayProfile } from '@/store/profile'
-import { $activeSessionId, $currentCwd, $currentModel, $gatewayState } from '@/store/session'
+import { $activeSessionId, $connection, $currentCwd, $currentModel, $gatewayState } from '@/store/session'
 import { runGatewayRestart } from '@/store/system-actions'
 
 // -- state: readonly views over the app's live atoms -------------------------
@@ -55,6 +55,13 @@ if (typeof window !== 'undefined') {
   $narrowViewport.listen(refresh)
 }
 
+// True when the connected backend's filesystem is the same machine the
+// renderer runs on. A remote/SSH/cloud backend's paths belong to a different
+// box, so a plugin must not hand them to an OS-native "open" or "reveal"
+// action — mirrors `isDesktopFsRemoteMode()` (@/lib/desktop-fs) without
+// exposing the internal `$connection` store to plugin code.
+const $localFiles = computed($connection, connection => connection?.mode !== 'remote')
+
 export const host = {
   state: {
     /** Runtime id of the active chat session (null on a fresh draft). */
@@ -63,6 +70,11 @@ export const host = {
     cwd: readonlyAtom<string>($currentCwd),
     /** Gateway socket state: 'idle' | 'connecting' | 'open' | …. */
     gateway: readonlyAtom<string>($gatewayState),
+    /** Whether the connected backend's filesystem is local to this machine.
+     *  Gate `ctx.os.openPath` / `ctx.os.revealPath` / native "open" affordances
+     *  on this — a remote/SSH/cloud backend's paths aren't reachable from the
+     *  renderer's OS shell. */
+    localFiles: readonlyAtom<boolean>($localFiles),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
     /** Profile the live gateway is routed to. */
@@ -238,6 +250,12 @@ export { triggerHaptic as haptic } from '@/lib/haptics'
 /** The app's lucide icon set (RefreshCw, LayoutDashboard, Activity, …). */
 export * as icons from '@/lib/icons'
 export { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
+/** Classify a local path/URL into a `PreviewTarget` the app's preview rail can
+ *  render (Markdown gets the rendered view + source toggle, images/PDF/HTML
+ *  get their own renderers, everything else falls back to a syntax-highlighted
+ *  text view). Only meaningful for paths reachable from THIS machine — gate on
+ *  `host.state.localFiles` first. Pair with `openPreview` to actually show it. */
+export { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
 /** The app's deterministic identity color for a name (profiles, assignees,
  *  authors) + its translucent tag fill — so plugin-rendered identities read
  *  the same hue as everywhere else. */
@@ -246,8 +264,6 @@ export { profileColor, profileColorSoft } from '@/lib/profile-color'
  *  `ctx.socket` frame invalidating a query). Inside components keep using
  *  `useQueryClient`. */
 export { queryClient } from '@/lib/query-client'
-
-export const PANES_AREA = 'panes'
 /** Hermes' reasoning levels + their compact labels, so a plugin surfacing a
  *  thinking depth uses the same scale and spelling as the rest of the app. */
 export {
@@ -257,15 +273,21 @@ export {
   type ReasoningEffort,
   reasoningEffortLabel
 } from '@/lib/reasoning-effort'
-export const STATUSBAR_AREAS = { left: 'statusBar.left', right: 'statusBar.right' } as const
-export const TITLEBAR_AREAS = { center: 'titleBar.center', left: 'titleBar.left', right: 'titleBar.right' } as const
 
+export const PANES_AREA = 'panes'
 /** The app's own gateway-readiness evaluation (setup.status +
  *  setup.runtime_check, reconciled) — pass `host.request`. Don't hand-roll
  *  readiness from raw RPC shapes. */
 export { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
+export const STATUSBAR_AREAS = { left: 'statusBar.left', right: 'statusBar.right' } as const
+export const TITLEBAR_AREAS = { center: 'titleBar.center', left: 'titleBar.left', right: 'titleBar.right' } as const
+
 export { coarseElapsed, fmtDateTime, fmtDayTime, relativeTime } from '@/lib/time'
 export { cn } from '@/lib/utils'
+/** Show a `PreviewTarget` (from `normalizeOrLocalPreviewTarget`, or built by
+ *  hand) in the app's right-rail preview tabs — the same door file browsing
+ *  and tool results use. */
+export { openPreview, type PreviewTarget } from '@/store/preview'
 export { THEMES_AREA } from '@/themes/user-themes'
 export type { RpcEvent, StatusResponse } from '@/types/hermes'
 /** Subscribe a component to a `host.state` atom. */

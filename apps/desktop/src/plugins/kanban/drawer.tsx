@@ -20,6 +20,8 @@ import {
   host,
   Loader,
   LogView,
+  normalizeOrLocalPreviewTarget,
+  openPreview,
   Textarea,
   Tip,
   useMutation,
@@ -38,10 +40,12 @@ import {
   fetchProfiles,
   fetchTask,
   logKey,
+  openAttachmentPath,
   patchTask,
   PROFILES_KEY,
   reassignTask,
   reclaimTask,
+  revealAttachmentPath,
   taskKey,
   uploadAttachment
 } from './api'
@@ -455,16 +459,98 @@ function AttachmentsSection({
       {attachments.length > 0 ? (
         <ul className="flex flex-col gap-1">
           {attachments.map(attachment => (
-            <li className="flex items-center gap-1.5 text-[0.75rem] text-(--ui-text-tertiary)" key={attachment.id}>
-              <Codicon name="file" size="0.75rem" />
-              {attachment.filename}
-            </li>
+            <AttachmentRow attachment={attachment} key={attachment.id} />
           ))}
         </ul>
       ) : (
         <p className="text-[0.75rem] text-(--ui-text-quaternary)">{k.noAttachments}</p>
       )}
     </Section>
+  )
+}
+
+/** One attachment row: the filename doubles as the primary action (open with
+ *  the OS default app on a local backend, in-app preview on a remote one —
+ *  its path lives on the connected backend's disk either way, and remote
+ *  reads already go through the app's existing gateway-backed file preview).
+ *  Preview is always available; Reveal-in-file-manager only makes sense when
+ *  the backend filesystem is this machine's, so it's hidden on remote. An
+ *  attachment from a backend that predates `stored_path` falls back to the
+ *  original static row. */
+export function AttachmentRow({ attachment }: { attachment: KanbanAttachment }) {
+  const k = useKanban()
+  const localFiles = useValue(host.state.localFiles)
+  const path = attachment.stored_path
+
+  const preview = async () => {
+    if (!path) {
+      return
+    }
+
+    try {
+      const target = await normalizeOrLocalPreviewTarget(path)
+
+      if (!target) {
+        throw new Error('no preview target')
+      }
+
+      openPreview(target)
+    } catch {
+      host.notify({ kind: 'error', message: k.attachmentOpenFailed })
+    }
+  }
+
+  const openFilename = async () => {
+    if (!path) {
+      return
+    }
+
+    if (!localFiles) {
+      await preview()
+
+      return
+    }
+
+    if (!(await openAttachmentPath(path))) {
+      host.notify({ kind: 'error', message: k.attachmentOpenFailed })
+    }
+  }
+
+  const reveal = async () => {
+    if (path && !(await revealAttachmentPath(path))) {
+      host.notify({ kind: 'error', message: k.attachmentOpenFailed })
+    }
+  }
+
+  if (!path) {
+    return (
+      <li className="flex items-center gap-1.5 text-[0.75rem] text-(--ui-text-tertiary)">
+        <Codicon name="file" size="0.75rem" />
+        {attachment.filename}
+      </li>
+    )
+  }
+
+  return (
+    <li className="flex items-center gap-1.5 text-[0.75rem] text-(--ui-text-tertiary)">
+      <Codicon name="file" size="0.75rem" />
+      <button
+        className="min-w-0 flex-1 truncate text-left hover:text-foreground hover:underline"
+        onClick={() => void openFilename()}
+        title={localFiles ? k.openAttachment(attachment.filename) : k.previewAttachment(attachment.filename)}
+        type="button"
+      >
+        {attachment.filename}
+      </button>
+      <Button aria-label={k.previewAttachment(attachment.filename)} onClick={() => void preview()} size="icon-xs" variant="ghost">
+        <Codicon name="eye" size="0.7rem" />
+      </Button>
+      {localFiles && (
+        <Button aria-label={k.revealAttachment(attachment.filename)} onClick={() => void reveal()} size="icon-xs" variant="ghost">
+          <Codicon name="folder-opened" size="0.7rem" />
+        </Button>
+      )}
+    </li>
   )
 }
 

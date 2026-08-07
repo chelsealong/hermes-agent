@@ -14,6 +14,7 @@
 
 import { pluginRest, type PluginRestOptions, pluginSocket } from '@/hermes'
 import { createPluginI18n, type PluginI18n } from '@/i18n'
+import { pathToFileUrl } from '@/lib/local-preview'
 import { readKey, writeKey } from '@/lib/storage'
 import { dispatchPluginNativeNotification, type PluginNativeNotificationInput } from '@/store/native-notifications'
 
@@ -49,6 +50,11 @@ export interface PluginOs {
   /** Open a URL with the OS default handler (browser, mail client, custom
    *  schemes like `spotify:`). Resolves false when the shell can't. */
   openExternal: (url: string) => Promise<boolean>
+  /** Open a local filesystem path with the OS default application (e.g. a
+   *  Kanban attachment's `stored_path`). Only meaningful when the connected
+   *  backend's filesystem is local — callers should gate on that themselves
+   *  (`host.state.localFiles`). Resolves false when the shell can't. */
+  openPath: (path: string) => Promise<boolean>
   /** Reveal a path in the OS file manager (Finder / Explorer). Resolves
    *  false when unavailable. */
   revealPath: (path: string) => Promise<boolean>
@@ -146,6 +152,12 @@ function createPluginOs(pluginId: string): PluginOs {
     openExternal: url =>
       attempt(async bridge => {
         await bridge.openExternal(url)
+
+        return true
+      }),
+    openPath: path =>
+      attempt(async bridge => {
+        await bridge.openExternal(pathToFileUrl(path))
 
         return true
       }),

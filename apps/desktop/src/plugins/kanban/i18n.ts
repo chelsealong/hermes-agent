@@ -153,6 +153,10 @@ type KanbanMessages = {
   attachments: (n: number) => string
   noAttachments: string
   uploadAttachment: string
+  openAttachment: (filename: string) => string
+  previewAttachment: (filename: string) => string
+  revealAttachment: (filename: string) => string
+  attachmentOpenFailed: string
   taskActions: string
   copyTaskId: string
   copyTitle: string
@@ -345,6 +349,10 @@ const en: KanbanMessages = {
   attachments: n => `Attachments · ${n}`,
   noAttachments: 'No attachments yet.',
   uploadAttachment: 'Upload attachment',
+  openAttachment: filename => `Open ${filename}`,
+  previewAttachment: filename => `Preview ${filename}`,
+  revealAttachment: filename => `Reveal ${filename} in file manager`,
+  attachmentOpenFailed: 'Could not open the attachment.',
   taskActions: 'Task actions',
   copyTaskId: 'Copy task id',
   copyTitle: 'Copy title',
@@ -536,6 +544,10 @@ const ja: KanbanMessages = {
   attachments: n => `添付・${n}`,
   noAttachments: 'まだ添付はありません。',
   uploadAttachment: '添付をアップロード',
+  openAttachment: filename => `${filename} を開く`,
+  previewAttachment: filename => `${filename} をプレビュー`,
+  revealAttachment: filename => `${filename} をファイルマネージャーで表示`,
+  attachmentOpenFailed: '添付ファイルを開けませんでした。',
   taskActions: 'タスクの操作',
   copyTaskId: 'タスク ID をコピー',
   copyTitle: 'タイトルをコピー',
@@ -725,6 +737,10 @@ const zh: KanbanMessages = {
   attachments: n => `附件・${n}`,
   noAttachments: '暂无附件。',
   uploadAttachment: '上传附件',
+  openAttachment: filename => `打开 ${filename}`,
+  previewAttachment: filename => `预览 ${filename}`,
+  revealAttachment: filename => `在文件管理器中显示 ${filename}`,
+  attachmentOpenFailed: '无法打开附件。',
   taskActions: '任务操作',
   copyTaskId: '复制任务 ID',
   copyTitle: '复制标题',
@@ -913,6 +929,10 @@ const zhHant: KanbanMessages = {
   attachments: n => `附件・${n}`,
   noAttachments: '尚無附件。',
   uploadAttachment: '上傳附件',
+  openAttachment: filename => `開啟 ${filename}`,
+  previewAttachment: filename => `預覽 ${filename}`,
+  revealAttachment: filename => `在檔案管理員中顯示 ${filename}`,
+  attachmentOpenFailed: '無法開啟附件。',
   taskActions: '任務操作',
   copyTaskId: '複製任務 ID',
   copyTitle: '複製標題',
