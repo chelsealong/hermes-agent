@@ -191,9 +191,10 @@ def _firecrawl_backend_help_suffix() -> str:
 def _raise_web_backend_configuration_error() -> None:
     """Raise a clear error for unsupported web backend configuration."""
     import tools.web_tools as _wt
+    from hermes_constants import display_hermes_home
 
     message = (
-        "Web tools are not configured. "
+        f"Web tools are not configured (checked {display_hermes_home()}/.env). "
         "Set FIRECRAWL_API_KEY for cloud Firecrawl or set FIRECRAWL_API_URL "
         "for a self-hosted Firecrawl instance."
     )

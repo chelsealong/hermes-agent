@@ -311,4 +311,20 @@ class TestAsyncExtractDispatch:
 class TestErrorResponseShapes:
     """When credentials are missing, plugins return typed errors, not raises."""
 
+    def test_firecrawl_config_error_names_the_checked_profile_path(self, monkeypatch):
+        _ensure_plugins_loaded()
+        from hermes_constants import display_hermes_home
+        from plugins.web.firecrawl import provider as firecrawl_provider
+
+        monkeypatch.setattr(
+            "tools.web_tools.managed_nous_tools_enabled",
+            lambda: False,
+            raising=False,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            firecrawl_provider._raise_web_backend_configuration_error()
+
+        assert display_hermes_home() in str(exc_info.value)
+
 
