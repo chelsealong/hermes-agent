@@ -786,29 +786,56 @@ def _try_guest_name(page, guest_name: str) -> None:
         pass
 
 
-def _ensure_mic_unmuted(page, state: "_BotState") -> None:
+def _ensure_mic_unmuted(
+    page,
+    state: "_BotState",
+    timeout_s: float = 15.0,
+    poll_interval_s: float = 0.3,
+) -> None:
     """Click the mic toggle if Meet admitted us with the microphone muted.
 
     Meet sometimes defaults newly-admitted guests (or authenticated bots) to
     a muted mic. Without this, realtime audio streamed to the fake mic never
     reaches other participants even though ``audioBytesOut`` looks healthy.
-    Best-effort — only clicks when the toggle's ``aria-label`` says the mic
-    is currently off.
+
+    The in-call toolbar mounts asynchronously right after admission is
+    detected — the same hazard ``_click_join`` polls for on the pre-join
+    buttons. A single immediate check can run before the mic toggle exists
+    and silently leave the mic muted for the rest of the call. Poll until
+    the toggle's state is knowable (or *timeout_s* elapses) and record
+    ``state.error`` on failure so a stuck-muted session is visible in
+    status.json instead of looking identical to "mic was already on".
     """
     probe = r"""
     (() => {
-      const btn = document.querySelector(
+      const muted = document.querySelector(
         'button[aria-label*="Turn on microphone" i], button[aria-label*="unmute" i]'
       );
-      if (btn) { btn.click(); return true; }
-      return false;
+      if (muted) { muted.click(); return "clicked"; }
+      const unmuted = document.querySelector(
+        'button[aria-label*="Turn off microphone" i]'
+      );
+      if (unmuted) return "already_unmuted";
+      return "not_found";
     })();
     """
-    try:
-        if page.evaluate(probe):
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            result = page.evaluate(probe)
+        except Exception:
+            result = "not_found"
+        if result == "clicked":
             state.set(mic_unmuted_at=time.time())
-    except Exception:
-        pass
+            return
+        if result == "already_unmuted":
+            return
+        if time.time() >= deadline:
+            state.set(
+                error="mic toggle never rendered — could not confirm mic state"
+            )
+            return
+        time.sleep(poll_interval_s)
 
 
 def _detect_admission(page) -> bool:

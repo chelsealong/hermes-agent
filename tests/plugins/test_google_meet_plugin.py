@@ -377,7 +377,7 @@ def test_ensure_mic_unmuted_clicks_toggle_when_muted(tmp_path):
 
     class _FakePage:
         def evaluate(self, _js):
-            return True
+            return "clicked"
 
     state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
                       url="https://meet.google.com/m")
@@ -386,6 +386,7 @@ def test_ensure_mic_unmuted_clicks_toggle_when_muted(tmp_path):
     _ensure_mic_unmuted(_FakePage(), state)
 
     assert state.mic_unmuted_at is not None
+    assert state.error is None
 
 
 def test_ensure_mic_unmuted_noop_when_already_unmuted(tmp_path):
@@ -393,7 +394,7 @@ def test_ensure_mic_unmuted_noop_when_already_unmuted(tmp_path):
 
     class _FakePage:
         def evaluate(self, _js):
-            return False
+            return "already_unmuted"
 
     state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
                       url="https://meet.google.com/m")
@@ -401,6 +402,54 @@ def test_ensure_mic_unmuted_noop_when_already_unmuted(tmp_path):
     _ensure_mic_unmuted(_FakePage(), state)
 
     assert state.mic_unmuted_at is None
+    assert state.error is None
+
+
+def test_ensure_mic_unmuted_waits_for_toggle_to_render(tmp_path):
+    """The in-call toolbar (mic/leave/camera) mounts asynchronously right
+    after admission is detected, same as the pre-join buttons. This proves
+    _ensure_mic_unmuted polls until the mic toggle actually renders instead
+    of missing it on a single immediate check.
+    """
+    from plugins.google_meet.meet_bot import _BotState, _ensure_mic_unmuted
+
+    class _FakePage:
+        def __init__(self, appears_after_calls):
+            self._calls = 0
+            self._appears_after = appears_after_calls
+
+        def evaluate(self, _js):
+            self._calls += 1
+            if self._calls > self._appears_after:
+                return "clicked"
+            return "not_found"
+
+    # Mic toggle only starts reporting "clicked" on the 4th poll.
+    page = _FakePage(appears_after_calls=3)
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+
+    _ensure_mic_unmuted(page, state, timeout_s=5.0, poll_interval_s=0.01)
+
+    assert state.mic_unmuted_at is not None
+    assert state.error is None
+
+
+def test_ensure_mic_unmuted_sets_error_when_toggle_never_renders(tmp_path):
+    from plugins.google_meet.meet_bot import _BotState, _ensure_mic_unmuted
+
+    class _FakePage:
+        def evaluate(self, _js):
+            return "not_found"
+
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+
+    _ensure_mic_unmuted(_FakePage(), state, timeout_s=0.05, poll_interval_s=0.01)
+
+    assert state.mic_unmuted_at is None
+    assert state.error is not None
+    assert "mic toggle" in state.error
 
 
 # ---------------------------------------------------------------------------
