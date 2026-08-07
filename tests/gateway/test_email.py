@@ -907,5 +907,120 @@ class TestSenderAuthentication(unittest.TestCase):
         self.assertFalse(ok, reason)
 
 
+class TestArchiveProcessed(unittest.TestCase):
+    """Test opt-in archiving of processed messages out of INBOX."""
+
+    def setUp(self):
+        self._prev_allow_all = os.environ.get("EMAIL_ALLOW_ALL_USERS")
+        os.environ["EMAIL_ALLOW_ALL_USERS"] = "true"
+
+    def tearDown(self):
+        if self._prev_allow_all is None:
+            os.environ.pop("EMAIL_ALLOW_ALL_USERS", None)
+        else:
+            os.environ["EMAIL_ALLOW_ALL_USERS"] = self._prev_allow_all
+
+    def _make_adapter(self, extra=None):
+        from gateway.config import PlatformConfig
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "EMAIL_SMTP_HOST": "smtp.test.com",
+        }):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True, extra=extra or {}))
+        return adapter
+
+    def _msg_data(self, uid=b"9"):
+        return {
+            "uid": uid,
+            "sender_addr": "user@test.com",
+            "sender_name": "User",
+            "subject": "Hi",
+            "message_id": "<msg@test.com>",
+            "in_reply_to": "",
+            "body": "Hello",
+            "attachments": [],
+            "date": "",
+        }
+
+    def test_disabled_by_default_does_not_touch_imap(self):
+        """Without archive_processed, dispatch never opens an archive IMAP connection."""
+        import asyncio
+        adapter = self._make_adapter()
+
+        async def capture_handle(event):
+            pass
+
+        adapter.handle_message = capture_handle
+
+        with patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            asyncio.run(adapter._dispatch_message(self._msg_data()))
+            mock_imap_cls.assert_not_called()
+
+    def test_move_used_when_server_supports_it(self):
+        """When the server advertises MOVE, use it instead of COPY+Deleted+EXPUNGE."""
+        import asyncio
+        adapter = self._make_adapter(extra={
+            "archive_processed": True,
+            "archive_folder": "Archive",
+        })
+
+        async def capture_handle(event):
+            pass
+
+        adapter.handle_message = capture_handle
+
+        mock_imap = MagicMock()
+        mock_imap.capability.return_value = ("OK", [b"IMAP4rev1 MOVE UIDPLUS"])
+        mock_imap.uid.return_value = ("OK", [b"done"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap):
+            asyncio.run(adapter._dispatch_message(self._msg_data(uid=b"9")))
+
+        mock_imap.uid.assert_called_once_with("MOVE", b"9", "Archive")
+        mock_imap.expunge.assert_not_called()
+
+    def test_copy_delete_expunge_fallback_without_move(self):
+        """When MOVE isn't advertised, fall back to COPY + \\Deleted + EXPUNGE."""
+        import asyncio
+        adapter = self._make_adapter(extra={
+            "archive_processed": True,
+            "archive_folder": "Archive",
+        })
+
+        async def capture_handle(event):
+            pass
+
+        adapter.handle_message = capture_handle
+
+        mock_imap = MagicMock()
+        mock_imap.capability.return_value = ("OK", [b"IMAP4rev1 UIDPLUS"])
+        mock_imap.uid.return_value = ("OK", [b"done"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap):
+            asyncio.run(adapter._dispatch_message(self._msg_data(uid=b"9")))
+
+        calls = mock_imap.uid.call_args_list
+        self.assertEqual(calls[0].args, ("COPY", b"9", "Archive"))
+        self.assertEqual(calls[1].args, ("STORE", b"9", "+FLAGS", "(\\Deleted)"))
+        mock_imap.expunge.assert_called_once()
+
+    def test_archive_failure_does_not_raise(self):
+        """A broken archive folder must not surface as a dispatch failure."""
+        import asyncio
+        adapter = self._make_adapter(extra={"archive_processed": True})
+
+        async def capture_handle(event):
+            pass
+
+        adapter.handle_message = capture_handle
+
+        with patch("imaplib.IMAP4_SSL", side_effect=OSError("boom")):
+            # Should not raise despite the archive connection failing.
+            asyncio.run(adapter._dispatch_message(self._msg_data()))
+
+
 if __name__ == "__main__":
     unittest.main()

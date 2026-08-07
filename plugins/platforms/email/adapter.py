@@ -493,6 +493,19 @@ class EmailAdapter(BasePlatformAdapter):
         #       skip_attachments: true
         self._skip_attachments = extra.get("skip_attachments", False)
 
+        # Archive processed messages out of INBOX — configured via config.yaml:
+        #   platforms:
+        #     email:
+        #       archive_processed: true
+        #       archive_folder: Archive   # Fastmail: Archive; Gmail: [Gmail]/All Mail
+        # Opt-in and off by default: moving mail changes mailbox state, which
+        # only makes sense once the operator has picked the right folder name
+        # for their provider. Only messages that reach handle_message (i.e.
+        # pass the allowlist/authentication/automated-sender gates below) are
+        # archived — dropped or skipped mail stays in the INBOX untouched.
+        self._archive_processed = bool(extra.get("archive_processed", False))
+        self._archive_folder = str(extra.get("archive_folder") or "Archive").strip()
+
         # Require the sender's From: domain to be authenticated (SPF/DKIM/DMARC)
         # before trusting it for authorization. The From: header is
         # attacker-controlled and unauthenticated by IMAP, so an allowlist keyed
@@ -934,6 +947,54 @@ class EmailAdapter(BasePlatformAdapter):
 
         logger.info("[Email] New message from %s: %s", sender_addr, subject)
         await self.handle_message(event)
+
+        if self._archive_processed:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._archive_message, msg_data["uid"])
+
+    def _archive_message(self, uid: bytes) -> None:
+        """Move a processed message out of INBOX into the archive folder.
+
+        Uses IMAP MOVE (RFC 6851) where the server advertises the extension;
+        falls back to COPY + ``\\Deleted`` + EXPUNGE otherwise. Runs in an
+        executor thread — mirrors the other blocking IMAP/SMTP helpers.
+        Best-effort: a failure here (e.g. the archive folder doesn't exist)
+        only logs a warning, since the message was already dispatched.
+        """
+        try:
+            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            try:
+                imap.login(self._address, self._password)
+                _send_imap_id(imap)
+                imap.select("INBOX")
+
+                cap_status, cap_data = imap.capability()
+                capabilities = (
+                    cap_data[0].decode("utf-8", "replace").upper()
+                    if cap_status == "OK" and cap_data and cap_data[0]
+                    else ""
+                )
+
+                if "MOVE" in capabilities.split():
+                    status, _resp = imap.uid("MOVE", uid, self._archive_folder)
+                else:
+                    status, _resp = imap.uid("COPY", uid, self._archive_folder)
+                    if status == "OK":
+                        imap.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                        imap.expunge()
+
+                if status != "OK":
+                    logger.warning(
+                        "[Email] Failed to archive UID %s to folder %r: %s",
+                        uid, self._archive_folder, status,
+                    )
+            finally:
+                try:
+                    imap.logout()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("[Email] Archive failed for UID %s: %s", uid, e)
 
     async def send(
         self,
