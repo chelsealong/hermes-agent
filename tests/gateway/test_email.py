@@ -20,7 +20,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from unittest.mock import patch, MagicMock, AsyncMock, ANY
 
-from gateway.platforms.base import SendResult
+from gateway.platforms.base import ProcessingOutcome, SendResult
 
 
 class TestConfigEnvOverrides(unittest.TestCase):
@@ -945,18 +945,50 @@ class TestArchiveProcessed(unittest.TestCase):
             "date": "",
         }
 
-    def test_disabled_by_default_does_not_touch_imap(self):
-        """Without archive_processed, dispatch never opens an archive IMAP connection."""
+    def _dispatch_and_capture_event(self, adapter, msg_data):
+        """Run real _dispatch_message with a no-op handle_message stub.
+
+        handle_message is fire-and-forget in the real base class (it
+        schedules background processing and returns immediately, or queues
+        the event as pending behind an active session) — a no-op stub is
+        the honest simulation of that, not a shortcut. Returns the
+        MessageEvent _dispatch_message built, so callers can independently
+        drive on_processing_complete the way the base class actually would
+        once background processing finishes.
+        """
         import asyncio
-        adapter = self._make_adapter()
+        captured = {}
 
         async def capture_handle(event):
-            pass
+            captured["event"] = event
 
         adapter.handle_message = capture_handle
+        asyncio.run(adapter._dispatch_message(msg_data))
+        return captured["event"]
+
+    def test_disabled_by_default_does_not_touch_imap(self):
+        """Without archive_processed, on_processing_complete(SUCCESS) never opens an archive IMAP connection."""
+        import asyncio
+        adapter = self._make_adapter()
+        event = self._dispatch_and_capture_event(adapter, self._msg_data())
 
         with patch("imaplib.IMAP4_SSL") as mock_imap_cls:
-            asyncio.run(adapter._dispatch_message(self._msg_data()))
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS))
+            mock_imap_cls.assert_not_called()
+
+    def test_dispatch_alone_never_archives(self):
+        """handle_message returning is fire-and-forget scheduling, not completion.
+
+        Regression test: _dispatch_message must not archive just because the
+        awaited handle_message() call returned — that only means a
+        background task was scheduled (or the event was queued behind an
+        active session), not that the agent answered it.
+        """
+        import asyncio
+        adapter = self._make_adapter(extra={"archive_processed": True})
+
+        with patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            self._dispatch_and_capture_event(adapter, self._msg_data())
             mock_imap_cls.assert_not_called()
 
     def test_move_used_when_server_supports_it(self):
@@ -967,17 +999,14 @@ class TestArchiveProcessed(unittest.TestCase):
             "archive_folder": "Archive",
         })
 
-        async def capture_handle(event):
-            pass
-
-        adapter.handle_message = capture_handle
-
         mock_imap = MagicMock()
         mock_imap.capability.return_value = ("OK", [b"IMAP4rev1 MOVE UIDPLUS"])
         mock_imap.uid.return_value = ("OK", [b"done"])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_imap):
-            asyncio.run(adapter._dispatch_message(self._msg_data(uid=b"9")))
+            event = self._dispatch_and_capture_event(adapter, self._msg_data(uid=b"9"))
+            mock_imap.uid.assert_not_called()  # not yet — dispatch alone must not archive
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS))
 
         mock_imap.uid.assert_called_once_with("MOVE", b"9", "Archive")
         mock_imap.expunge.assert_not_called()
@@ -990,17 +1019,13 @@ class TestArchiveProcessed(unittest.TestCase):
             "archive_folder": "Archive",
         })
 
-        async def capture_handle(event):
-            pass
-
-        adapter.handle_message = capture_handle
-
         mock_imap = MagicMock()
         mock_imap.capability.return_value = ("OK", [b"IMAP4rev1 UIDPLUS"])
         mock_imap.uid.return_value = ("OK", [b"done"])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_imap):
-            asyncio.run(adapter._dispatch_message(self._msg_data(uid=b"9")))
+            event = self._dispatch_and_capture_event(adapter, self._msg_data(uid=b"9"))
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS))
 
         calls = mock_imap.uid.call_args_list
         self.assertEqual(calls[0].args, ("COPY", b"9", "Archive"))
@@ -1008,18 +1033,34 @@ class TestArchiveProcessed(unittest.TestCase):
         mock_imap.expunge.assert_called_once()
 
     def test_archive_failure_does_not_raise(self):
-        """A broken archive folder must not surface as a dispatch failure."""
+        """A broken archive folder must not surface as a processing-complete failure."""
         import asyncio
         adapter = self._make_adapter(extra={"archive_processed": True})
-
-        async def capture_handle(event):
-            pass
-
-        adapter.handle_message = capture_handle
+        event = self._dispatch_and_capture_event(adapter, self._msg_data())
 
         with patch("imaplib.IMAP4_SSL", side_effect=OSError("boom")):
             # Should not raise despite the archive connection failing.
-            asyncio.run(adapter._dispatch_message(self._msg_data()))
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS))
+
+    def test_failure_outcome_does_not_archive(self):
+        """A message the agent failed to answer must stay in INBOX."""
+        import asyncio
+        adapter = self._make_adapter(extra={"archive_processed": True})
+        event = self._dispatch_and_capture_event(adapter, self._msg_data())
+
+        with patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.FAILURE))
+            mock_imap_cls.assert_not_called()
+
+    def test_cancelled_outcome_does_not_archive(self):
+        """An interrupted/cancelled turn must not archive its source message."""
+        import asyncio
+        adapter = self._make_adapter(extra={"archive_processed": True})
+        event = self._dispatch_and_capture_event(adapter, self._msg_data())
+
+        with patch("imaplib.IMAP4_SSL") as mock_imap_cls:
+            asyncio.run(adapter.on_processing_complete(event, ProcessingOutcome.CANCELLED))
+            mock_imap_cls.assert_not_called()
 
 
 if __name__ == "__main__":

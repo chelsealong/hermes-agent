@@ -42,6 +42,7 @@ from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
     MessageType,
+    ProcessingOutcome,
     SendResult,
     cache_document_from_bytes,
     cache_image_from_bytes,
@@ -940,6 +941,12 @@ class EmailAdapter(BasePlatformAdapter):
             message_type=msg_type,
             source=source,
             message_id=msg_data["message_id"],
+            # Carries the IMAP UID through to on_processing_complete, since
+            # handle_message() only schedules background processing (or
+            # queues the event as pending behind an active session) and
+            # returns immediately — archiving right after this await would
+            # fire on "scheduled", not "answered".
+            raw_message=msg_data,
             media_urls=media_urls,
             media_types=media_types,
             reply_to_message_id=msg_data["in_reply_to"] or None,
@@ -948,9 +955,22 @@ class EmailAdapter(BasePlatformAdapter):
         logger.info("[Email] New message from %s: %s", sender_addr, subject)
         await self.handle_message(event)
 
-        if self._archive_processed:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._archive_message, msg_data["uid"])
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        """Archive the source email once it has actually been answered.
+
+        Fires after the background processing task started by
+        handle_message() finishes — unlike handle_message() itself, which
+        returns as soon as the task is scheduled (or the event is queued
+        behind an active session), well before the agent has looked at it.
+        Only SUCCESS archives; FAILURE/CANCELLED leave the message in INBOX.
+        """
+        if not self._archive_processed or outcome != ProcessingOutcome.SUCCESS:
+            return
+        msg_data = event.raw_message
+        if not isinstance(msg_data, dict) or "uid" not in msg_data:
+            return
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._archive_message, msg_data["uid"])
 
     def _archive_message(self, uid: bytes) -> None:
         """Move a processed message out of INBOX into the archive folder.
