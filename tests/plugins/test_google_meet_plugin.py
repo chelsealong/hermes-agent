@@ -287,6 +287,172 @@ def test_realtime_session_cancel_response_when_disconnected():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _click_join — waits for the async-rendered button instead of one-shot check
+# ---------------------------------------------------------------------------
+
+
+def test_click_join_waits_for_button_to_render(tmp_path):
+    """The join button often doesn't exist yet right after domcontentloaded.
+
+    A single immediate count()/is_visible() check silently misses it. This
+    proves _click_join polls until the button actually renders.
+    """
+    from plugins.google_meet.meet_bot import _BotState, _click_join
+
+    class _FakeLocator:
+        def __init__(self, appears_after_calls):
+            self._calls = 0
+            self._appears_after = appears_after_calls
+            self.clicked = False
+
+        @property
+        def first(self):
+            return self
+
+        def count(self):
+            self._calls += 1
+            return 1 if self._calls > self._appears_after else 0
+
+        def is_visible(self):
+            return True
+
+        def click(self, timeout=None):
+            self.clicked = True
+
+    class _FakePage:
+        def __init__(self, locator):
+            self._locator = locator
+
+        def get_by_role(self, role, name=None, exact=False):
+            assert name == "Join now"
+            return self._locator
+
+    # "Join now" only starts reporting count()==1 on the 4th poll.
+    locator = _FakeLocator(appears_after_calls=3)
+    page = _FakePage(locator)
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+
+    _click_join(page, state, timeout_s=5.0, poll_interval_s=0.01)
+
+    assert locator.clicked is True
+    assert state.error is None
+
+
+def test_click_join_sets_error_when_button_never_renders(tmp_path):
+    from plugins.google_meet.meet_bot import _BotState, _click_join
+
+    class _FakeLocator:
+        @property
+        def first(self):
+            return self
+
+        def count(self):
+            return 0
+
+        def is_visible(self):
+            return False
+
+    class _FakePage:
+        def get_by_role(self, role, name=None, exact=False):
+            return _FakeLocator()
+
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+
+    _click_join(_FakePage(), state, timeout_s=0.05, poll_interval_s=0.01)
+
+    assert state.error is not None
+    assert "join button" in state.error
+
+
+# ---------------------------------------------------------------------------
+# _ensure_mic_unmuted — clicks the mic toggle only if Meet muted us
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_mic_unmuted_clicks_toggle_when_muted(tmp_path):
+    from plugins.google_meet.meet_bot import _BotState, _ensure_mic_unmuted
+
+    class _FakePage:
+        def evaluate(self, _js):
+            return True
+
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+    assert state.mic_unmuted_at is None
+
+    _ensure_mic_unmuted(_FakePage(), state)
+
+    assert state.mic_unmuted_at is not None
+
+
+def test_ensure_mic_unmuted_noop_when_already_unmuted(tmp_path):
+    from plugins.google_meet.meet_bot import _BotState, _ensure_mic_unmuted
+
+    class _FakePage:
+        def evaluate(self, _js):
+            return False
+
+    state = _BotState(out_dir=tmp_path / "session", meeting_id="m",
+                      url="https://meet.google.com/m")
+
+    _ensure_mic_unmuted(_FakePage(), state)
+
+    assert state.mic_unmuted_at is None
+
+
+# ---------------------------------------------------------------------------
+# _spawn_linux_pcm_pump — paplay must read from a live pipe, not the file
+# ---------------------------------------------------------------------------
+
+
+def test_spawn_linux_pcm_pump_pipes_tail_into_paplay(tmp_path):
+    """paplay given the PCM path directly reads to EOF and exits immediately
+    on the empty startup file, so it never plays audio appended later. This
+    proves paplay's stdin is wired to a `tail -f` pipe instead of the file
+    path, so it stays alive as bytes are appended.
+    """
+    from plugins.google_meet.meet_bot import _spawn_linux_pcm_pump
+
+    pcm_path = tmp_path / "speaker.pcm"
+    pcm_path.write_bytes(b"")
+
+    calls = []
+
+    class _FakeStdout:
+        def close(self):
+            pass
+
+    class _FakeProc:
+        def __init__(self, argv):
+            self.argv = argv
+            self.stdout = _FakeStdout() if argv[0] == "tail" else None
+
+        def terminate(self):
+            pass
+
+    def _fake_popen(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return _FakeProc(argv)
+
+    with patch("subprocess.Popen", side_effect=_fake_popen):
+        tail_proc, paplay_proc = _spawn_linux_pcm_pump(pcm_path, "hermes_meet_sink")
+
+    assert calls[0][0][0] == "tail"
+    assert str(pcm_path) in calls[0][0]
+    assert "-f" in calls[0][0]  # follow — keeps reading as the file grows
+
+    paplay_argv, paplay_kwargs = calls[1]
+    assert paplay_argv[0] == "paplay"
+    # paplay must NOT take the pcm path as a positional arg (that's the bug:
+    # paplay reads-to-EOF-and-exits on the empty startup file). It reads from
+    # tail's stdout instead.
+    assert str(pcm_path) not in paplay_argv
+    assert paplay_kwargs["stdin"] is tail_proc.stdout
+
+
 def test_cmd_install_refuses_windows(capsys):
     from plugins.google_meet.cli import _cmd_install
 

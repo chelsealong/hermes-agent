@@ -95,6 +95,7 @@ class _BotState:
         self.lobby_waiting = False
         self.join_attempted_at: Optional[float] = None
         self.joined_at: Optional[float] = None
+        self.mic_unmuted_at: Optional[float] = None
         self.last_caption_at: Optional[float] = None
         self.transcript_lines = 0
         self.error: Optional[str] = None
@@ -148,6 +149,7 @@ class _BotState:
             "lobbyWaiting": self.lobby_waiting,
             "joinAttemptedAt": self.join_attempted_at,
             "joinedAt": self.joined_at,
+            "micUnmutedAt": self.mic_unmuted_at,
             "lastCaptionAt": self.last_caption_at,
             "transcriptLines": self.transcript_lines,
             "transcriptPath": str(self.transcript_path),
@@ -262,6 +264,48 @@ def _enable_captions_js() -> str:
     """
 
 
+def _spawn_linux_pcm_pump(pcm_path: Path, sink: str):
+    """Start the Linux PCM pump: ``tail -f`` piped into ``paplay``.
+
+    Handing ``paplay`` the PCM path directly makes it read to EOF and exit
+    — at startup the file is empty, so it exits before the speaker thread
+    appends any audio, and every later append is missed too (``paplay``
+    never reopens the file). Piping through ``tail -f`` keeps the read end
+    open and streams bytes to ``paplay``'s stdin as they land, so playback
+    starts whenever audio actually arrives instead of at process start.
+
+    Returns ``(tail_proc, paplay_proc)``. Raises ``FileNotFoundError`` if
+    either binary is missing.
+    """
+    import subprocess as _sp
+
+    tail_proc = _sp.Popen(
+        ["tail", "-c", "+1", "-f", str(pcm_path)],
+        stdin=_sp.DEVNULL,
+        stdout=_sp.PIPE,
+        stderr=_sp.DEVNULL,
+    )
+    try:
+        paplay_proc = _sp.Popen(
+            [
+                "paplay",
+                "--raw",
+                "--rate=24000",
+                "--format=s16le",
+                "--channels=1",
+                f"--device={sink}",
+            ],
+            stdin=tail_proc.stdout,
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
+        )
+    except FileNotFoundError:
+        tail_proc.terminate()
+        raise
+    tail_proc.stdout.close()
+    return tail_proc, paplay_proc
+
+
 def _start_realtime_speaker(
     *,
     rt: dict,
@@ -344,25 +388,11 @@ def _start_realtime_speaker(
     # PCM file and stream it to the device in near-real-time.
     platform_tag = (bridge_info or {}).get("platform")
     if platform_tag == "linux":
-        import subprocess as _sp
-
         sink = (bridge_info or {}).get("write_target") or "hermes_meet_sink"
         try:
-            proc = _sp.Popen(
-                [
-                    "paplay",
-                    "--raw",
-                    "--rate=24000",
-                    "--format=s16le",
-                    "--channels=1",
-                    f"--device={sink}",
-                    str(pcm_path),
-                ],
-                stdin=_sp.DEVNULL,
-                stdout=_sp.DEVNULL,
-                stderr=_sp.DEVNULL,
-            )
+            tail_proc, proc = _spawn_linux_pcm_pump(pcm_path, sink)
             rt["pcm_pump"] = proc
+            rt["pcm_tail"] = tail_proc
         except FileNotFoundError:
             state.set(error="paplay not found — install pulseaudio-utils for realtime on Linux")
     elif platform_tag == "darwin":
@@ -639,6 +669,7 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
                             lobby_waiting=False,
                             joined_at=now,
                         )
+                        _ensure_mic_unmuted(page, state)
                     elif now > lobby_deadline:
                         state.set(
                             error=(
@@ -704,6 +735,12 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
             context.close()
             browser.close()
             # v2: teardown PCM pump, speaker thread, and audio bridge.
+            if rt.get("pcm_tail"):
+                try:
+                    rt["pcm_tail"].terminate()
+                    rt["pcm_tail"].wait(timeout=3)
+                except Exception:
+                    pass
             if rt.get("pcm_pump"):
                 try:
                     rt["pcm_pump"].terminate()
@@ -745,6 +782,31 @@ def _try_guest_name(page, guest_name: str) -> None:
         locator = page.locator('input[aria-label*="name" i]').first
         if locator.count() and locator.is_visible():
             locator.fill(guest_name, timeout=2_000)
+    except Exception:
+        pass
+
+
+def _ensure_mic_unmuted(page, state: "_BotState") -> None:
+    """Click the mic toggle if Meet admitted us with the microphone muted.
+
+    Meet sometimes defaults newly-admitted guests (or authenticated bots) to
+    a muted mic. Without this, realtime audio streamed to the fake mic never
+    reaches other participants even though ``audioBytesOut`` looks healthy.
+    Best-effort — only clicks when the toggle's ``aria-label`` says the mic
+    is currently off.
+    """
+    probe = r"""
+    (() => {
+      const btn = document.querySelector(
+        'button[aria-label*="Turn on microphone" i], button[aria-label*="unmute" i]'
+      );
+      if (btn) { btn.click(); return true; }
+      return false;
+    })();
+    """
+    try:
+        if page.evaluate(probe):
+            state.set(mic_unmuted_at=time.time())
     except Exception:
         pass
 
@@ -823,22 +885,40 @@ def _looks_like_human_speaker(speaker: str, bot_guest_name: str) -> bool:
     return True
 
 
-def _click_join(page, state: _BotState) -> None:
-    """Click 'Join now' or 'Ask to join' if either button is visible.
+def _click_join(
+    page,
+    state: _BotState,
+    timeout_s: float = 15.0,
+    poll_interval_s: float = 0.3,
+) -> None:
+    """Click 'Join now' or 'Ask to join' once either button renders.
+
+    Meet renders the pre-join buttons asynchronously after
+    ``domcontentloaded`` fires, so a single immediate ``is_visible()`` check
+    can run before either button exists and silently miss the click. Poll
+    until one appears (or *timeout_s* elapses) instead of checking once.
 
     Flags ``lobby_waiting`` when we hit the "waiting for host to admit you"
     state so the agent can surface that in status.
     """
-    for label in ("Join now", "Ask to join"):
-        try:
-            btn = page.get_by_role("button", name=label, exact=False).first
-            if btn.count() and btn.is_visible():
-                btn.click(timeout=3_000)
-                if label == "Ask to join":
-                    state.set(lobby_waiting=True)
-                break
-        except Exception:
-            continue
+    deadline = time.time() + timeout_s
+    while True:
+        for label in ("Join now", "Ask to join"):
+            try:
+                btn = page.get_by_role("button", name=label, exact=False).first
+                if btn.count() and btn.is_visible():
+                    btn.click(timeout=3_000)
+                    if label == "Ask to join":
+                        state.set(lobby_waiting=True)
+                    return
+            except Exception:
+                continue
+        if time.time() >= deadline:
+            state.set(
+                error="join button never rendered — could not click Join now / Ask to join"
+            )
+            return
+        time.sleep(poll_interval_s)
 
 
 def _parse_duration(raw: str) -> Optional[float]:

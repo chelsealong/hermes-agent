@@ -8,7 +8,7 @@ in it, and do the followup work afterwards.
 | Version | What | Status |
 |---|---|---|
 | v1 | Transcribe-only: Playwright joins Meet, scrapes captions to transcript file | ✓ ships by default |
-| v2 | Realtime duplex audio: bot speaks in-call via OpenAI Realtime + BlackHole/PulseAudio null-sink | ✓ opt in with `mode='realtime'` |
+| v2 | Realtime speech out: bot speaks in-call via OpenAI Realtime + BlackHole/PulseAudio null-sink. Incoming audio is *not* sent to Realtime — the bot still hears the meeting only via caption scraping (see below) | ✓ opt in with `mode='realtime'` |
 | v3 | Remote node host: run the bot on a different machine than the gateway | ✓ opt in with `node='<name>'` |
 
 ## Architecture
@@ -95,6 +95,14 @@ hermes meet join https://meet.google.com/abc-defg-hij --mode realtime
 On macOS, hermes will **not** switch your system audio input automatically — the
 user has to do it. This is deliberate: switching default input on a whim would
 be a surprising side effect.
+
+**Realtime mode is one-way.** "Realtime" here describes the *outgoing* path only
+(text → OpenAI Realtime → speaker.pcm → fake mic). Nothing feeds the meeting's
+actual audio into the OpenAI Realtime session — the bot's only view of what
+other participants say is Meet's live captions, scraped and appended to
+`transcript.txt`. If captions are off, unsupported for a participant's
+language, or simply lag, the bot will speak without having "heard" anything
+recent.
 
 ## Remote node host
 
