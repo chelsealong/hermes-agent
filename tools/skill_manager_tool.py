@@ -654,10 +654,13 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     SKILL.md frontmatter ``name:`` field — the same identifier every skill
     listing (``_find_all_skills``) already keys on — so a skill whose
     directory name doesn't match its declared name is still resolvable
-    instead of 404ing on every edit/delete/rename call.
+    instead of 404ing on every edit/delete/rename call. If more than one
+    skill declares that frontmatter name, refuse to guess (return None)
+    rather than silently picking one for a caller that may delete or
+    overwrite it.
     """
     from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
-    fm_match = None
+    fm_matches = []
     for skills_dir in get_all_skills_dirs():
         if not skills_dir.exists():
             continue
@@ -666,16 +669,17 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
                 continue
             if skill_md.parent.name == name:
                 return {"path": skill_md.parent}
-            if fm_match is None:
-                try:
-                    frontmatter, _ = _parse_frontmatter(
-                        skill_md.read_text(encoding="utf-8")
-                    )
-                except Exception:
-                    continue
-                if frontmatter.get("name") == name:
-                    fm_match = {"path": skill_md.parent}
-    return fm_match
+            try:
+                # Same 4KB cap _find_all_skills() reads — frontmatter always
+                # lives in the first few lines, no need for the full file.
+                frontmatter, _ = _parse_frontmatter(
+                    skill_md.read_text(encoding="utf-8")[:4000]
+                )
+            except Exception:
+                continue
+            if frontmatter.get("name") == name:
+                fm_matches.append({"path": skill_md.parent})
+    return fm_matches[0] if len(fm_matches) == 1 else None
 
 
 def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:

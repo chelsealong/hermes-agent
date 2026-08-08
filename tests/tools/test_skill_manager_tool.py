@@ -244,6 +244,16 @@ class TestFindSkillFrontmatterFallback:
         with _skill_dir(tmp_path):
             assert _find_skill("nonexistent") is None
 
+    def test_find_skill_refuses_ambiguous_frontmatter_matches(self, tmp_path):
+        for dirname in ("dir-a", "dir-b"):
+            d = tmp_path / dirname
+            d.mkdir()
+            (d / "SKILL.md").write_text(
+                "---\nname: shared-name\ndescription: Duplicate.\n---\n\nBody\n"
+            )
+        with _skill_dir(tmp_path):
+            assert _find_skill("shared-name") is None
+
 
 class TestPatchSkill:
     def test_patch_unique_match(self, tmp_path):
