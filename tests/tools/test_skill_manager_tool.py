@@ -16,6 +16,7 @@ from tools.skill_manager_tool import (
     _edit_skill,
     _patch_skill,
     _delete_skill,
+    _find_skill,
     _write_file,
     _remove_file,
     skill_manage,
@@ -207,6 +208,42 @@ class TestEditSkill:
         # Original content should be preserved
         content = (tmp_path / "my-skill" / "SKILL.md").read_text()
         assert "A test skill" in content
+
+class TestFindSkillFrontmatterFallback:
+    """A skill directory named differently from its SKILL.md `name:` field
+    is still resolvable (#81839) — matching how _find_all_skills already
+    keys the dashboard/skills_list by the frontmatter name."""
+
+    def test_find_skill_by_frontmatter_name_when_dir_differs(self, tmp_path):
+        skill_dir = tmp_path / "paperless-ngx-upload-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: paperless-ngx-upload\n"
+            "description: Upload documents to Paperless-ngx.\n"
+            "---\n\n# Paperless\n"
+        )
+        with _skill_dir(tmp_path):
+            found = _find_skill("paperless-ngx-upload")
+        assert found is not None
+        assert found["path"] == skill_dir
+
+    def test_find_skill_prefers_exact_directory_name_match(self, tmp_path):
+        (tmp_path / "test-skill").mkdir()
+        (tmp_path / "test-skill" / "SKILL.md").write_text(VALID_SKILL_CONTENT)
+        other_dir = tmp_path / "other-dir"
+        other_dir.mkdir()
+        (other_dir / "SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: Impostor.\n---\n\nBody\n"
+        )
+        with _skill_dir(tmp_path):
+            found = _find_skill("test-skill")
+        assert found["path"] == tmp_path / "test-skill"
+
+    def test_find_skill_returns_none_when_no_match(self, tmp_path):
+        with _skill_dir(tmp_path):
+            assert _find_skill("nonexistent") is None
+
 
 class TestPatchSkill:
     def test_patch_unique_match(self, tmp_path):

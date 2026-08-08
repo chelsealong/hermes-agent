@@ -649,8 +649,15 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     Searches the local skills dir (~/.hermes/skills/) first, then any
     external dirs configured via skills.external_dirs.  Returns
     {"path": Path} or None.
+
+    Matches by directory name first. If nothing matches, falls back to the
+    SKILL.md frontmatter ``name:`` field — the same identifier every skill
+    listing (``_find_all_skills``) already keys on — so a skill whose
+    directory name doesn't match its declared name is still resolvable
+    instead of 404ing on every edit/delete/rename call.
     """
     from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
+    fm_match = None
     for skills_dir in get_all_skills_dirs():
         if not skills_dir.exists():
             continue
@@ -659,7 +666,16 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
                 continue
             if skill_md.parent.name == name:
                 return {"path": skill_md.parent}
-    return None
+            if fm_match is None:
+                try:
+                    frontmatter, _ = _parse_frontmatter(
+                        skill_md.read_text(encoding="utf-8")
+                    )
+                except Exception:
+                    continue
+                if frontmatter.get("name") == name:
+                    fm_match = {"path": skill_md.parent}
+    return fm_match
 
 
 def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
