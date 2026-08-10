@@ -212,6 +212,12 @@ class TestScanFile:
         findings = scan_file(f, "leak.py")
         assert any(fi.pattern_id == "hardcoded_secret" for fi in findings)
 
+    def test_lowercase_secret_wrapped_in_underscores_still_flagged(self, tmp_path):
+        f = tmp_path / "leak2.py"
+        f.write_text('api_key = "__abcdefghijklmnopqrst__"\n')
+        findings = scan_file(f, "leak2.py")
+        assert any(fi.pattern_id == "hardcoded_secret" for fi in findings)
+
 
 # ---------------------------------------------------------------------------
 # scan_skill — directory scanning

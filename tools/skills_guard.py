@@ -471,8 +471,12 @@ THREAT_PATTERNS = [
     # ── Hardcoded secrets (credentials embedded in the skill itself) ──
     # Excludes `__UPPER_SNAKE__`-style placeholder tokens (e.g.
     # `CONFIG_TOKEN = "__MOTION_EXPLAINER_CONFIG__"`), which are template
-    # markers replaced at runtime, not real credentials.
-    (r'(?:api[_-]?key|token|secret|password)\s*[=:]\s*["\'](?!__[A-Za-z0-9+/=_-]+__)[A-Za-z0-9+/=_-]{20,}',
+    # markers replaced at runtime, not real credentials. The excluded
+    # class is restricted to uppercase/digits/underscore (case-sensitive
+    # via `(?-i:...)`, since these patterns compile with re.IGNORECASE)
+    # so a real lowercase or mixed-case secret wrapped in `__..__` still
+    # matches.
+    (r'(?:api[_-]?key|token|secret|password)\s*[=:]\s*["\'](?!__(?-i:[A-Z0-9_])+__)[A-Za-z0-9+/=_-]{20,}',
      "hardcoded_secret", "critical", "credential_exposure",
      "possible hardcoded API key, token, or secret"),
     (r'-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----',
