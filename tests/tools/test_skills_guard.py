@@ -200,6 +200,18 @@ class TestScanFile:
         # Same pattern on same line should appear only once
         assert len(root_rm) == 1
 
+    def test_placeholder_token_not_flagged_as_hardcoded_secret(self, tmp_path):
+        f = tmp_path / "create_explainer.py"
+        f.write_text('CONFIG_TOKEN = "__MOTION_EXPLAINER_CONFIG__"\n')
+        findings = scan_file(f, "create_explainer.py")
+        assert not any(fi.pattern_id == "hardcoded_secret" for fi in findings)
+
+    def test_real_secret_still_flagged_as_hardcoded_secret(self, tmp_path):
+        f = tmp_path / "leak.py"
+        f.write_text('api_key = "sk-abcdef1234567890abcdef12"\n')
+        findings = scan_file(f, "leak.py")
+        assert any(fi.pattern_id == "hardcoded_secret" for fi in findings)
+
 
 # ---------------------------------------------------------------------------
 # scan_skill — directory scanning
