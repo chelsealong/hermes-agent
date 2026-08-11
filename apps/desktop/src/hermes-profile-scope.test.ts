@@ -5,13 +5,16 @@ import {
   getActionStatus,
   getElevenLabsVoices,
   getMemoryProviderConfig,
+  getMessagingPlatforms,
   getStatus,
   restartGateway,
   saveMemoryProviderConfig,
   setApiRequestProfile,
   speakText,
+  testMessagingPlatform,
   transcribeAudio,
-  updateHermes
+  updateHermes,
+  updateMessagingPlatform
 } from './hermes'
 
 // Contract: every backend-targeted action helper must carry the active gateway
@@ -78,6 +81,23 @@ describe('backend action helpers are profile-scoped', () => {
 
     for (const call of api.mock.calls) {
       expect(call[0].profile).toBe('jarvis')
+    }
+  })
+
+  // The Messaging Platforms page read/wrote via the unscoped bridge call, so
+  // a multiplex-profile setup always saw the primary profile's tokens no
+  // matter which profile was active (#83391).
+  it('forwards the active profile to messaging platform helpers', () => {
+    setApiRequestProfile('hmbot2')
+
+    void getMessagingPlatforms()
+    void updateMessagingPlatform('telegram', { enabled: true })
+    void testMessagingPlatform('telegram')
+
+    expect(api.mock.calls).toHaveLength(3)
+
+    for (const call of api.mock.calls) {
+      expect(call[0].profile).toBe('hmbot2')
     }
   })
 })
