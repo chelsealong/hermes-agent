@@ -134,6 +134,64 @@ class TestUnmatchedHintRotationIsBounded:
         assert len(results) <= 4
         assert results[-1] is None
 
+    def test_unrelated_concurrent_select_does_not_reset_streak(
+        self, tmp_path, monkeypatch
+    ):
+        """#83447 follow-up: the streak is tracked process-wide by
+        (profile home, provider) so it survives ``load_pool()`` reloads —
+        but that also means unrelated concurrent traffic on the SAME
+        provider/profile (e.g. an auxiliary title-generation request, or a
+        second chat session) calls ``select()`` on other ``CredentialPool``
+        instances for the same key. A plain, unrelated, healthy selection
+        must not reset the streak that is bounding a completely different,
+        actually-broken credential's unmatched-hint rotation loop, or the
+        bound could be defeated by ordinary background traffic.
+        """
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "auth.json").write_text(
+            json.dumps({
+                "version": 1,
+                "credential_pool": {
+                    "openrouter": [_entry(0, "key-a"), _entry(1, "key-b")],
+                },
+            })
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        from agent.credential_pool import load_pool
+
+        # The pool driving the broken, unmatched-hint retry loop.
+        failing_pool = load_pool("openrouter")
+
+        results = []
+        for _ in range(10):  # caller's retry loop
+            # Simulate an unrelated, concurrent, healthy caller on the same
+            # provider/profile (e.g. a background auxiliary request) doing
+            # a completely ordinary successful selection in between retries.
+            unrelated_pool = load_pool("openrouter")
+            assert unrelated_pool.select() is not None
+
+            nxt = failing_pool.mark_exhausted_and_rotate(
+                status_code=401,
+                error_context={"reason": "unauthorized"},
+                api_key_hint="oauth-runtime-token-that-matches-nothing",
+            )
+            results.append(nxt)
+            if nxt is None:
+                break
+        else:
+            pytest.fail(
+                "unrelated concurrent select() defeated the #70401/#83447 "
+                "bound: 10 unmatched-hint rotations never returned None "
+                "despite interleaved unrelated healthy selections"
+            )
+
+        # Still bounded within one lap (2 available entries → at most 2
+        # rotations before the streak trips), unaffected by the interleaved
+        # unrelated successful selects.
+        assert len(results) <= 3
+        assert results[-1] is None
+
     def test_matched_hint_path_unaffected(self, tmp_path, monkeypatch):
         """Regression guard: the normal matched-hint path still marks the
         failing entry and rotates to the healthy one."""

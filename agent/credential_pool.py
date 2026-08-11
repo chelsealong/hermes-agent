@@ -671,11 +671,17 @@ class CredentialPool:
         # whose runtime key rotates, entries pruned by another process, ...).
         # These rotations mark nothing exhausted, so without a cap the pool
         # can never converge to "no available entries" and the caller's 401
-        # retry loop runs unbounded and non-interruptible.  Reset whenever a
-        # real entry is identified or an escape path returns None.  Tracked
-        # in the process-wide ``_unmatched_rotation_streaks`` map (see top of
-        # module), not on ``self``, so it survives ``load_pool()`` handing a
-        # fresh instance to the next turn.
+        # retry loop runs unbounded and non-interruptible.  Reset only when a
+        # real entry is identified or an escape path returns None — NOT on
+        # every plain successful select() (see select(): this key is shared
+        # process-wide across every CredentialPool instance for this
+        # provider/profile, including unrelated concurrent callers such as
+        # auxiliary title-generation requests, so an ordinary healthy
+        # selection elsewhere must not be allowed to erase a different
+        # in-flight failure's streak).  Tracked in the process-wide
+        # ``_unmatched_rotation_streaks`` map (see top of module), not on
+        # ``self``, so it survives ``load_pool()`` handing a fresh instance
+        # to the next turn.
         self._unmatched_streak_key: Tuple[str, str] = (str(get_hermes_home()), provider)
 
     def _bump_unmatched_streak(self) -> int:
@@ -1796,18 +1802,28 @@ class CredentialPool:
         return False
 
     def select(self) -> Optional[PooledCredential]:
+        # NOTE: deliberately does NOT touch the unmatched-rotation streak
+        # (see the comment on ``_unmatched_streak_key`` in __init__). That
+        # counter is shared process-wide by (profile home, provider) so it
+        # survives load_pool() reloading a fresh instance every turn — but
+        # that also means select() runs here for many unrelated concurrent
+        # callers on the same provider/profile (auxiliary requests, other
+        # chat sessions, tool calls, ...). A plain successful selection by
+        # one of them says nothing about whether some OTHER in-flight
+        # request's unmatched-hint failure streak has actually recovered;
+        # clearing it here would let that unrelated traffic silently defeat
+        # the #70401/#83447 bound. Only mark_exhausted_and_rotate() clears
+        # it, and only when it can attribute the clear to this failure
+        # sequence (a real entry identified, or the bound tripped).
         entry, pending_refresh = self._select_under_lock()
         if pending_refresh:
             self._refresh_pending_entries(pending_refresh)
         if entry is not None:
-            self._reset_unmatched_streak()
             return entry
         # If no entry was available but we just refreshed some, re-select
         # now that the refreshed entries are back in the pool.
         if pending_refresh:
             entry, _ = self._select_under_lock()
-            if entry is not None:
-                self._reset_unmatched_streak()
         return entry
 
     def _select_under_lock(self) -> Tuple[Optional[PooledCredential], List[tuple]]:
