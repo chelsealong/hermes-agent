@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from hermes_constants import OPENROUTER_BASE_URL
+from hermes_constants import OPENROUTER_BASE_URL, get_hermes_home
 from hermes_cli.config import load_env
 from agent.secret_scope import get_secret as _get_secret
 from agent.credential_persistence import (
@@ -43,6 +43,22 @@ from hermes_cli.auth import (
 )
 
 logger = logging.getLogger(__name__)
+
+# #83447: ``load_pool()`` re-reads the on-disk pool and hands back a brand
+# new ``CredentialPool`` on every call — by design, so key rotation/token
+# refresh done by another call is picked up (see
+# ``CLIAgentSetupMixin._ensure_runtime_credentials``, which re-resolves the
+# pool at the top of every turn). The #70401 fix bounds
+# mark_exhausted_and_rotate()'s no-match rotation branch, but it counted
+# consecutive calls on ``self`` — a fresh instance starts that count back at
+# zero. A caller that re-resolves the pool once per turn (the dashboard/TUI
+# gateway, which builds a fresh agent per prompt) never lets the streak
+# exceed 1, so the bound never trips and the 401 storm repeats forever
+# across turns instead of within one. Keyed process-wide by (profile home,
+# provider) so it survives the reload; reset whenever a real entry is
+# identified, same as the per-instance counter did.
+_unmatched_rotation_streak_lock = threading.Lock()
+_unmatched_rotation_streaks: Dict[Tuple[str, str], int] = {}
 
 
 def _load_config_safe() -> Optional[dict]:
@@ -650,14 +666,27 @@ class CredentialPool:
         # Re-armed to None on every successful selection so a recover→re-exhaust
         # transition logs promptly instead of being swallowed by a stale window.
         self._last_no_entries_log_at: Optional[float] = None
-        # #70401: consecutive mark_exhausted_and_rotate() calls whose supplied
-        # credential identity matched no pool entry (OAuth wrappers whose
-        # runtime key rotates, entries pruned by another process, ...).  These
-        # rotations mark nothing exhausted, so without a cap the pool can
-        # never converge to "no available entries" and the caller's 401 retry
-        # loop runs unbounded and non-interruptible.  Reset whenever a real
-        # entry is identified or an escape path returns None.
-        self._unmatched_rotation_streak: int = 0
+        # #70401/#83447: consecutive mark_exhausted_and_rotate() calls whose
+        # supplied credential identity matched no pool entry (OAuth wrappers
+        # whose runtime key rotates, entries pruned by another process, ...).
+        # These rotations mark nothing exhausted, so without a cap the pool
+        # can never converge to "no available entries" and the caller's 401
+        # retry loop runs unbounded and non-interruptible.  Reset whenever a
+        # real entry is identified or an escape path returns None.  Tracked
+        # in the process-wide ``_unmatched_rotation_streaks`` map (see top of
+        # module), not on ``self``, so it survives ``load_pool()`` handing a
+        # fresh instance to the next turn.
+        self._unmatched_streak_key: Tuple[str, str] = (str(get_hermes_home()), provider)
+
+    def _bump_unmatched_streak(self) -> int:
+        with _unmatched_rotation_streak_lock:
+            streak = _unmatched_rotation_streaks.get(self._unmatched_streak_key, 0) + 1
+            _unmatched_rotation_streaks[self._unmatched_streak_key] = streak
+            return streak
+
+    def _reset_unmatched_streak(self) -> None:
+        with _unmatched_rotation_streak_lock:
+            _unmatched_rotation_streaks.pop(self._unmatched_streak_key, None)
 
     def has_credentials(self) -> bool:
         with self._lock:
@@ -1771,14 +1800,14 @@ class CredentialPool:
         if pending_refresh:
             self._refresh_pending_entries(pending_refresh)
         if entry is not None:
-            self._unmatched_rotation_streak = 0
+            self._reset_unmatched_streak()
             return entry
         # If no entry was available but we just refreshed some, re-select
         # now that the refreshed entries are back in the pool.
         if pending_refresh:
             entry, _ = self._select_under_lock()
             if entry is not None:
-                self._unmatched_rotation_streak = 0
+                self._reset_unmatched_streak()
         return entry
 
     def _select_under_lock(self) -> Tuple[Optional[PooledCredential], List[tuple]]:
@@ -2105,19 +2134,19 @@ class CredentialPool:
                 # handed back at least once without recovery, so stop
                 # guessing and surface the error (no cooldown is written for
                 # anybody — healthy keys stay available for the next turn).
-                self._unmatched_rotation_streak += 1
+                streak = self._bump_unmatched_streak()
                 available_count, _ = self._available_entries()
                 available_count = len(available_count)
-                if self._unmatched_rotation_streak > max(available_count, 1):
+                if streak > max(available_count, 1):
                     logger.warning(
                         "credential pool: failed credential identity matched no "
                         "%s entry for %d consecutive rotations (pool size %d) — "
                         "surfacing the error instead of rotating again",
                         self.provider,
-                        self._unmatched_rotation_streak,
+                        streak,
                         available_count,
                     )
-                    self._unmatched_rotation_streak = 0
+                    self._reset_unmatched_streak()
                     self._current_id = None
                     return None
                 logger.info(
@@ -2133,13 +2162,13 @@ class CredentialPool:
                     # entry reports a successful recovery without changing
                     # the credential, so the caller retries the same 401
                     # indefinitely. Let fallback/error propagation proceed.
-                    self._unmatched_rotation_streak = 0
+                    self._reset_unmatched_streak()
                     self._current_id = None
                     return None
                 return next_entry
             # A real entry was identified — any prior unmatched-rotation
             # streak is stale (this mark WILL advance pool state).
-            self._unmatched_rotation_streak = 0
+            self._reset_unmatched_streak()
             if entry is None:
                 entry = self._current_unlocked() or self._select_unlocked(refresh=False)[0]
             if entry is None:

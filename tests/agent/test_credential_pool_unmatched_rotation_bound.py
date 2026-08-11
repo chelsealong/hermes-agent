@@ -88,6 +88,52 @@ class TestUnmatchedHintRotationIsBounded:
 
 
 
+    def test_reloaded_pool_instance_stays_bounded(self, tmp_path, monkeypatch):
+        """#83447: the streak must survive ``load_pool()`` handing back a
+        fresh instance every turn, not just repeated calls on one instance.
+
+        ``_ensure_runtime_credentials()`` re-resolves (and reloads) the pool
+        once per turn so key rotation is picked up without a restart. A
+        long-lived worker (dashboard/TUI gateway) that re-submits a prompt
+        whose credential is permanently broken calls this once per turn — a
+        streak counted on ``self`` restarts at zero every time and the #70401
+        bound never trips, so the 401 storm repeats across turns forever
+        instead of within one.
+        """
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "auth.json").write_text(
+            json.dumps({
+                "version": 1,
+                "credential_pool": {
+                    "openrouter": [_entry(0, "key-a"), _entry(1, "key-b")],
+                },
+            })
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        from agent.credential_pool import load_pool
+
+        results = []
+        for _ in range(10):  # each iteration simulates one new turn's reload
+            pool = load_pool("openrouter")
+            nxt = pool.mark_exhausted_and_rotate(
+                status_code=401,
+                error_context={"reason": "unauthorized"},
+                api_key_hint="oauth-runtime-token-that-matches-nothing",
+            )
+            results.append(nxt)
+            if nxt is None:
+                break
+        else:
+            pytest.fail(
+                "unbounded 401 retry loop across reloaded pool instances: "
+                "10 unmatched-hint rotations on fresh load_pool() calls "
+                "never returned None (#83447)"
+            )
+
+        assert len(results) <= 4
+        assert results[-1] is None
+
     def test_matched_hint_path_unaffected(self, tmp_path, monkeypatch):
         """Regression guard: the normal matched-hint path still marks the
         failing entry and rotates to the healthy one."""
