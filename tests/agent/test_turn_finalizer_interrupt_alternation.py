@@ -180,3 +180,30 @@ def test_interrupt_without_tool_tail_adds_nothing():
     _finalize(agent, messages, interrupted=True, final_response="partial reply")
     assert len(messages) == before
     assert messages[-1]["role"] == "assistant"
+
+
+def test_interrupted_turn_with_empty_final_response_still_reaches_the_user():
+    # #84207: an interrupted turn with no streamed text (response_len=0)
+    # must still hand the caller — gateway/webui/TUI/desktop all read
+    # result["final_response"] — something non-empty. The placeholder
+    # ``close_interrupted_tool_sequence`` writes into ``messages`` only
+    # closes the persisted transcript; it never used to reach the value
+    # actually delivered to the user, so the turn looked like a silent
+    # death.
+    agent = _StubAgent()
+    messages = _interrupted_tool_tail()
+    result = _finalize(agent, messages, interrupted=True, final_response=None)
+    assert result["final_response"]
+    assert result["final_response"] == "Operation interrupted."
+
+
+def test_interrupted_turn_without_tool_tail_and_empty_response_still_reaches_the_user():
+    # Same #84207 gap, but on the path where the tail is already an
+    # assistant/user message (no tool-sequence close needed) and the model
+    # streamed no text before the interrupt landed.
+    agent = _StubAgent()
+    messages = [
+        {"role": "user", "content": "hi"},
+    ]
+    result = _finalize(agent, messages, interrupted=True, final_response=None)
+    assert result["final_response"]

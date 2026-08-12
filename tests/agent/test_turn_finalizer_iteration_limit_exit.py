@@ -159,7 +159,16 @@ def test_pending_response_does_not_mask_later_terminal_exit(
         _pending_verification_response="stale premature report",
     )
 
-    assert result["final_response"] is None
+    # The stale pending-verification report must never leak into the
+    # returned response regardless of exit reason. On the interrupted path,
+    # finalize_turn now fills the empty final_response with the #84207
+    # user-visible interrupt placeholder instead of leaving it None — a
+    # different (and correct) non-None value, still not the stale report.
+    assert result["final_response"] != "stale premature report"
+    if interrupted:
+        assert result["final_response"] == "Operation interrupted."
+    else:
+        assert result["final_response"] is None
     assert result["turn_exit_reason"] == exit_reason
     assert result["completed"] is False
     assert agent._handle_max_iterations_called is False

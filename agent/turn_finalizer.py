@@ -290,6 +290,16 @@ def finalize_turn(
         if interrupted:
             from agent.message_sanitization import close_interrupted_tool_sequence
             close_interrupted_tool_sequence(messages, final_response)
+            if not final_response:
+                # The placeholder above only reaches the persisted
+                # transcript (``messages``); ``final_response`` is the
+                # value actually returned to the caller and delivered to
+                # the user (gateway/webui/TUI/desktop/CLI all read
+                # ``result["final_response"]``). Leaving it empty means an
+                # interrupted turn delivers zero user-visible feedback —
+                # the session looks dead until the user re-pings it
+                # (#84207).
+                final_response = "Operation interrupted."
 
         # Some recovery/fallback paths return a real final_response without
         # adding a closing assistant message to the transcript (e.g. the

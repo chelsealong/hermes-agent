@@ -81,11 +81,17 @@ def test_finalize_turn_scrubs_lone_surrogate_from_final_response(monkeypatch):
 def test_finalize_turn_leaves_non_string_final_response_alone(monkeypatch):
     monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *_a, **_kw: [])
     agent = FakeAgent()
+    # interrupted=False here: an interrupted turn with no final_response now
+    # gets the #84207 user-visible placeholder (see
+    # tests/agent/test_turn_finalizer_interrupt_alternation.py), which is
+    # deliberate and out of scope for this chokepoint — this test is only
+    # about the surrogate-scrub guard leaving a genuinely non-string value
+    # untouched.
     result = finalize_turn(
         agent,
         final_response=None,
         api_call_count=1,
-        interrupted=True,
+        interrupted=False,
         failed=False,
         messages=[{"role": "user", "content": "q"}],
         conversation_history=[],
@@ -94,7 +100,7 @@ def test_finalize_turn_leaves_non_string_final_response_alone(monkeypatch):
         user_message="q",
         original_user_message="q",
         _should_review_memory=False,
-        _turn_exit_reason="interrupted",
+        _turn_exit_reason="unknown",
     )
     assert result["final_response"] is None
 
