@@ -2211,8 +2211,11 @@ def _repair_state_db_schema_locked(
         conn = sqlite3.connect(str(db_path), isolation_level=None)
         try:
             conn.execute("PRAGMA writable_schema=ON")
-            conn.execute("DELETE FROM sqlite_master WHERE name LIKE 'messages_fts%'")
-            _bump_schema_cookie(conn)
+            cursor = conn.execute(
+                "DELETE FROM sqlite_master WHERE name LIKE 'messages_fts%'"
+            )
+            if cursor.rowcount > 0:
+                _bump_schema_cookie(conn)
             conn.execute("PRAGMA writable_schema=OFF")
             conn.commit()
             conn.execute("VACUUM")

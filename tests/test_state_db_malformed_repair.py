@@ -13,6 +13,8 @@ cannot be handled at the FTS-rebuild layer. These tests verify the
 sqlite_master surgery path recovers the canonical data and self-heals on open.
 """
 import contextlib
+import datetime
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -657,3 +659,74 @@ def test_backup_of_changed_content_does_not_match_a_stale_backup(tmp_path):
     stale_backup.write_bytes(b"first corruption event")
 
     assert hermes_state._find_recent_matching_backup(db_path) is None
+
+
+def _corrupt_btree_page(db_path: Path) -> None:
+    """Flip a byte mid-file to induce page-level corruption that none of the
+    repair strategies (FTS rebuild, REINDEX, dedup schema, drop-FTS+VACUUM)
+    can fix — the "unrecoverable" class #86747 describes."""
+    data = bytearray(db_path.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    db_path.write_bytes(bytes(data))
+
+
+def test_repeated_repair_of_unrecoverable_db_stops_accumulating_backups(
+    tmp_path, monkeypatch
+):
+    """End-to-end: repeatedly calling repair_state_db_schema against a
+    genuinely unrecoverable DB must not keep growing the backup count on
+    every attempt (#86747: 105 failed repairs accumulated 89GB this way).
+
+    Drives the real pipeline (not _backup_db_file in isolation) because the
+    repair strategies themselves mutate db_path even when they fail to fix
+    it (e.g. the schema-cookie bump in the drop-FTS strategy) — a dedup that
+    only compares byte-for-byte against the live, still-mutating file would
+    never engage in practice even though it passes in isolation.
+
+    ``datetime.now`` is forced forward by whole seconds between attempts so
+    every attempt gets a distinct backup filename — the real timestamp
+    granularity is one second, and without this a fast test run could get
+    lucky (all attempts landing in the same wall-clock second collapse into
+    one filename regardless of whether the underlying dedup logic works),
+    masking exactly the bug this test exists to catch.
+    """
+    db_path = tmp_path / "state.db"
+    _build_healthy_db(db_path)
+    _corrupt_btree_page(db_path)
+    assert hermes_state._db_opens_cleanly(db_path) is not None
+
+    # _backup_db_file does `import datetime` locally, which just binds the
+    # single shared module object already in sys.modules — so patching the
+    # `datetime` class on the module imported here reaches it too.
+    real_datetime = datetime.datetime
+    tick = {"n": 0}
+
+    class _FakeDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            tick["n"] += 1
+            return real_datetime(2026, 1, 1, 0, 0, 0) + datetime.timedelta(
+                seconds=tick["n"]
+            )
+
+    monkeypatch.setattr(datetime, "datetime", _FakeDatetime)
+
+    content_hashes = []
+    backup_counts = []
+    backup_paths = []
+    for _ in range(4):
+        report = repair_state_db_schema(db_path)
+        assert report["repaired"] is False
+        content_hashes.append(hashlib.sha256(db_path.read_bytes()).hexdigest())
+        backup_paths.append(report["backup_path"])
+        backup_counts.append(len(list(tmp_path.glob("state.db.malformed-backup-*"))))
+
+    # The first attempt or two may still add a backup and change db_path's
+    # bytes while the repair strategies' own incidental mutations
+    # (schema-cookie bump, VACUUM) settle, but both must stop changing once
+    # the file reaches its steady (still-corrupt) state — not keep drifting
+    # once per attempt forever.
+    assert content_hashes[-1] == content_hashes[-2]
+    assert backup_counts[-1] == backup_counts[-2]
+    assert backup_paths[-1] == backup_paths[-2]
+    assert backup_counts[-1] <= 2
