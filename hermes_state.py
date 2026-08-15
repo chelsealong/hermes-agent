@@ -1699,6 +1699,54 @@ def _bump_schema_cookie(conn: sqlite3.Connection) -> None:
         logger.warning("Could not bump state.db schema cookie: %s", exc)
 
 
+# A repeat repair attempt against an unrecoverable (page-level corrupt) DB
+# re-runs on every process restart, and each run calls _backup_db_file again
+# — see #86747, where 105 failed repairs over 11 days each copied another
+# ~900MB forensic backup of bytes that were already saved, accumulating 89GB
+# of dead files. Skip the copy when a same-content backup already exists
+# within this window.
+_BACKUP_DEDUP_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def _find_recent_matching_backup(db_path: Path) -> "Optional[Path]":
+    """Return an existing malformed-backup for *db_path* with identical
+    content created within :data:`_BACKUP_DEDUP_WINDOW_SECONDS`, if any.
+
+    Cheap size/mtime checks gate the expensive byte-for-byte compare so a
+    directory with many backups doesn't pay for a full read of each one.
+    """
+    import filecmp
+
+    try:
+        size = db_path.stat().st_size
+    except OSError:
+        return None
+
+    try:
+        candidates = db_path.parent.glob(f"{db_path.name}.malformed-backup-*")
+    except OSError:
+        return None
+
+    now = time.time()
+    for candidate in candidates:
+        if candidate.name.endswith(("-wal", "-shm")):
+            continue
+        try:
+            stat = candidate.stat()
+        except OSError:
+            continue
+        if now - stat.st_mtime > _BACKUP_DEDUP_WINDOW_SECONDS:
+            continue
+        if stat.st_size != size:
+            continue
+        try:
+            if filecmp.cmp(str(candidate), str(db_path), shallow=False):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def _backup_db_file(db_path: Path) -> "Tuple[Optional[Path], Optional[str]]":
     """Copy a (possibly malformed) DB file to a timestamped backup beside it.
 
@@ -1732,6 +1780,17 @@ def _backup_db_file(db_path: Path) -> "Tuple[Optional[Path], Optional[str]]":
         )
         logger.error("Refusing to raw-copy %s for backup: %s", db_path, reason)
         return None, reason
+
+    existing = _find_recent_matching_backup(db_path)
+    if existing is not None:
+        logger.info(
+            "Reusing existing malformed-backup %s for %s: content unchanged "
+            "within the last %ds — skipping another full-size copy",
+            existing,
+            db_path,
+            _BACKUP_DEDUP_WINDOW_SECONDS,
+        )
+        return existing, None
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = db_path.with_name(f"{db_path.name}.malformed-backup-{stamp}")

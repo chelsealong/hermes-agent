@@ -622,3 +622,38 @@ def test_backup_false_still_skips_backup_and_repairs(tmp_path):
     assert report["repaired"] is True
     assert report["backup_path"] is None
     assert not list(tmp_path.glob("state.db.malformed-backup-*"))
+
+
+def test_repeated_backup_of_unchanged_malformed_db_reuses_existing_copy(tmp_path):
+    """Repeat repair attempts against a still-corrupt DB must not each copy
+    another full-size forensic backup (#86747: 105 failed repairs over 11
+    days accumulated 89GB of dead backups this way).
+
+    Uses a pre-seeded backup with a fixed, past timestamp in its filename
+    (rather than two live calls to _backup_db_file) so the assertion can't
+    pass merely because both calls landed in the same wall-clock second.
+    """
+    db_path = tmp_path / "state.db"
+    db_path.write_bytes(b"unrecoverable page-corrupt bytes" * 100)
+
+    existing_backup = tmp_path / "state.db.malformed-backup-20260101_000000"
+    existing_backup.write_bytes(db_path.read_bytes())
+
+    result_path, reason = hermes_state._backup_db_file(db_path)
+
+    assert reason is None
+    assert result_path == existing_backup
+    backups = list(tmp_path.glob("state.db.malformed-backup-*"))
+    assert len(backups) == 1
+
+
+def test_backup_of_changed_content_does_not_match_a_stale_backup(tmp_path):
+    """A genuinely new corruption event must not be deduped against an
+    existing backup that holds different (older) bytes."""
+    db_path = tmp_path / "state.db"
+    db_path.write_bytes(b"second, different corruption event")
+
+    stale_backup = tmp_path / "state.db.malformed-backup-20260101_000000"
+    stale_backup.write_bytes(b"first corruption event")
+
+    assert hermes_state._find_recent_matching_backup(db_path) is None
