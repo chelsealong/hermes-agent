@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
   __resetLinkTitleCache,
@@ -271,5 +271,53 @@ describe('external link helpers', () => {
     render(<PrettyLink fallbackLabel="Some Page" href={url} />)
 
     expect(screen.getByTitle(url).querySelector('svg')).toBeNull()
+  })
+})
+
+// A Markdown hyperlink in assistant prose can't rely on colour alone (WCAG
+// 1.4.1) — styles.css normally hides the `.ref` underline until `:hover`,
+// which a keyboard/touch user never reaches. The override that restores it is
+// scoped to assistant markdown, so the snippet below carries both rules and
+// the test proves the cascade, not just that a class name is present.
+const REF_LINK_CSS = `
+  .ref { text-decoration: none; }
+  [data-slot='aui_assistant-message-content'] .aui-md a.ref {
+    text-decoration-line: underline;
+  }
+`
+
+describe('assistant markdown link underline (WCAG 1.4.1)', () => {
+  beforeAll(() => {
+    // eslint-disable-next-line no-restricted-globals -- the cascade is the assertion; it needs a real stylesheet
+    const style = document.createElement('style')
+    style.textContent = REF_LINK_CSS
+    // eslint-disable-next-line no-restricted-globals -- see above
+    document.head.append(style)
+  })
+
+  it('stays underlined without hover when the link sits inside assistant markdown', () => {
+    installDesktopBridge()
+
+    const { container } = render(
+      <div data-slot="aui_assistant-message-content">
+        <div className="aui-md">
+          <ExternalLink href="https://example.com/path/to/resource">Example link</ExternalLink>
+        </div>
+      </div>
+    )
+
+    const link = container.querySelector('a.ref')
+    expect(link).not.toBeNull()
+    expect(getComputedStyle(link!).textDecorationLine).toBe('underline')
+  })
+
+  it('leaves a .ref link outside assistant markdown without a forced underline', () => {
+    installDesktopBridge()
+
+    const { container } = render(<ExternalLink href="https://example.com/path/to/resource">Example link</ExternalLink>)
+
+    const link = container.querySelector('a.ref')
+    expect(link).not.toBeNull()
+    expect(getComputedStyle(link!).textDecorationLine).toBe('none')
   })
 })
