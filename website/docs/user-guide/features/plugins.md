@@ -130,6 +130,19 @@ Every `ctx.*` API below is available inside a plugin's `register(ctx)` function.
 
 Later sources override earlier ones on name collision, so a user plugin with the same name as a bundled plugin replaces it.
 
+### Sharing plugins across per-directory profiles
+
+Each [profile](/user-guide/profiles) (a distinct `HERMES_HOME`) has its own isolated `plugins/`, so a plugin installed in one project's profile is invisible in every other one — including project-agnostic infrastructure plugins (local inference providers, browser backends, tool integrations) that don't need per-project isolation the way skills do.
+
+Set `plugins.shared_dir` in `config.yaml` to point at a directory outside any profile:
+
+```yaml
+plugins:
+  shared_dir: ~/.hermes/profiles/.shared/plugins
+```
+
+When a profile's own `~/.hermes/plugins/` is missing or has no plugins installed yet, discovery falls back to `shared_dir` instead, so plugins placed there are picked up by every such profile without reinstalling. A profile that already has its own plugins installed keeps using them — `shared_dir` never overrides an existing per-profile install. This key must be set per profile's `config.yaml` (profiles don't share config).
+
 ### Plugin sub-categories
 
 Within each source, Hermes also recognizes sub-category directories that route plugins to specialized discovery systems:

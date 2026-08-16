@@ -613,6 +613,42 @@ def _get_enabled_plugins() -> Optional[set]:
         return None
 
 
+def _shared_plugins_dir_from_config() -> Optional[Path]:
+    """Return the configured cross-profile shared plugins directory, if any.
+
+    Reads ``plugins.shared_dir`` from ``config.yaml``. Unset or blank means no
+    shared directory is configured.
+    """
+    try:
+        config = load_config_readonly() or {}
+        raw = cfg_get(config, "plugins", "shared_dir", default="")
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        return Path(raw.strip()).expanduser()
+    except Exception:
+        return None
+
+
+def get_effective_user_plugins_dir() -> Path:
+    """Return the directory to scan for this profile's user plugins.
+
+    Per-directory profiles (``HERMES_HOME`` overrides) each get their own
+    isolated ``plugins/``, which also isolates infrastructure plugins (local
+    inference providers, browser backends, tool integrations) that are
+    project-agnostic and would otherwise need reinstalling per profile. When
+    this profile's own ``plugins/`` is missing or has no plugin subdirectories
+    yet, and ``plugins.shared_dir`` is configured, fall back to that shared
+    directory so such plugins, installed once, are visible from every
+    profile. A profile with its own installed plugins is never overridden by
+    the shared directory.
+    """
+    profile_dir = get_hermes_home() / "plugins"
+    if profile_dir.is_dir() and any(child.is_dir() for child in profile_dir.iterdir()):
+        return profile_dir
+    shared_dir = _shared_plugins_dir_from_config()
+    return shared_dir if shared_dir is not None else profile_dir
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -4074,8 +4110,9 @@ class PluginManager:
         logger.debug("  bundled/platforms: %d manifest(s)", len(bundled_platforms))
         manifests.extend(bundled_platforms)
 
-        # 2. User plugins (~/.hermes/plugins/)
-        user_dir = get_hermes_home() / "plugins"
+        # 2. User plugins (~/.hermes/plugins/), falling back to
+        # ``plugins.shared_dir`` when this profile has none installed yet.
+        user_dir = get_effective_user_plugins_dir()
         logger.debug("Scanning user plugins: %s", user_dir)
         user_manifests = self._scan_directory(user_dir, source="user")
         logger.debug("  user: %d manifest(s)", len(user_manifests))
