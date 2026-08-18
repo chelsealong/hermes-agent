@@ -132,6 +132,21 @@ describe('connection-aware plugin host APIs', () => {
     expect(retireLocalProfileGateways).toHaveBeenCalledWith('worker')
   })
 
+  it('refreshes the profile inventory after deleting so stale rail badges clear', async () => {
+    vi.mocked(deleteProfile).mockResolvedValueOnce({ ok: true, path: '/profiles/worker' })
+
+    await host.deleteProfile('worker')
+
+    expect(refreshProfiles).toHaveBeenCalledOnce()
+  })
+
+  it('still resolves the delete when the post-delete profile refresh fails', async () => {
+    vi.mocked(deleteProfile).mockResolvedValueOnce({ ok: true, path: '/profiles/worker' })
+    vi.mocked(refreshProfiles).mockRejectedValueOnce(new Error('profile backend unavailable'))
+
+    await expect(host.deleteProfile('worker')).resolves.toBeUndefined()
+  })
+
   it('refreshes the profile inventory before asking Electron for routes', async () => {
     const getProfileRoutes = vi.fn(async () => [
       { connectionId: 'connection-local', mode: 'local', profile: 'desktop-primary', targetProfile: 'desktop-primary' },

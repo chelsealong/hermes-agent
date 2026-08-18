@@ -303,6 +303,17 @@ export const host = {
     retireLocalProfileGateways(name)
     await deleteProfile(name)
 
+    // The core dialog's callers re-pull $profiles on delete (ProfileRail via
+    // refreshActiveProfile, the Profiles view via refresh()); this door had no
+    // equivalent, so the rail kept showing the deleted profile's square until
+    // the next focus/visibility refresh.
+    try {
+      await refreshProfiles()
+    } catch {
+      // Best-effort: a transient backend hiccup leaves the stale entry to
+      // clear on the next natural refresh instead of failing the delete.
+    }
+
     if (wasActive) {
       selectProfile('default')
       setActiveProfile('default')
