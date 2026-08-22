@@ -973,6 +973,25 @@ describe('overlayLiveLanes', () => {
     expect(featureLane?.sessions.map(s => s.id)).toEqual(['moved'])
     expect(overlaid.sessionCount).toBe(1)
   })
+
+  it('does not inject a nested explicit child project session into its parent workspace lanes (#91932)', () => {
+    // Parent "ws" is a plain path-prefix match for the child's cwd, but the
+    // child folder is registered as its OWN explicit project, so the backend
+    // (and liveSessionProjectId) assign the session to "child" only.
+    const parent = projectNode({
+      id: '/www/ws',
+      isAuto: true,
+      repos: [{ id: '/www/ws', label: 'ws', path: '/www/ws', sessionCount: 0, groups: [] }]
+    })
+
+    const childSession = makeCwdSession('/www/ws/child', { id: 'child-session' })
+    const explicitProjects = [makeProject('p_child', ['/www/ws/child'])]
+
+    const overlaid = overlayLiveLanes(parent, [childSession], undefined, explicitProjects)
+
+    expect(overlaid.repos[0].groups.flatMap(g => g.sessions.map(s => s.id))).not.toContain('child-session')
+    expect(overlaid.sessionCount).toBe(0)
+  })
 })
 
 describe('overlayLivePreviews', () => {

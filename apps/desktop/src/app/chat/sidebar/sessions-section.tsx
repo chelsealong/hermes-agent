@@ -7,7 +7,7 @@ import { SidebarPanelLabel } from '@/app/shell/sidebar-label'
 import { DisclosureCaret } from '@/components/ui/disclosure-caret'
 import { SidebarGroup, SidebarGroupContent } from '@/components/ui/sidebar'
 import type { HermesGitWorktree } from '@/global'
-import type { SessionInfo } from '@/hermes'
+import type { ProjectInfo, SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { flattenSessionsWithBranches } from '@/lib/session-branch-tree'
 import {
@@ -135,6 +135,9 @@ interface SidebarSessionsSectionProps {
   liveSessions?: SessionInfo[]
   // Client-side optimistic eviction layer (deleted/archived ids).
   removedSessionIds?: ReadonlySet<string>
+  // Explicit projects (with folders), so the entered-project overlay can tell a
+  // live session's authoritative owner apart from a merely-nested path prefix.
+  explicitProjects?: ProjectInfo[]
   activeProjectId?: null | string
   labelMeta?: React.ReactNode
   labelIcon?: React.ReactNode
@@ -200,6 +203,7 @@ export function SidebarSessionsSection({
   projectRepoWorktrees,
   liveSessions,
   removedSessionIds,
+  explicitProjects,
   activeProjectId,
   labelMeta,
   labelIcon,
@@ -389,6 +393,7 @@ export function SidebarSessionsSection({
         {projectBackRow}
         {hasProjectContent ? (
           <EnteredProjectContent
+            explicitProjects={explicitProjects}
             liveSessions={liveSessions}
             onNewSession={onNewSessionInWorkspace}
             project={projectContent}

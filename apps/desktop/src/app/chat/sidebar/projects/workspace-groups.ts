@@ -493,7 +493,9 @@ const NO_REMOVED: ReadonlySet<string> = new Set()
 export function overlayRepoLanes(
   repo: SidebarWorkspaceTree,
   live: SessionInfo[],
-  removed: ReadonlySet<string> = NO_REMOVED
+  removed: ReadonlySet<string> = NO_REMOVED,
+  explicitProjects: ProjectInfo[] = [],
+  enteredProjectId: null | string = null
 ): SidebarWorkspaceTree {
   const repoRootKey = pathKey(repo.path)
   let changed = false
@@ -520,6 +522,20 @@ export function overlayRepoLanes(
 
     if (removed.has(session.id) || !cwd) {
       continue
+    }
+
+    // A session whose authoritative owner (the backend's explicit-folder rule,
+    // mirrored client-side by `liveSessionProjectId`) is a DIFFERENT explicit
+    // project must never be placed into this repo's lanes — even though its
+    // cwd sits under this repo's path too (a nested explicit project's folder
+    // is also a path-prefix match here). Without this, a session owned by a
+    // nested child project reappears in the parent's lanes on every render.
+    if (enteredProjectId !== null) {
+      const owner = liveSessionProjectId(session, explicitProjects)
+
+      if (owner !== null && owner !== enteredProjectId && explicitProjects.some(project => project.id === owner)) {
+        continue
+      }
     }
 
     // (1) Join an EXISTING worktree lane by its own path. A linked worktree can
@@ -705,7 +721,8 @@ export function excludeProjectSessions(
 export function overlayLiveLanes(
   project: SidebarProjectTree,
   live: SessionInfo[],
-  removed: ReadonlySet<string> = NO_REMOVED
+  removed: ReadonlySet<string> = NO_REMOVED,
+  explicitProjects: ProjectInfo[] = []
 ): SidebarProjectTree {
   if (project.isNoProject) {
     return overlayHomeLane(project, live, removed)
@@ -714,7 +731,7 @@ export function overlayLiveLanes(
   let changed = false
 
   const repos = project.repos.map(repo => {
-    const next = overlayRepoLanes(repo, live, removed)
+    const next = overlayRepoLanes(repo, live, removed, explicitProjects, project.id)
 
     changed ||= next !== repo
 

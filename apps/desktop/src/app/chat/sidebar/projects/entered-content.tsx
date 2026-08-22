@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react'
 import { Codicon } from '@/components/ui/codicon'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import type { HermesGitWorktree } from '@/global'
-import type { SessionInfo } from '@/hermes'
+import type { ProjectInfo, SessionInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { displayPath } from '@/lib/display-path'
 import { $dismissedWorktreeIds, dismissWorktree, setWorkspaceNodeOpen } from '@/store/layout'
@@ -35,7 +35,8 @@ export function EnteredProjectContent({
   onNewSession,
   repoWorktrees,
   liveSessions,
-  removedSessionIds
+  removedSessionIds,
+  explicitProjects
 }: {
   project: SidebarProjectTree
   renderRows: (sessions: SessionInfo[]) => React.ReactNode
@@ -43,6 +44,7 @@ export function EnteredProjectContent({
   repoWorktrees?: Record<string, HermesGitWorktree[]>
   liveSessions?: SessionInfo[]
   removedSessionIds?: ReadonlySet<string>
+  explicitProjects?: ProjectInfo[]
 }) {
   if (!project.repos.length) {
     return null
@@ -61,6 +63,8 @@ export function EnteredProjectContent({
       {project.repos.map(repo => (
         <RepoFlatSection
           discoveredWorktrees={repo.path ? repoWorktrees?.[repo.path] : undefined}
+          enteredProjectId={project.id}
+          explicitProjects={explicitProjects}
           key={repo.id}
           liveSessions={liveSessions}
           onNewSession={onNewSession}
@@ -81,7 +85,9 @@ function RepoFlatSection({
   onNewSession,
   discoveredWorktrees,
   liveSessions,
-  removedSessionIds
+  removedSessionIds,
+  explicitProjects,
+  enteredProjectId
 }: {
   repo: SidebarWorkspaceTree
   showHeader: boolean
@@ -90,6 +96,8 @@ function RepoFlatSection({
   discoveredWorktrees?: HermesGitWorktree[]
   liveSessions?: SessionInfo[]
   removedSessionIds?: ReadonlySet<string>
+  explicitProjects?: ProjectInfo[]
+  enteredProjectId?: null | string
 }) {
   const { t } = useI18n()
   const s = t.sidebar
@@ -109,10 +117,16 @@ function RepoFlatSection({
       return mergedGroups
     }
 
-    const { groups } = overlayRepoLanes({ ...repo, groups: mergedGroups }, liveSessions ?? [], removedSessionIds)
+    const { groups } = overlayRepoLanes(
+      { ...repo, groups: mergedGroups },
+      liveSessions ?? [],
+      removedSessionIds,
+      explicitProjects,
+      enteredProjectId ?? null
+    )
 
     return mergeRepoWorktreeGroups({ id: repo.id, path: repo.path, groups }, discoveredWorktrees)
-  }, [repo, mergedGroups, discoveredWorktrees, liveSessions, removedSessionIds])
+  }, [repo, mergedGroups, discoveredWorktrees, liveSessions, removedSessionIds, explicitProjects, enteredProjectId])
 
   const discoveredWorktreePaths = useMemo(
     () =>
