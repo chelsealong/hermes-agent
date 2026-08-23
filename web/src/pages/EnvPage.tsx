@@ -37,6 +37,7 @@ import { Input } from "@nous-research/ui/ui/components/input";
 import { Label } from "@nous-research/ui/ui/components/label";
 import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
+import { useProfileScope } from "@/contexts/useProfileScope";
 import { PluginSlot } from "@/plugins";
 
 /* ------------------------------------------------------------------ */
@@ -615,13 +616,22 @@ export default function EnvPage() {
   const { toast, showToast } = useToast();
   const { t } = useI18n();
   const { setAfterTitle } = usePageHeader();
+  // The write target comes from the GLOBAL profile switcher (sidebar) via
+  // ProfileContext (see SkillsPage). /api/env is profile-scoped on the
+  // backend, but this page only ever fetched once on mount — switching
+  // profiles left the previous profile's keys on screen (#92706).
+  const { profile: selectedProfile } = useProfileScope();
 
   useEffect(() => {
+    let cancelled = false;
     api
       .getEnvVars()
-      .then(setVars)
+      .then((v) => !cancelled && setVars(v))
       .catch(() => {});
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProfile]);
 
   // Scroll-to sub-nav in the page header
   const sections = useMemo(() => {
