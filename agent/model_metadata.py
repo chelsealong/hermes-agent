@@ -3330,10 +3330,11 @@ def estimate_tokens_rough(text: str) -> int:
 def estimate_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
     """Rough token estimate for a message list (pre-flight only).
 
-    Image parts (base64 PNG/JPEG) are counted as a flat ~1500 tokens per
-    image — the Anthropic pricing model — instead of counting raw base64
-    character length. Without this, a single ~1MB screenshot would be
-    estimated at ~250K tokens and trigger premature context compression.
+    Embedded base64 image parts are billed at ``len(base64) // 4`` (the
+    provider's actual wire-size billing), floored at a flat ~1500 tokens
+    per image so a tiny stub payload still registers as a real image.
+    Remote image URLs keep the flat rate since their size isn't known
+    without fetching them.
 
     Per-message results are memoized (see ``_estimate_message_tokens_cached``)
     keyed on a deep *identity fingerprint* of the message, so re-walking a
@@ -3422,30 +3423,67 @@ def _estimate_message_tokens_cached(msg: Any, image_cost: int) -> int:
     return tokens
 
 
+def _image_part_base64_len(part: Dict[str, Any]) -> Optional[int]:
+    """Base64 payload length of an embedded image part, or ``None``.
+
+    ``None`` covers remote image URLs (and any shape with no inline data),
+    where the real wire size isn't knowable without fetching it.
+    """
+    ptype = part.get("type")
+    if ptype in ("image_url", "input_image"):
+        image_url = part.get("image_url")
+        url = image_url.get("url") if isinstance(image_url, dict) else image_url
+        if isinstance(url, str) and url.startswith("data:") and "base64," in url:
+            return len(url.split("base64,", 1)[1])
+        return None
+    if ptype == "image":
+        source = part.get("source")
+        if isinstance(source, dict) and source.get("type") == "base64":
+            data = source.get("data")
+            if isinstance(data, str):
+                return len(data)
+        return None
+    return None
+
+
+def _image_part_tokens(part: Dict[str, Any], cost_per_image: int) -> int:
+    """Token cost of one image part: real wire-size billing, flat-rate floor.
+
+    Providers bill embedded base64 images by actual payload size, not a
+    fixed per-image rate — a full-resolution screenshot can be ~100x the
+    flat estimate, which left compression blind to the real request size
+    until the provider's own post-response token count caught it. Remote
+    URLs keep the flat rate since their size isn't known pre-fetch.
+    """
+    payload_len = _image_part_base64_len(part)
+    if payload_len is None:
+        return cost_per_image
+    return max(payload_len // 4, cost_per_image)
+
+
 def _count_image_tokens(msg: Dict[str, Any], cost_per_image: int) -> int:
-    """Count image-like content parts in a message; return their token cost."""
-    count = 0
+    """Sum the token cost of image-like content parts in a message."""
+    total = 0
     content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, list):
         for part in content:
             if not isinstance(part, dict):
                 continue
-            ptype = part.get("type")
-            if ptype in {"image", "image_url", "input_image"}:
-                count += 1
+            if part.get("type") in {"image", "image_url", "input_image"}:
+                total += _image_part_tokens(part, cost_per_image)
     stashed = msg.get("_anthropic_content_blocks") if isinstance(msg, dict) else None
     if isinstance(stashed, list):
         for part in stashed:
             if isinstance(part, dict) and part.get("type") == "image":
-                count += 1
+                total += _image_part_tokens(part, cost_per_image)
     # Multimodal tool results that haven't been converted yet.
     if isinstance(content, dict) and content.get("_multimodal"):
         inner = content.get("content")
         if isinstance(inner, list):
             for part in inner:
                 if isinstance(part, dict) and part.get("type") in {"image", "image_url"}:
-                    count += 1
-    return count * cost_per_image
+                    total += _image_part_tokens(part, cost_per_image)
+    return total
 
 
 def _wire_message_shadow(msg: Dict[str, Any]) -> Dict[str, Any]:

@@ -148,7 +148,7 @@ class TestEstimateMessagesTokensRough:
         """Non-regression for the ``_wire_message_shadow()`` extraction.
 
         Both estimator helpers now share one shadow builder; this pins the
-        flat per-image accounting that the extraction moved, independent of
+        real wire-size accounting that the extraction moved, independent of
         the ``api_content`` fix (a valid sidecar is a string, so it cannot
         carry an image list).
         """
@@ -159,8 +159,36 @@ class TestEstimateMessagesTokensRough:
         msg = {"role": "user",
                "content": [{"type": "image_url", "image_url": {"url": payload}}]}
 
-        # Raw base64 would be ~100K tokens; the flat per-image model is ~1.5K.
-        assert estimate_messages_tokens_rough([msg]) < 5_000
+        # Billed by actual base64 length, not a flat per-image rate.
+        b64_len = len(payload.split("base64,", 1)[1])
+        assert estimate_messages_tokens_rough([msg]) >= b64_len // 4 * 0.9
+
+    def test_remote_image_url_keeps_flat_rate(self):
+        """A remote (non-data) image URL has no local payload to bill by
+        size, so it keeps the flat ~1500-token estimate."""
+        msg = {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "https://example.com/photo.png"}}
+        ]}
+        result = estimate_messages_tokens_rough([msg])
+        assert 1500 <= result < 2000
+
+    def test_large_embedded_image_billed_above_flat_rate(self):
+        """A large embedded base64 image must estimate near its real wire
+        size, not the flat per-image rate — this is what let compression
+        stay blind to a ~500K-token request until the provider's own
+        post-response count caught it (issue: quota burnout from native
+        vision embeds)."""
+        import base64
+        import os
+
+        payload = "data:image/png;base64," + base64.b64encode(os.urandom(400_000)).decode()
+        msg = {"role": "user",
+               "content": [{"type": "image_url", "image_url": {"url": payload}}]}
+
+        result = estimate_messages_tokens_rough([msg])
+        assert result > 50_000, (
+            f"expected a large embedded image to dominate the estimate, got {result}"
+        )
 
 
 
