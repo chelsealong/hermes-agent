@@ -350,4 +350,33 @@ describe('revalidatePooledRemoteBackends', () => {
     expect(pool.stopBackend).toHaveBeenCalledTimes(1)
     expect(pool.stopBackend).toHaveBeenCalledWith('coder')
   })
+
+  it('waits for an async stopBackend to finish before resolving', async () => {
+    const pool = harness([['coder', { process: null, remoteBaseUrl: 'https://remote.example.com' }]])
+    pool.unreachable.add('https://remote.example.com')
+
+    let stopSettled = false
+    pool.stopBackend.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          // A real macrotask delay: microtask-only resolution (a fire-and-forget
+          // call that is never awaited) would settle long before this fires, so
+          // seeing stopSettled=true afterwards proves the caller actually waited
+          // on stopBackend's returned promise instead of racing ahead of it.
+          setTimeout(() => {
+            stopSettled = true
+            resolve()
+          }, 20)
+        })
+    )
+
+    const tracker = new RemoteLivenessTracker()
+
+    for (let attempt = 1; attempt < REMOTE_LIVENESS_FAILURE_LIMIT; attempt += 1) {
+      await pool.run(tracker)
+    }
+
+    await expect(pool.run(tracker)).resolves.toEqual({ dropped: ['coder'] })
+    expect(stopSettled).toBe(true)
+  })
 })

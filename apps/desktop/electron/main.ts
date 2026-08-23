@@ -12321,12 +12321,22 @@ ipcMain.handle('hermes:connection:revalidate', async () => {
 // Pooled remote descriptors get the same treatment as the primary: they have no
 // child process to signal their host's death, and the renderer's keepalive touch
 // spares them from the idle reaper, so nothing else can retire a dead one.
+//
+// A pooled SSH-backed profile also has a live SshConnection in sshConnections
+// (its tunnel child on Windows, its ControlMaster elsewhere). stopPoolBackend
+// only evicts the backendPool bookkeeping entry, so without tearing the SSH
+// connection down here too, dropping a dead descriptor leaked the tunnel
+// process and the remote dashboard it forwarded to (mirrors the explicit
+// teardownSshConnection call the primary connection's revalidate path takes).
 function revalidatePool() {
   return revalidatePooledRemoteBackends({
     entries: backendPool.entries(),
     log: rememberLog,
     probe: fetchPublicJson,
-    stopBackend: stopPoolBackend,
+    stopBackend: async profile => {
+      stopPoolBackend(profile)
+      await teardownSshConnection(profile)
+    },
     tracker: remoteLiveness
   })
 }
