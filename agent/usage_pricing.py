@@ -1153,7 +1153,12 @@ def _normalize_anthropic_model_name(model: str) -> str:
       - Strips anthropic/ prefix if present
       - Strips a trailing dated snapshot suffix (-YYYYMMDD), e.g.
         claude-sonnet-4-5-20250929 → claude-sonnet-4-5, so pinned dated
-        model ids price the same as their alias.
+        model ids price the same as their alias — but only when that bare
+        alias already has a row in _OFFICIAL_DOCS_PRICING. A dated id whose
+        bare alias has no row of its own (e.g. claude-opus-4-1-20250805;
+        "claude-opus-4-1" isn't in the table) still resolves to
+        cost_status='unknown' after normalization; that's a missing pricing
+        row, not something this suffix strip can fix.
     """
     name = model.lower().strip()
     if name.startswith("anthropic/"):
