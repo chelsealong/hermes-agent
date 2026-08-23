@@ -11,6 +11,19 @@ from agent.usage_pricing import (
 from decimal import Decimal
 
 
+def test_dated_anthropic_snapshot_prices_same_as_its_alias():
+    """A pinned dated model id (claude-sonnet-4-5-20250929) must price
+    identically to its undated alias (claude-sonnet-4-5) instead of falling
+    through to cost_status='unknown' (#92673)."""
+    alias = get_pricing_entry("claude-sonnet-4-5", provider="anthropic")
+    dated = get_pricing_entry("claude-sonnet-4-5-20250929", provider="anthropic")
+
+    assert alias is not None
+    assert dated is not None
+    assert dated.input_cost_per_million == alias.input_cost_per_million
+    assert dated.output_cost_per_million == alias.output_cost_per_million
+
+
 
 
 

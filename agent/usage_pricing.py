@@ -1151,6 +1151,9 @@ def _normalize_anthropic_model_name(model: str) -> str:
       - Dot notation: claude-opus-4.7 → claude-opus-4-7
       - Short aliases: claude-opus-4.7 → claude-opus-4-7
       - Strips anthropic/ prefix if present
+      - Strips a trailing dated snapshot suffix (-YYYYMMDD), e.g.
+        claude-sonnet-4-5-20250929 → claude-sonnet-4-5, so pinned dated
+        model ids price the same as their alias.
     """
     name = model.lower().strip()
     if name.startswith("anthropic/"):
@@ -1158,6 +1161,7 @@ def _normalize_anthropic_model_name(model: str) -> str:
     # Normalize dots to dashes in version numbers (e.g. 4.7 → 4-7, 4.6 → 4-6)
     # But preserve the rest of the name structure
     name = re.sub(r"(\d+)\.(\d+)", r"\1-\2", name)
+    name = re.sub(r"-\d{8}$", "", name)
     return name
 
 
