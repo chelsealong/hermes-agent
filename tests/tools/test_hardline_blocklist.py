@@ -185,6 +185,11 @@ _HARDLINE_ALLOW = [
     "find . -name '*reboot*'",
     # Word-boundary protection
     "mkfs_helper --version",
+    # mkfs mentioned as prose/data, not executed — same class of false
+    # positive already guarded against for shutdown/reboot above (#93392).
+    'echo "does this workflow use mkfs anywhere?"',
+    'git commit -m "note: avoid mkfs on this volume"',
+    'grep "mkfs" install_notes.txt',
     # systemctl non-destructive verbs
     "systemctl status nginx",
     "systemctl restart nginx",
