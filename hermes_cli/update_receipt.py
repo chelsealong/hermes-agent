@@ -427,7 +427,9 @@ def collect_fleet_versions(
     return results
 
 
-def print_fleet_version_matrix(fleet: list[dict[str, Any]]) -> bool:
+def print_fleet_version_matrix(
+    fleet: list[dict[str, Any]], *, expected_nonempty: bool = False
+) -> bool:
     """Print the post-update fleet version matrix.
 
     Returns True when at least one gateway is provably stale (still
@@ -437,8 +439,23 @@ def print_fleet_version_matrix(fleet: list[dict[str, Any]]) -> bool:
     started before the code-identity stamp existed have no sha to compare,
     and failing on them would turn this feature's own rollout into a
     false-positive storm.
+
+    ``expected_nonempty`` is the restart-phase complement of the empty-fleet
+    case: the caller saw a live gateway before the restart
+    (``pre_restart_pids`` was non-empty), so a zero-row result here is not
+    "nothing to check" but "the probe never confirmed the fleet" (#93406) —
+    silent success would be indistinguishable from a verified one. Reported
+    as a warning, not an escalation: tool silence alone must not fail the
+    update (the caller records this in the receipt via ``fleet_verified``).
     """
     if not fleet:
+        if expected_nonempty:
+            print()
+            print(
+                "  ⚠ fleet check could not verify (gateway was running "
+                "before the update, but the post-update probe produced no "
+                "rows)"
+            )
         return False
     any_stale = False
     any_down = False

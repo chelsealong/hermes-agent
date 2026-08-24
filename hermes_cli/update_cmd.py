@@ -8315,8 +8315,24 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _fleet_snapshot = collect_fleet_versions(
                 pre_restart_pids=_pre_restart_gateway_pids
             )
-            if print_fleet_version_matrix(_fleet_snapshot):
+            # Mirrors _restart_phase_failure_is_incomplete's fail-closed
+            # rule: a fleet expected to be non-empty (a gateway was running
+            # pre-restart) that comes back with zero rows was never
+            # verified — recorded on the receipt (#93406) so "verified
+            # current" and "never verified" stop looking identical.
+            _fleet_expected_nonempty = bool(_pre_restart_gateway_pids)
+            if print_fleet_version_matrix(
+                _fleet_snapshot, expected_nonempty=_fleet_expected_nonempty
+            ):
                 gateway_fleet_restart_incomplete = True
+            _fleet_verified = bool(_fleet_snapshot) or not _fleet_expected_nonempty
+            try:
+                import hermes_cli.update_receipt as _ur
+
+                if _ur._current is not None:
+                    _ur._current.data["fleet_verified"] = _fleet_verified
+            except Exception:
+                pass
         except Exception as _fleet_exc:
             logger.debug("Fleet version verification failed: %s", _fleet_exc)
 

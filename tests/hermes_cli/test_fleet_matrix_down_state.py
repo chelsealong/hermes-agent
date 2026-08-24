@@ -95,3 +95,22 @@ def test_down_and_stale_both_escalate_with_remediation(capsys):
     assert "STALE" in out
     assert "DOWN" in out
     assert "hermes gateway restart" in out
+
+
+def test_empty_fleet_after_seen_gateway_warns_but_does_not_escalate(capsys):
+    """#93406: a gateway was running pre-restart but the probe found zero
+    rows. That must be visible (not indistinguishable from "nothing to
+    check") but must not fail the update on tool silence alone.
+    """
+    assert ur.print_fleet_version_matrix([], expected_nonempty=True) is False
+    out = capsys.readouterr().out
+    assert "could not verify" in out
+
+
+def test_empty_fleet_with_nothing_running_stays_silent(capsys):
+    """No gateway was running pre-restart: an empty fleet is the expected,
+    unremarkable result and must not warn.
+    """
+    assert ur.print_fleet_version_matrix([], expected_nonempty=False) is False
+    out = capsys.readouterr().out
+    assert out == ""
