@@ -1147,6 +1147,67 @@ async def test_startup_restore_gate_releases_when_boot_path_send_hangs(
 
 
 @pytest.mark.asyncio
+async def test_startup_restore_gate_releases_when_queued_replay_hangs(monkeypatch):
+    """A single wedged queued-message replay must not freeze the drain forever.
+
+    ``adapter.handle_message()`` runs the full agent turn for a queued
+    message. If one replayed turn never returns, awaiting it inline inside
+    ``_drain_startup_restore_queue`` would stall the drain loop, leave
+    ``_startup_restore_in_progress`` True forever, and cause every
+    subsequently arriving message to also queue behind it with nothing left
+    to pop the queue (#93506 — silent permanent wedge after restart).
+    """
+    monkeypatch.setenv("HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT", "0.05")
+
+    runner, adapter = make_restart_runner()
+    runner._startup_restore_in_progress = True
+    runner._startup_restore_queue = []
+    runner._startup_restore_tasks = []
+    runner._background_tasks = set()
+
+    seen: list[str] = []
+    never_finishes = asyncio.Event()
+
+    async def fake_handle_message(event: MessageEvent) -> None:
+        if event.text == "poison":
+            await never_finishes.wait()
+            return
+        seen.append(f"inbound:{event.text}")
+
+    adapter.handle_message = fake_handle_message
+
+    poison = MessageEvent(
+        text="poison",
+        message_type=MessageType.TEXT,
+        source=make_restart_source(chat_id="restore-chat"),
+    )
+    later = MessageEvent(
+        text="hello",
+        message_type=MessageType.TEXT,
+        source=make_restart_source(chat_id="restore-chat"),
+    )
+    assert await runner._handle_message(poison) is None
+    assert await runner._handle_message(later) is None
+    assert runner._startup_restore_queue == [poison, later]
+
+    # The gate must release even though the first replayed turn never
+    # returns, and the second queued message must still get drained.
+    await asyncio.wait_for(runner._finish_startup_restore(), timeout=5)
+
+    assert seen == ["inbound:hello"], (
+        "the wedged first replay blocked the second queued message from "
+        "ever being drained"
+    )
+    assert runner._startup_restore_queue == []
+    assert runner._startup_restore_in_progress is False
+
+    never_finishes.set()
+    leftover = [t for t in list(runner._background_tasks) if not t.done()]
+    if leftover:
+        await asyncio.wait(leftover)
+
+
+@pytest.mark.asyncio
 async def test_startup_boot_sends_still_run_when_they_finish_quickly(monkeypatch):
     """The bound must not skip restart notification or redelivery on a fast path."""
     monkeypatch.setenv("HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT", "2")

@@ -11856,7 +11856,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             pass
 
     async def _drain_startup_restore_queue(self) -> int:
-        """Replay inbound messages queued while startup auto-resume ran."""
+        """Replay inbound messages queued while startup auto-resume ran.
+
+        Each replay is scheduled as an independent background task rather
+        than awaited inline. ``adapter.handle_message()`` blocks for the
+        full agent turn, and awaiting it here serially means one turn that
+        never returns (see #93506) stalls every remaining queued message —
+        and keeps ``_startup_restore_in_progress`` stuck True forever, so
+        every message that arrives afterward is queued too and nothing ever
+        drains again. Scheduling in the background matches how boot-resume
+        turns and boot-path sends are already bounded elsewhere in this
+        same startup-restore gate.
+        """
         drained = 0
         queue = getattr(self, "_startup_restore_queue", None)
         if queue is None:
@@ -11877,9 +11888,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 setattr(event, "_hermes_startup_restore_replay", True)
             except Exception:
                 pass
-            await adapter.handle_message(event)
+            task = asyncio.create_task(adapter.handle_message(event))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            task.add_done_callback(self._log_startup_restore_replay_failure)
             drained += 1
         return drained
+
+    @staticmethod
+    def _log_startup_restore_replay_failure(task: "asyncio.Task") -> None:
+        """Done-callback for a backgrounded startup-restore replay.
+
+        Logs a failure that would otherwise be swallowed once the task is
+        discarded from ``_background_tasks``. Cancellation is expected
+        (shutdown) and is not an error."""
+        GatewayRunner._log_late_background_failure(
+            task, "startup-restore queued message replay failed"
+        )
 
     async def _finish_startup_restore(self) -> None:
         """Wait (BOUNDED) for startup auto-resume, then release + drain inbound.
