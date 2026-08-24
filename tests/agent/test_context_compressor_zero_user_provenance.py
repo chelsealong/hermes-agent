@@ -319,8 +319,7 @@ def test_kanban_wake_notifications_do_not_become_compaction_anchors(compressor):
 
 @pytest.mark.parametrize("lang", SUPPORTED_LANGUAGES)
 def test_kanban_wake_message_prefix_is_locale_invariant(lang):
-    """The `[kanban] ` tag `_KANBAN_WAKE_NOTIFICATION_PREFIX` matches against
-    must be verbatim in every locale catalog, not just the default one."""
+    """Every locale must preserve the tag used by the production recognizer."""
     from agent.i18n import t
 
     wake_text = t(
@@ -333,6 +332,19 @@ def test_kanban_wake_message_prefix_is_locale_invariant(lang):
         board="main",
     )
     assert wake_text.startswith(_KANBAN_WAKE_NOTIFICATION_PREFIX)
+    assert ContextCompressor._is_synthetic_compression_user_turn(
+        {"role": "user", "content": wake_text}
+    ) is True
+
+
+def test_kanban_wake_prefix_inside_real_user_text_is_not_synthetic():
+    """Quoting a wake message must not hide a genuine operator turn."""
+    quoted_wake = {
+        "role": "user",
+        "content": "Please inspect this notification: [kanban] Task k7 completed.",
+    }
+
+    assert ContextCompressor._is_synthetic_compression_user_turn(quoted_wake) is False
 
 
 @pytest.mark.parametrize(
