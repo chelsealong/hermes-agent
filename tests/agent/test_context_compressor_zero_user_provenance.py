@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent import i18n
 from agent.context_compressor import (
     COMPRESSION_CONTINUATION_USER_CONTENT,
     COMPRESSED_SUMMARY_HAS_USER_TURN_KEY,
@@ -14,6 +15,7 @@ from agent.context_compressor import (
     MAX_ITERATIONS_SUMMARY_REQUEST,
     SUMMARY_PREFIX,
     ContextCompressor,
+    _KANBAN_WAKE_NOTIFICATION_PREFIX,
     _NO_USER_TASK_SENTINEL,
 )
 from agent.conversation_compression import (
@@ -282,6 +284,22 @@ def test_background_process_notifications_do_not_become_compaction_anchors(
         "Recent user focus:\n- Refactor the auth module and add tests."
     )
     assert compressor._find_last_user_message_idx(messages, head_end=0) == 0
+
+
+@pytest.mark.parametrize("lang", i18n.SUPPORTED_LANGUAGES)
+def test_kanban_wake_message_prefix_is_locale_invariant(lang):
+    """The content-based recognizer depends on every locale retaining the tag."""
+    wake_text = i18n.t(
+        "gateway.kanban.wake.message",
+        lang=lang,
+        task_id="k7",
+        status="completed",
+        title="Ship release notes",
+        assignee="worker1",
+        board="main",
+    )
+
+    assert wake_text.startswith(_KANBAN_WAKE_NOTIFICATION_PREFIX)
 
 
 def test_kanban_wake_notifications_do_not_become_compaction_anchors(compressor):
