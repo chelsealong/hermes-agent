@@ -3993,22 +3993,36 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             _writer_token["value"] = claim_stream_writer(agent)
 
         def _accept_stream_chunk(_chunk: Any) -> bool:
+            nonlocal finish_reason
             # A stale-attempt fence can win while Relay is handing an
             # already-received tool-call chunk back to Hermes. Preserve only
             # the fact that a tool call was in flight so retry policy does not
             # misclassify the attempt as a partial text response. The chunk
             # itself is still rejected below and never reaches callbacks.
+            _chunk_finish_reason = None
             try:
                 choices = getattr(_chunk, "choices", None)
                 delta = getattr(choices[0], "delta", None) if choices else None
                 if getattr(delta, "tool_calls", None):
                     provider_tool_in_flight["yes"] = True
+                _chunk_finish_reason = getattr(choices[0], "finish_reason", None) if choices else None
             except Exception:
                 pass
+            # A fenced chunk that carries a non-null finish_reason means the
+            # provider completed the stream right as this attempt was marked
+            # stale. The fence still rejects the chunk's own content (the
+            # single-writer invariant must hold even for a terminal chunk),
+            # but the completion marker itself is recorded so the drop
+            # detector below doesn't mislabel an already-finished response as
+            # a mid-stream drop and trigger a spurious retry (#94614).
             if not _stream_attempt_is_active(stream_attempt_id):
+                if _chunk_finish_reason and finish_reason is None:
+                    finish_reason = _chunk_finish_reason
                 return False
             token = _writer_token["value"]
             if token is not None and not stream_writer_is_current(agent, token):
+                if _chunk_finish_reason and finish_reason is None:
+                    finish_reason = _chunk_finish_reason
                 logger.warning(
                     "Streaming attempt superseded by a newer stream; stopping "
                     "consumption to preserve the single-writer invariant "

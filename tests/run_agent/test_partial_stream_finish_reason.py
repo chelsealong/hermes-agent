@@ -92,6 +92,55 @@ class TestPartialStreamStubFinishReason:
 
 
 
+# ── Terminal chunk survives supersession fences (#94614) ────────────────────
+
+class TestTerminalChunkSurvivesSupersession:
+    """#94614: a chunk carrying a non-null finish_reason means the provider
+    completed the stream. The single-writer/attempt fence still rejects a
+    fenced chunk's own content (that invariant, #65991, must hold even for a
+    terminal chunk), but must not also discard the completion marker itself.
+    Before the fix, a supersession that lands between the last content chunk
+    and the terminal chunk made ``_accept_stream_chunk`` reject the
+    finish-bearing chunk outright, leaving ``finish_reason=None`` and
+    mislabeling an otherwise-complete response as a mid-stream drop."""
+
+    @patch("run_agent.AIAgent._create_request_openai_client")
+    @patch("run_agent.AIAgent._close_request_openai_client")
+    def test_finish_reason_recorded_after_writer_superseded(
+        self, _mock_close, mock_create, monkeypatch,
+    ):
+        agent = _make_agent()
+        agent._fire_stream_delta = lambda text: None
+
+        def _completed_stream_with_late_supersession():
+            yield _make_stream_chunk(content="Here is my answer")
+            # A concurrent turn claims the single-writer sink between the
+            # last content chunk and the terminal chunk — the exact race
+            # from the issue's packet-capture evidence.
+            agent._claim_stream_writer()
+            yield _make_stream_chunk(content=" done.", finish_reason="stop")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = (
+            lambda *a, **kw: _completed_stream_with_late_supersession()
+        )
+        mock_create.return_value = mock_client
+
+        response = agent._interruptible_streaming_api_call({})
+
+        assert response.id != PARTIAL_STREAM_STUB_ID, (
+            "A stream whose terminal chunk carried finish_reason must not "
+            "be reported as a partial-stream drop, even if a concurrent "
+            "attempt superseded the single-writer token right before that "
+            "chunk arrived (#94614)."
+        )
+        assert response.choices[0].finish_reason == "stop"
+        # The superseded chunk's own trailing text is still dropped — the
+        # #65991 single-writer invariant holds; only the completion marker
+        # survives the fence.
+        assert response.choices[0].message.content == "Here is my answer"
+
+
 # ── Clean stream-end mid-tool-call (no exception, no finish_reason) ─────────
 
 class TestCleanStreamEndMidToolCall:
