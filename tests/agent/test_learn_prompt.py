@@ -100,6 +100,18 @@ class TestBuildLearnPrompt:
         assert "zero-width" in hyg
         assert "bidi" in hyg or "bidirectional" in hyg
 
+    def test_durable_user_facts_route_to_memory_not_skills(self):
+        # /learn routed everything through skill authoring, so a request that
+        # names a durable fact (a preference, a path, a correction) produced a
+        # useless one-off "skill" instead of a memory entry. The prompt must
+        # tell the agent to persist such facts via the `memory` tool and keep
+        # them out of the skill.
+        prompt = build_learn_prompt("I prefer aisle seats when you book flights")
+        low = prompt.lower()
+        assert "`memory` tool" in prompt
+        assert "durable facts about the user" in low
+        assert "procedures belong in the skill" in low
+
     def test_existing_skill_is_extended_instead_of_created_again(self):
         prompt = build_learn_prompt("add these notes to my distributed-systems skill")
         assert "First check the available skills" in prompt
