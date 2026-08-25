@@ -5051,7 +5051,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not query:
             return tool_error("query is required")
 
-        payload: Dict[str, Any] = {"query": query}
+        payload: Dict[str, Any] = {"query": query, "score_threshold": 0}
         mode = args.get("mode", "auto")
         if args.get("scope"):
             payload["target_uri"] = args["scope"]

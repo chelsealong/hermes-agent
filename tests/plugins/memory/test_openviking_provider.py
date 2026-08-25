@@ -708,6 +708,18 @@ def test_tool_search_sorts_by_raw_score_across_buckets():
     assert result["total"] == 3
 
 
+def test_tool_search_sends_zero_score_threshold():
+    provider = OpenVikingMemoryProvider()
+    provider._client = MagicMock()
+    provider._client.post.return_value = {"result": {"memories": [], "total": 0}}
+
+    provider._tool_search({"query": "fishingdrill"})
+
+    endpoint, payload = provider._client.post.call_args[0]
+    assert endpoint == "/api/v1/search/find"
+    assert payload["score_threshold"] == 0
+
+
 def test_tool_add_resource_rejects_hermes_credential_file_upload(tmp_path, monkeypatch):
     import agent.file_safety as fs
 
