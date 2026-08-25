@@ -41,6 +41,7 @@ import {
   type TranslucencyState,
   translucencySupportedOn,
   vibrancyFor,
+  windowBackgroundMaterialOptions,
   windowBackingOptions,
   windowOpacityFor,
   windowOpacityOptions,
@@ -527,6 +528,29 @@ describe('windowOpacityOptions', () => {
       const state = { ...defaultTranslucencyValues(appearance, true), mode: 'glass' as const }
 
       expect(windowOpacityOptions(state), appearance).toStrictEqual({})
+    }
+  })
+})
+
+// hermes#94319: a glass-off chat window on Windows still got a constructor
+// `backgroundMaterial: 'none'`, which Electron treats as a real backdrop
+// material request — putting the window on the layered path where the native
+// system-menu maximize, the caption maximize button, and a titlebar
+// double-click all silently no-op, and the saved "normal" bounds can only
+// ever be full screen. Only an ACTIVE material may reach the constructor.
+describe('windowBackgroundMaterialOptions', () => {
+  it('omits backgroundMaterial entirely while glass is inactive', () => {
+    expect(windowBackgroundMaterialOptions(clear(0))).toStrictEqual({})
+    expect(windowBackgroundMaterialOptions(clear(60))).toStrictEqual({})
+    expect(windowBackgroundMaterialOptions(glass(0))).toStrictEqual({})
+    expect('backgroundMaterial' in windowBackgroundMaterialOptions(clear(0))).toBe(false)
+  })
+
+  it('passes the resolved material once glass is active', () => {
+    for (const material of GLASS_MATERIALS) {
+      const state = glass(60, material)
+
+      expect(windowBackgroundMaterialOptions(state)).toStrictEqual({ backgroundMaterial: backgroundMaterialFor(state) })
     }
   })
 })

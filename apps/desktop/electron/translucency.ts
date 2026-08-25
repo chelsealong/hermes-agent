@@ -11,7 +11,13 @@
  * then fail to bundle.
  */
 
-import { glassActive, type TranslucencyState, windowOpacityFor } from '../../shared/src/translucency'
+import {
+  backgroundMaterialFor,
+  glassActive,
+  type TranslucencyState,
+  type WindowsBackgroundMaterial,
+  windowOpacityFor
+} from '../../shared/src/translucency'
 
 export {
   backgroundMaterialFor,
@@ -108,4 +114,20 @@ export function windowOpacityOptions(state: TranslucencyState): { opacity?: numb
   const opacity = windowOpacityFor(state)
 
   return opacityNeedsSetting(opacity) ? { opacity } : {}
+}
+
+/**
+ * BrowserWindow constructor options for a chat window's Windows backdrop
+ * material. Empty unless glass is active — `backgroundMaterialFor` returns
+ * `'none'` rather than omitting the key when glass is off, but `'none'` is
+ * still a value Electron acts on at creation: passing it puts the window on
+ * the same layered/backdrop path as an active material, which Windows will
+ * not let the system menu, the caption maximize button, or a titlebar
+ * double-click maximize (electron#42393) — and leaves it perpetually
+ * non-resizable-by-those-paths even while `intensity` is 0. Only handing
+ * Electron a material when one is actually wanted keeps a glass-off chat
+ * window on the plain, maximizable path.
+ */
+export function windowBackgroundMaterialOptions(state: TranslucencyState): { backgroundMaterial?: WindowsBackgroundMaterial } {
+  return glassActive(state) ? { backgroundMaterial: backgroundMaterialFor(state) } : {}
 }
