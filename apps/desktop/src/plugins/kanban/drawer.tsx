@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
   ErrorState,
   host,
+  LinkifiedText,
   Loader,
   LogView,
   Textarea,
@@ -355,7 +356,13 @@ function CommentComposer({
   )
 }
 
-function DescriptionSection({ body, onSave }: { body: null | string | undefined; onSave: (body: string) => void }) {
+export function DescriptionSection({
+  body,
+  onSave
+}: {
+  body: null | string | undefined
+  onSave: (body: string) => void
+}) {
   const k = useKanban()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -397,7 +404,12 @@ function DescriptionSection({ body, onSave }: { body: null | string | undefined;
           </Button>
         </div>
       ) : body ? (
-        <p className="whitespace-pre-wrap text-[0.8125rem] text-(--ui-text-secondary)">{body}</p>
+        <LinkifiedText
+          className="block whitespace-pre-wrap text-[0.8125rem] text-(--ui-text-secondary)"
+          explicitOnly
+          pretty={false}
+          text={body}
+        />
       ) : (
         <p className="text-[0.8125rem] text-(--ui-text-quaternary)">{k.noDescription}</p>
       )}
@@ -856,7 +868,12 @@ export function TaskDrawer({
                       <span className="ml-2 text-[0.625rem] text-(--ui-text-quaternary)">
                         {ago(comment.created_at)}
                       </span>
-                      <p className="whitespace-pre-wrap text-(--ui-text-tertiary)">{comment.body}</p>
+                      <LinkifiedText
+                        className="block whitespace-pre-wrap text-(--ui-text-tertiary)"
+                        explicitOnly
+                        pretty={false}
+                        text={comment.body}
+                      />
                     </li>
                   ))}
                 </ul>
