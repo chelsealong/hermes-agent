@@ -1,9 +1,12 @@
 export const REMOTE_LIVENESS_TIMEOUT_MS = 10_000
 export const REMOTE_LIVENESS_FAILURE_LIMIT = 3
-// Even at the capped retry path, consecutive liveness observations are at most
-// about 48s apart (ticket mint + socket open + backoff + the next status probe).
-// One minute keeps a continuous outage together without carrying old failures.
-export const REMOTE_LIVENESS_FAILURE_WINDOW_MS = 60_000
+// This same tracker also gates revalidatePooledRemoteBackends(), whose ticks
+// land every ~3-4 min in practice, not the ~48s of the primary's capped retry
+// path. A window shorter than that tick resets the streak on every probe, so
+// a dead pooled descriptor is never dropped (#94381). Five minutes covers both
+// cadences without weakening detection: a real outage still fails every probe
+// until the limit is reached, whichever path is probing it.
+export const REMOTE_LIVENESS_FAILURE_WINDOW_MS = 300_000
 
 export interface RemoteLivenessFailure {
   failures: number

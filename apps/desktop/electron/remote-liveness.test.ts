@@ -351,6 +351,22 @@ describe('revalidatePooledRemoteBackends', () => {
     expect(pool.stopBackend).toHaveBeenCalledWith('coder')
   })
 
+  it('accumulates a streak across the pooled revalidation cadence (~4min ticks) instead of resetting it (#94381)', async () => {
+    let now = 0
+    const pool = harness([['coder', { process: null, remoteBaseUrl: 'https://remote.example.com' }]])
+    pool.unreachable.add('https://remote.example.com')
+
+    const tracker = new RemoteLivenessTracker(REMOTE_LIVENESS_FAILURE_LIMIT, REMOTE_LIVENESS_FAILURE_WINDOW_MS, () => now)
+
+    for (let attempt = 1; attempt < REMOTE_LIVENESS_FAILURE_LIMIT; attempt += 1) {
+      await expect(pool.run(tracker)).resolves.toEqual({ dropped: [] })
+      now += 4 * 60_000
+    }
+
+    await expect(pool.run(tracker)).resolves.toEqual({ dropped: ['coder'] })
+    expect(pool.stopBackend).toHaveBeenCalledWith('coder')
+  })
+
   it('clears the streak when the host answers again', async () => {
     const pool = harness([['coder', { process: null, remoteBaseUrl: 'https://remote.example.com' }]])
     const tracker = new RemoteLivenessTracker()
