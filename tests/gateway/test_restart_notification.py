@@ -388,7 +388,26 @@ async def test_shutdown_notifications_use_cached_live_thread_source_when_origin_
     adapter.send.assert_awaited_once_with(
         "parent-42",
         "⚠️ Gateway shutting down — Your current task will be interrupted.",
-        metadata={"thread_id": "topic-7"},
+        metadata={"thread_id": "topic-7", "_interim_send": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_home_channel_shutdown_notification_carries_interim_marker():
+    runner, adapter = make_restart_runner()
+    runner.config.platforms[Platform.TELEGRAM].home_channel = HomeChannel(
+        platform=Platform.TELEGRAM,
+        chat_id="home-42",
+        name="Ops Home",
+    )
+    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="home-shutdown"))
+
+    await runner._notify_active_sessions_of_shutdown()
+
+    adapter.send.assert_awaited_once_with(
+        "home-42",
+        "⚠️ Gateway shutting down — Your current task will be interrupted.",
+        metadata={"_interim_send": True},
     )
 
 
