@@ -5916,6 +5916,15 @@ def cmd_skin(args):
 def cmd_backup(args):
     """Back up Hermes home directory to a zip file."""
     if getattr(args, "quick", False):
+        if getattr(args, "output", None):
+            print(
+                "Error: --output/-o is not supported with --quick; quick "
+                "snapshots are stored under state-snapshots/, not written to "
+                "a single file.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         from hermes_cli.backup import run_quick_backup
 
         run_quick_backup(args)
