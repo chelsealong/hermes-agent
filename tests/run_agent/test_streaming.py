@@ -647,6 +647,55 @@ class TestReasoningStreaming:
         assert response.choices[0].message.reasoning_content == "Let me think about this"
         assert response.choices[0].message.content == "The answer is 42"
 
+    @patch("run_agent.AIAgent._create_request_openai_client")
+    @patch("run_agent.AIAgent._close_request_openai_client")
+    def test_reasoning_recovered_from_delta_model_extra(self, mock_close, mock_create):
+        """Custom-provider deltas that carry reasoning only in ``model_extra``
+        (#98224) still surface it, matching the fallback already used for
+        the final assistant message and for tool-call ``extra_content``."""
+        from run_agent import AIAgent
+
+        extra_only_delta = SimpleNamespace(
+            content=None,
+            tool_calls=None,
+            reasoning_content=None,
+            reasoning=None,
+            model_extra={"reasoning": "hidden thought"},
+        )
+        chunks = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(index=0, delta=extra_only_delta, finish_reason=None)
+                ],
+                model="test-model",
+                usage=None,
+            ),
+            _make_stream_chunk(content="42", finish_reason="stop"),
+        ]
+
+        reasoning_deltas = []
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = iter(chunks)
+        mock_create.return_value = mock_client
+
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api/v1",
+            model="test/model",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+            reasoning_callback=lambda t: reasoning_deltas.append(t),
+        )
+        agent.api_mode = "chat_completions"
+        agent._interrupt_requested = False
+
+        response = agent._interruptible_streaming_api_call({})
+
+        assert reasoning_deltas == ["hidden thought"]
+        assert response.choices[0].message.reasoning_content == "hidden thought"
+
 
 # ── Test: _has_stream_consumers ──────────────────────────────────────────
 

@@ -4193,6 +4193,14 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
             # Accumulate reasoning content
             reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            if reasoning_text is None and hasattr(delta, "model_extra"):
+                # Some custom OpenAI-compatible providers' reasoning field
+                # doesn't surface as a direct attribute on the SDK-parsed
+                # delta — it lands in ``model_extra`` instead (mirrors the
+                # message-level fallback below and the tool-call
+                # ``extra_content`` fallback further down). (#98224)
+                _delta_extra = delta.model_extra if isinstance(delta.model_extra, dict) else {}
+                reasoning_text = _delta_extra.get("reasoning_content") or _delta_extra.get("reasoning")
             if reasoning_text:
                 # Summary-part models (gpt-5.x and other Responses relays) send
                 # one complete markdown block per delta with no separator, so
