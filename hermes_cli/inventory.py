@@ -210,6 +210,8 @@ def build_models_payload(
     if moa_row is not None:
         rows = [moa_row] + [r for r in rows if str(r.get("slug", "")).lower() != "moa"]
 
+    _ensure_current_model_present(rows, ctx)
+
     if explicit_only:
         rows = _filter_explicit_provider_rows(rows, ctx)
         # Desktop chat pickers request the explicit subset without the full
@@ -595,6 +597,31 @@ def _apply_custom_aliases(rows: list[dict]) -> None:
 
 
 # ─── Internal: row post-processing ──────────────────────────────────────
+
+
+def _ensure_current_model_present(rows: list[dict], ctx: ConfigContext) -> None:
+    """Guarantee the active model appears in its provider's row.
+
+    A row's ``models`` list can lag the actual selection: a dynamic-discovery
+    provider (Ollama Cloud, LM Studio, …) is fed by its own disk cache, which
+    can refresh independently of — and behind — the generic per-provider
+    model-id cache the row is built from. When that happens the currently
+    selected model silently disappears from its own picker row even though it
+    is demonstrably servable (it is the active session's model). Mutates
+    ``rows`` in-place (#98243).
+    """
+    current_model = str(ctx.current_model or "").strip()
+    current_provider = str(ctx.current_provider or "").strip().lower()
+    if not current_model or not current_provider:
+        return
+    for row in rows:
+        if str(row.get("slug", "")).strip().lower() != current_provider:
+            continue
+        models = row.get("models")
+        if isinstance(models, list) and current_model not in models:
+            models.insert(0, current_model)
+            row["total_models"] = max(row.get("total_models") or 0, len(models))
+        return
 
 
 def _append_unconfigured_rows(

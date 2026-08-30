@@ -195,6 +195,47 @@ def test_include_unconfigured_appends_canonical_skeletons():
     assert all(r["total_models"] == 0 for r in skeletons)
 
 
+def test_current_model_missing_from_row_is_restored():
+    """The active model must never disappear from its own provider row (#98243).
+
+    Ollama Cloud (and other dynamic-discovery providers) can serve a stale
+    snapshot of its row's ``models`` even when the currently selected model is
+    demonstrably servable (it is the active session's model). The picker must
+    still show it, matching the CLI picker's behavior.
+    """
+    rows = [
+        {"slug": "ollama-cloud", "name": "Ollama Cloud",
+         "models": ["mistral-large-3:675b", "glm-5.3"],
+         "total_models": 2, "is_current": True, "is_user_defined": False,
+         "source": "hermes"},
+    ]
+    ctx = _empty_ctx(provider="ollama-cloud", model="deepseek-v4-flash:0731")
+    with _list_auth_returning(rows):
+        payload = build_models_payload(ctx)
+
+    ollama = next(r for r in payload["providers"] if r["slug"] == "ollama-cloud")
+    assert "deepseek-v4-flash:0731" in ollama["models"], (
+        "currently selected model must appear in its provider's row"
+    )
+    assert ollama["total_models"] >= len(ollama["models"])
+
+
+def test_current_model_already_present_is_not_duplicated():
+    rows = [
+        {"slug": "ollama-cloud", "name": "Ollama Cloud",
+         "models": ["deepseek-v4-flash:0731", "glm-5.3"],
+         "total_models": 2, "is_current": True, "is_user_defined": False,
+         "source": "hermes"},
+    ]
+    ctx = _empty_ctx(provider="ollama-cloud", model="deepseek-v4-flash:0731")
+    with _list_auth_returning(rows):
+        payload = build_models_payload(ctx)
+
+    ollama = next(r for r in payload["providers"] if r["slug"] == "ollama-cloud")
+    assert ollama["models"].count("deepseek-v4-flash:0731") == 1
+    assert ollama["total_models"] == 2
+
+
 def test_explicit_only_filters_ambient_credentials_but_keeps_current_and_custom_rows():
     rows = [
         {"slug": "openai-codex", "name": "OpenAI Codex", "models": ["gpt-5.4"],
