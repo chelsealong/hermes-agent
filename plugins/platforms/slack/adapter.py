@@ -3012,6 +3012,9 @@ class SlackAdapter(BasePlatformAdapter):
             chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
 
             thread_ts = self._resolve_thread_ts(reply_to, metadata)
+            # Preserve the originally resolved thread for status-clearing
+            # even if a rejection later forces a top-level fallback below.
+            original_thread_ts = thread_ts
             last_result = None
 
             # reply_broadcast: also post thread replies to the main channel.
@@ -3055,11 +3058,30 @@ class SlackAdapter(BasePlatformAdapter):
                         last_result = await self._get_client(
                             chat_id, team_id=team_id
                         ).chat_postMessage(**retry_kwargs)
+                    elif kwargs.get("thread_ts") and self._is_thread_rejection(e):
+                        # The resolved thread root cannot accept replies (for
+                        # example a Slack system event such as a channel
+                        # rename). Retry as a top-level channel message
+                        # instead of dropping the response; subsequent
+                        # chunks in this loop follow suit since ``thread_ts``
+                        # is cleared here.
+                        retry_kwargs = dict(kwargs)
+                        retry_kwargs.pop("thread_ts", None)
+                        retry_kwargs.pop("reply_broadcast", None)
+                        logger.info(
+                            "[Slack] Thread root rejected the reply (%s); "
+                            "retrying as a top-level channel message",
+                            e,
+                        )
+                        last_result = await self._get_client(
+                            chat_id, team_id=team_id
+                        ).chat_postMessage(**retry_kwargs)
+                        thread_ts = None
                     else:
                         raise
 
             # Clear Slack Assistant status as soon as the final message is posted.
-            if thread_ts:
+            if original_thread_ts:
                 await self.stop_typing(chat_id, metadata=metadata)
 
             # Track the sent message ts so we can auto-respond to thread
@@ -4152,6 +4174,25 @@ class SlackAdapter(BasePlatformAdapter):
                 pass
         message = str(error)
         return any(code in message for code in recoverable_codes)
+
+    @staticmethod
+    def _is_thread_rejection(error: BaseException) -> bool:
+        """Return True when Slack rejected ``thread_ts`` as non-threadable.
+
+        A resolved thread root can be a Slack system event (e.g. a channel
+        rename) that cannot accept replies. Slack reports this as
+        ``cannot_reply_to_message``; retrying the same content as a
+        top-level channel message is safe and avoids dropping the response.
+        """
+        response = getattr(error, "response", None)
+        response_get = getattr(response, "get", None)
+        if callable(response_get):
+            try:
+                if response_get("error") == "cannot_reply_to_message":
+                    return True
+            except Exception:
+                pass
+        return "cannot_reply_to_message" in str(error)
 
     def _rich_blocks_enabled(self) -> bool:
         """Whether to render outbound agent messages as Slack Block Kit blocks.
