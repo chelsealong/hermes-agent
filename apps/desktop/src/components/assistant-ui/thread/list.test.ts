@@ -4,6 +4,7 @@ import {
   buildGroups,
   firstVisibleGroupIndex,
   HIDDEN_TRANSCRIPT_RENDER_BUDGET,
+  isScrolledAwayFromBottom,
   LIVE_TAIL_MIN_GROUPS,
   LIVE_TAIL_PARTS,
   liveTailStart,
@@ -202,6 +203,20 @@ describe('resolveThreadScrollTarget', () => {
 
     expect(resolveThreadScrollTarget(899, context(scrollElement))).toBe(898.875)
     expect(resolveThreadScrollTarget(999, context(scrollElement))).toBe(999)
+  })
+})
+
+describe('isScrolledAwayFromBottom', () => {
+  it('is not away from the bottom once at the true bottom', () => {
+    expect(isScrolledAwayFromBottom(900, 1000, 100)).toBe(false)
+  })
+
+  it('tolerates a subpixel remainder from the browser clamping our own write', () => {
+    expect(isScrolledAwayFromBottom(899.75, 1000, 100)).toBe(false)
+  })
+
+  it('is away from the bottom once a reader scrolls up during the settle window', () => {
+    expect(isScrolledAwayFromBottom(400, 1000, 100)).toBe(true)
   })
 })
 

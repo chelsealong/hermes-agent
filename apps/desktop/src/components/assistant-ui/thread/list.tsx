@@ -138,6 +138,17 @@ export const resolveThreadScrollTarget: GetTargetScrollTop = (targetScrollTop, {
   return remaining >= 0 && remaining <= SCROLL_TARGET_EPSILON_PX ? currentScrollTop : targetScrollTop
 }
 
+// The session-load settle loop (below) re-forces scrollTop to the bottom every
+// frame while a long transcript's height is still stabilizing. use-stick-to-
+// bottom's own follow is stopped for that whole window, so a manual scroll is
+// the only other actor that can move scrollTop — and the settle loop must
+// notice and yield to it rather than snapping the reader back on the next
+// frame. Extracted so the stop condition is unit-testable without a DOM/rAF
+// harness.
+export function isScrolledAwayFromBottom(scrollTop: number, scrollHeight: number, clientHeight: number): boolean {
+  return scrollHeight - scrollTop - clientHeight > SCROLL_TARGET_EPSILON_PX
+}
+
 export function subscribeToThreadForeground(shouldReanchor: () => boolean, onReanchor: () => void): () => void {
   let frameId: number | null = null
   let framePending = false
@@ -666,6 +677,15 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       const node = scrollRef.current
 
       if (!node) {
+        return
+      }
+
+      // A manual scroll landed between our own writes: yield to it instead of
+      // overwriting it on this frame. Treat the load as settled at wherever the
+      // reader put it, not at the bottom — see anchorBeforePrepend.
+      if (isScrolledAwayFromBottom(node.scrollTop, node.scrollHeight, node.clientHeight)) {
+        loadSettledRef.current = true
+
         return
       }
 
