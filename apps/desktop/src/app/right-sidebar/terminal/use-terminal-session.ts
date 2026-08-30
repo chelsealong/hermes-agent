@@ -921,6 +921,11 @@ export function useTerminalSession({
         webgl.onContextLoss(() => {
           webgl.dispose()
           webglRef.current = null
+          // Disposing swaps in the DOM fallback renderer, but it never repaints
+          // on its own — without this the viewport stays blank (buffer intact,
+          // nothing drawn) until something else forces a redraw, which may never
+          // happen if the tab is already active.
+          term.refresh(0, term.rows - 1)
         })
         term.loadAddon(webgl)
         webglRef.current = webgl

@@ -16,6 +16,12 @@ const xterm = vi.hoisted(() => ({
   write: vi.fn()
 }))
 
+const webgl = vi.hoisted(() => ({
+  clearTextureAtlas: vi.fn(),
+  contextLossCallback: null as (() => void) | null,
+  dispose: vi.fn()
+}))
+
 const terminalRegistrations = vi.hoisted(() => ({
   makeTerminalReader: vi.fn(() => vi.fn()),
   registerReader: vi.fn(() => vi.fn()),
@@ -62,9 +68,11 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class {
-    clearTextureAtlas = vi.fn()
-    dispose = vi.fn()
-    onContextLoss = vi.fn()
+    clearTextureAtlas = webgl.clearTextureAtlas
+    dispose = webgl.dispose
+    onContextLoss = (callback: () => void) => {
+      webgl.contextLossCallback = callback
+    }
   }
 }))
 
@@ -131,6 +139,7 @@ describe('useAgentTerminal', () => {
   afterEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+    webgl.contextLossCallback = null
     Reflect.deleteProperty(globalThis.document, 'fonts')
   })
 
@@ -152,5 +161,26 @@ describe('useAgentTerminal', () => {
     expect(resizeObserverConstructor).not.toHaveBeenCalled()
     expect(terminalRegistrations.registerWriter).not.toHaveBeenCalled()
     expect(terminalRegistrations.registerReader).not.toHaveBeenCalled()
+  })
+
+  it('repaints the fallback renderer when the WebGL context is lost', async () => {
+    render(<Harness />)
+
+    await act(async () => {
+      resolveFontLoad([])
+      await Promise.resolve()
+    })
+
+    expect(webgl.contextLossCallback).toBeTypeOf('function')
+
+    act(() => {
+      webgl.contextLossCallback?.()
+    })
+
+    expect(webgl.dispose).toHaveBeenCalledOnce()
+    // Disposing the WebGL addon swaps in xterm's DOM fallback renderer, which
+    // does not repaint on its own — the already-buffered content would stay
+    // invisible until something else forces a redraw.
+    expect(xterm.refresh).toHaveBeenCalledWith(0, 23)
   })
 })
