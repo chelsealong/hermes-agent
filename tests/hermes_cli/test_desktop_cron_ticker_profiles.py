@@ -100,6 +100,39 @@ def test_enumeration_failure_fails_open(monkeypatch, _providers):
     assert builtin.start_kwargs == {"interval": 11}
 
 
+def test_profile_with_own_gateway_excluded(monkeypatch, _providers, tmp_path):
+    """A named profile with its own live gateway must not be ticked here.
+
+    Ticking it too races that gateway for cron/.tick.lock; a desktop-side win
+    delivers standalone under the desktop backend's own (default) profile
+    identity — the wrong bot for that job (#100489).
+    """
+    _sp, builtin = _providers
+    import hermes_cli.profiles as profiles_mod
+
+    default_home = tmp_path / "root"
+    served_home = tmp_path / "profiles" / "served"  # runs its own gateway
+    idle_home = tmp_path / "profiles" / "idle"  # no gateway of its own
+    homes = [
+        ("default", default_home),
+        ("served", served_home),
+        ("idle", idle_home),
+    ]
+    monkeypatch.setattr(profiles_mod, "profiles_to_serve", lambda **_kw: list(homes))
+    monkeypatch.setattr(
+        profiles_mod,
+        "_check_gateway_running",
+        lambda home: home == served_home,
+    )
+
+    ws._start_desktop_cron_ticker(threading.Event(), interval=5)
+
+    assert builtin.start_kwargs["profile_homes"] == [
+        ("default", default_home),
+        ("idle", idle_home),
+    ]
+
+
 def test_external_provider_never_gets_profile_homes(monkeypatch, tmp_path):
     """External registries are not profile-scoped; keep single-store semantics."""
     import cron.scheduler_provider as sp

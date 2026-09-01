@@ -290,6 +290,12 @@ def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60
     the per-store ``cron/.tick.lock`` file lock, so this never double-fires
     alongside a real gateway or a live pool backend on the same profile home —
     whichever process grabs the lock first wins the tick.
+
+    A named profile with its own live ``hermes gateway run`` is excluded from
+    this backend's roster (``_check_gateway_running``): the tick-lock only
+    guarantees a job fires once, not which process's identity delivers it, and
+    a desktop-side win delivers standalone under THIS process's own profile —
+    the wrong bot for that job (#100489). Its own gateway already ticks it.
     """
     from cron.scheduler_provider import InProcessCronScheduler, resolve_cron_scheduler
 
@@ -298,9 +304,22 @@ def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60
     start_kwargs: dict = {"interval": interval}
     if isinstance(provider, InProcessCronScheduler):
         try:
-            from hermes_cli.profiles import profiles_to_serve
+            from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
 
             profile_homes = list(profiles_to_serve(multiplex=True))
+            # A named profile with its own live gateway already ticks its own
+            # cron store under that gateway's process (own env, own bot
+            # token, own live adapters). Ticking it again from here races
+            # that gateway for cron/.tick.lock, and a desktop-side win
+            # delivers the job through the standalone path scoped to THIS
+            # process's identity — the wrong profile's bot (#100489). Skip
+            # it; "default" is always kept since the desktop backend IS its
+            # gateway.
+            profile_homes = [
+                (name, home)
+                for name, home in profile_homes
+                if name == "default" or not _check_gateway_running(home)
+            ]
             if len(profile_homes) > 1:
                 start_kwargs["profile_homes"] = profile_homes
                 from hermes_logging import enable_profile_log_routing
