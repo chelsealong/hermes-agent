@@ -119,12 +119,15 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
           .then(answer, error =>
             answer({ error: error instanceof Error ? error.message : String(error), success: false })
           )
-      } else {
-        void answer({
-          error: 'The in-app browser only takes actions in the session the user is looking at.',
-          success: false
-        })
       }
+      // A non-owning window stays silent rather than answering a refusal: this
+      // request is broadcast to every window that mounts a chat root, each
+      // gating on its OWN activeSessionIdRef, so an idle HUD/popout window
+      // (isActiveEvent false, nothing async in its way) used to win the race
+      // and answer before the owning window's async engine load finished —
+      // `preview.act.respond` keeps only the first reply per request id, so
+      // the correct answer was discarded (#101016). If truly no window owns
+      // the session, the tool's own 45s timeout already reports that clearly.
     }
 
     return true
