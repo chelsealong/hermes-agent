@@ -3616,6 +3616,12 @@ _server_breaker_opened_at: Dict[str, float] = {}
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_COOLDOWN_SEC = 60.0
 
+# (server, tool) pairs we've already warned about for an output-schema
+# violation, so the warning fires once per pair rather than on every call
+# (#101330). A schema-invalid response is deterministic, so repeating the
+# warning adds nothing but log noise.
+_schema_warning_seen: set = set()
+
 
 def _bump_server_error(server_name: str) -> None:
     """Increment the consecutive-failure count for ``server_name``.
@@ -4724,6 +4730,99 @@ def _mark_server_call_started(server: Any) -> None:
         mark_tool_call()
 
 
+def _warn_output_schema_violation_once(
+    server_name: str, tool_name: str, detail: str,
+) -> None:
+    """Warn once per (server, tool) that a result violated its outputSchema."""
+    key = (server_name, tool_name)
+    if key in _schema_warning_seen:
+        return
+    _schema_warning_seen.add(key)
+    logger.warning(
+        "MCP %s: tool %r returned structuredContent that violates its "
+        "advertised outputSchema (%s). Falling back to result.content and "
+        "NOT advancing the circuit breaker — the server is reachable, only "
+        "its schema is inaccurate.",
+        server_name, tool_name, detail,
+    )
+
+
+def _note_output_schema_violation(
+    server_name: str, tool_name: str, result: Any, output_schema: dict,
+) -> None:
+    """Leniently validate ``result.structuredContent`` against its schema.
+
+    Mirrors ``mcp.client.session.ClientSession._validate_tool_result`` but
+    NEVER raises: a violation is downgraded to a one-time warning so the
+    caller can fall back to ``result.content`` instead of discarding the whole
+    result (#101330). A malformed *schema* (as opposed to malformed content)
+    is ignored — that's the server's problem, not a reason to drop the answer.
+    """
+    try:
+        from jsonschema import ValidationError, validate
+    except Exception:  # jsonschema missing — can't validate, so don't warn.
+        return
+    structured = getattr(result, "structuredContent", None)
+    if structured is None:
+        # The SDK treats "schema advertised but no structuredContent" as an
+        # error too; here the text content still carries the payload.
+        _warn_output_schema_violation_once(
+            server_name, tool_name,
+            "no structured content returned despite an advertised schema",
+        )
+        return
+    try:
+        validate(structured, output_schema)
+    except ValidationError as exc:
+        detail = str(exc).splitlines()[0] if str(exc) else "validation error"
+        _warn_output_schema_violation_once(server_name, tool_name, detail)
+    except Exception:
+        # SchemaError or anything unexpected: the schema itself is broken.
+        return
+
+
+async def _call_tool_preserving_content(
+    session: Any, server_name: str, tool_name: str, args: dict,
+):
+    """Call an MCP tool without letting an inaccurate outputSchema discard it.
+
+    ``ClientSession.call_tool`` validates ``structuredContent`` against the
+    tool's advertised ``outputSchema`` and raises ``RuntimeError`` on a
+    mismatch, dropping the entire ``CallToolResult`` — including the
+    ``content`` text block, which carries the same payload and exists
+    precisely for clients that don't consume the structured form. That makes a
+    server with a sloppy schema indistinguishable from a broken one and (via
+    the caller's error path) trips the per-server circuit breaker, taking down
+    its healthy tools too.
+
+    We suppress the SDK's validation for this one call by temporarily clearing
+    the cached output schema, then re-validate leniently ourselves: on a
+    violation we warn once and return the result anyway so the caller renders
+    ``content``. If the SDK internals aren't shaped as expected, or the schema
+    isn't cached yet, we fall back to the plain call — never worse than the
+    pre-fix behavior.
+    """
+    schemas = getattr(session, "_tool_output_schemas", None)
+    if not isinstance(schemas, dict) or tool_name not in schemas:
+        return await session.call_tool(tool_name, arguments=args)
+    output_schema = schemas.get(tool_name)
+    if output_schema is None:
+        # No schema advertised → nothing to bypass or check.
+        return await session.call_tool(tool_name, arguments=args)
+
+    schemas[tool_name] = None  # disable SDK validation for this call
+    try:
+        result = await session.call_tool(tool_name, arguments=args)
+    finally:
+        schemas[tool_name] = output_schema  # restore for future calls
+
+    if not getattr(result, "isError", False):
+        _note_output_schema_violation(
+            server_name, tool_name, result, output_schema,
+        )
+    return result
+
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """Return a sync handler that calls an MCP tool via the background loop.
 
@@ -4800,7 +4899,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                 # it and detect the gateway platform / session for routing.
                 server._pending_call_context = contextvars.copy_context()
                 try:
-                    result = await server.session.call_tool(tool_name, arguments=args)
+                    result = await _call_tool_preserving_content(
+                        server.session, server_name, tool_name, args,
+                    )
                 finally:
                     server._pending_call_context = None
             # The RPC round-trip completed — the session is demonstrably
