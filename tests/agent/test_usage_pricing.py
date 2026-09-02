@@ -105,6 +105,32 @@ def test_deepseek_v4_pro_pricing_entry_exists():
     assert float(entry.cache_read_cost_per_million) == 0.003625
 
 
+def test_get_pricing_entry_skips_endpoint_fetch_when_official_docs_snapshot_exists(monkeypatch):
+    """deepseek routes carry a base_url (the provider's OpenAI-compatible
+    endpoint), and deepseek already has an official-docs pricing snapshot.
+    Before this fix, get_pricing_entry() called fetch_endpoint_model_metadata()
+    first whenever base_url was set, issuing a blocking network GET on every
+    process start even though the docs snapshot already answers the lookup
+    (#101012)."""
+
+    def _fail_fetch(*_args, **_kwargs):
+        raise AssertionError(
+            "fetch_endpoint_model_metadata should not be called when an "
+            "official docs pricing entry already exists"
+        )
+
+    monkeypatch.setattr("agent.usage_pricing.fetch_endpoint_model_metadata", _fail_fetch)
+
+    entry = get_pricing_entry(
+        "deepseek-v4-pro",
+        provider="deepseek",
+        base_url="https://api.deepseek.com/v1",
+    )
+
+    assert entry is not None
+    assert entry.source == "official_docs_snapshot"
+
+
 
 
 def test_deepseek_deprecated_aliases_price_as_v4_flash():
