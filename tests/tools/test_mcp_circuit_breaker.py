@@ -221,6 +221,74 @@ def test_circuit_breaker_reopens_on_probe_failure(monkeypatch, tmp_path):
         _cleanup(mcp_tool, "srv")
 
 
+def test_output_schema_validation_failure_falls_back_to_content(monkeypatch, tmp_path):
+    """A tool whose ``structuredContent`` fails its own ``outputSchema``
+    must not lose ``result.content``, and repeated failures of this kind
+    must not trip the transport circuit breaker (#101330).
+
+    Mirrors the real MCP SDK: ``ClientSession.call_tool()`` internally
+    awaits ``validate_tool_result()`` and raises ``RuntimeError`` when the
+    structured payload doesn't satisfy the tool's own advertised
+    ``outputSchema`` — discarding the whole ``CallToolResult``, including
+    its usable text content, before the handler ever sees it. The server
+    is reachable and answering correctly; only its schema is wrong.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import _make_tool_handler
+
+    server = _install_stub_server(mcp_tool, "srv", None)
+    session = server.session
+
+    async def _real_validate_tool_result(name, result):
+        raise RuntimeError(
+            f"Invalid structured content returned by tool {name}: "
+            f"'country' is a required property"
+        )
+
+    session.validate_tool_result = _real_validate_tool_result
+
+    call_count = {"n": 0}
+
+    async def _call_tool_bad_schema(name, arguments=None):
+        call_count["n"] += 1
+        result = MagicMock()
+        result.is_error = False
+        block = MagicMock()
+        block.text = "the real answer"
+        result.content = [block]
+        result.structured_content = {"country": None}
+        # Real SDK behavior: call_tool() validates before returning, and a
+        # failure here means the caller never gets `result` back at all.
+        await session.validate_tool_result(name, result)
+        return result
+
+    session.call_tool = _call_tool_bad_schema
+    mcp_tool._ensure_mcp_loop()
+
+    try:
+        handler = _make_tool_handler("srv", "tool1", 10.0)
+
+        # Pre-load two prior strikes to prove a bump doesn't happen (a
+        # bump would push this to 3 == _CIRCUIT_BREAKER_THRESHOLD and open
+        # the breaker on the very next call).
+        mcp_tool._server_error_counts["srv"] = 2
+
+        for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD + 1):
+            result = handler({})
+            parsed = json.loads(result)
+            assert parsed.get("result") == "the real answer", parsed
+            assert "error" not in parsed, parsed
+
+        assert call_count["n"] == mcp_tool._CIRCUIT_BREAKER_THRESHOLD + 1, (
+            "every call should reach the session — the breaker must never open"
+        )
+        assert mcp_tool._server_error_counts.get("srv", 0) == 0
+    finally:
+        _cleanup(mcp_tool, "srv")
+
+
 def test_half_open_probe_on_dead_session_requests_reconnect(monkeypatch, tmp_path):
     """A half-open probe against a server with no live session must request
     a transport reconnect and return a clean error — NOT write into a dead

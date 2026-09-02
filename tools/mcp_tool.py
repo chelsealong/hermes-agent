@@ -4601,6 +4601,13 @@ _server_breaker_opened_at: Dict[str, float] = {}
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_COOLDOWN_SEC = 60.0
 
+# (server_name, tool_name) pairs we've already warned about having an
+# ``outputSchema`` their own ``structuredContent`` fails to satisfy (#101330).
+# The failure is deterministic per tool, so logging it once is enough —
+# repeating it on every call would just spam the log for a vendor bug we
+# already degrade around.
+_schema_validation_warned: Set[Tuple[str, str]] = set()
+
 # ---------------------------------------------------------------------------
 # Trust-tier gating state (per-server trust + per-tool readOnlyHint).
 #
@@ -4768,6 +4775,42 @@ def _reset_server_error(server_name: str) -> None:
     """
     _server_error_counts[server_name] = 0
     _server_breaker_opened_at.pop(server_name, None)
+
+
+def _find_validate_tool_result_attr(session: Any) -> Optional[str]:
+    """Name of the session method that validates ``structuredContent``.
+
+    mcp 2.x exposes this publicly as ``validate_tool_result``; mcp 1.x has
+    the same check under the private ``_validate_tool_result``. ``mcp`` is
+    an optional extra users install at their own version (see
+    :func:`mcp_field`), so probe for either name instead of assuming one.
+    """
+    for name in ("validate_tool_result", "_validate_tool_result"):
+        if hasattr(session, name):
+            return name
+    return None
+
+
+def _warn_schema_validation_once(
+    server_name: str, tool_name: str, exc: BaseException
+) -> None:
+    """Log an output-schema validation failure at most once per tool.
+
+    The server's ``outputSchema`` is static, so a mismatch with its own
+    ``structuredContent`` reproduces on every call with the same shape of
+    result — logging it every time would just spam for a vendor bug we
+    already degrade around by falling back to ``result.content`` (#101330).
+    """
+    key = (server_name, tool_name)
+    if key in _schema_validation_warned:
+        return
+    _schema_validation_warned.add(key)
+    logger.warning(
+        "MCP %s/%s: structuredContent does not satisfy the tool's own "
+        "outputSchema (%s); falling back to unstructured content instead "
+        "of discarding the result.",
+        server_name, tool_name, exc,
+    )
 
 
 def _signal_reconnect(server: Any) -> bool:
@@ -6314,6 +6357,11 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                 # task, which doesn't inherit our contextvars) can replay
                 # it and detect the gateway platform / session for routing.
                 server._pending_call_context = contextvars.copy_context()
+                # Must be bound before the try block below: the finally
+                # clause references both even when a fast-fail path raises
+                # before the schema-validation patch is installed.
+                _validate_attr = None
+                _orig_validate = None
                 try:
                     # Fast-fail (#81995): a stdio subprocess that is already
                     # dead must not own this call slot — fail immediately
@@ -6335,6 +6383,38 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                         raise _StdioChildExited(
                             f"MCP stdio subprocess for '{server_name}' had "
                             f"already exited when the call was dispatched"
+                        )
+                    # A tool's outputSchema is only advertised metadata —
+                    # some servers ship one their own structuredContent
+                    # doesn't satisfy. The SDK's call_tool() validates it
+                    # internally and raises, discarding the CallToolResult
+                    # (including result.content, which is often fine)
+                    # before we ever see it. Patch validation to degrade
+                    # instead of raise for the duration of this one call, so
+                    # a sloppy schema costs this call's structured content,
+                    # not the whole result and not a circuit-breaker strike
+                    # against every other tool on the server (#101330).
+                    _validate_attr = _find_validate_tool_result_attr(server.session)
+                    _orig_validate = (
+                        getattr(server.session, _validate_attr)
+                        if _validate_attr else None
+                    )
+                    _schema_invalid = False
+
+                    async def _lenient_validate_tool_result(name, tool_result):
+                        nonlocal _schema_invalid
+                        try:
+                            await _orig_validate(name, tool_result)
+                        except RuntimeError as validation_exc:
+                            _schema_invalid = True
+                            _warn_schema_validation_once(
+                                server_name, tool_name, validation_exc
+                            )
+
+                    if _orig_validate is not None:
+                        setattr(
+                            server.session, _validate_attr,
+                            _lenient_validate_tool_result,
                         )
                     _call_coro = server.session.call_tool(tool_name, arguments=args)
                     _watch_children = getattr(server, "_watch_stdio_children", None)
@@ -6388,6 +6468,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                             )
                 finally:
                     server._pending_call_context = None
+                    if _orig_validate is not None:
+                        setattr(server.session, _validate_attr, _orig_validate)
             # The RPC round-trip completed — the session is demonstrably
             # healthy at the transport level (even if the tool itself
             # returned isError). Clear the rapid-drop budget (#62212).
@@ -6483,7 +6565,14 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             # host/protocol plumbing, not model-facing data. Unprefixed and
             # vendor-namespaced keys (`com.example.mcp/...`) pass through —
             # their semantics belong to the server.
-            structured = mcp_field(result, "structured_content", "structuredContent")
+            # Content that failed its own outputSchema is not trustworthy
+            # structured data — surface the (already-collected) text instead
+            # of supplementing it with a payload the server itself declared
+            # invalid (#101330).
+            structured = (
+                None if _schema_invalid else
+                mcp_field(result, "structured_content", "structuredContent")
+            )
             # Cap structuredContent too — a malicious server could flood
             # context via a multi-MB JSON payload (#56059). When the
             # serialized form exceeds the hard cap, replace it with the
