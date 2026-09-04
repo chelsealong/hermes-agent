@@ -49,6 +49,13 @@ def _model_options() -> list[dict[str, Any]]:
     ]
 
 
+# Mirrors the canonical order in `hermes_cli.main._prompt_reasoning_effort_selection`.
+# The picker's own `capabilities` map only says whether a model takes a
+# reasoning_effort parameter at all, not which levels it accepts (aggregator
+# catalogs under-report supported levels), so the full scale is offered.
+_REASONING_EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
 def _pick_slot(current: dict[str, str] | None = None) -> dict[str, str]:
     providers = _model_options()
     if not providers:
@@ -66,7 +73,20 @@ def _pick_slot(current: dict[str, str] | None = None) -> dict[str, str]:
     current_model = (current or {}).get("model", "")
     model_default = models.index(current_model) if current_model in models else 0
     model = models[_prompt_choice(f"Select model for {provider.get('slug')}", models, model_default)]
-    return {"provider": str(provider.get("slug") or ""), "model": str(model)}
+    slot: dict[str, str] = {"provider": str(provider.get("slug") or ""), "model": str(model)}
+
+    caps = (provider.get("capabilities") or {}).get(model) or {}
+    if caps.get("reasoning"):
+        from hermes_cli.main import _prompt_reasoning_effort_selection
+
+        current_effort = str((current or {}).get("reasoning_effort") or "").strip().lower()
+        selected_effort = _prompt_reasoning_effort_selection(
+            _REASONING_EFFORT_LEVELS, current_effort=current_effort
+        )
+        if selected_effort is not None:
+            slot["reasoning_effort"] = selected_effort
+
+    return slot
 
 
 def _format_slot(slot: dict[str, Any]) -> str:

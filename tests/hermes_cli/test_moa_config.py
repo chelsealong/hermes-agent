@@ -35,6 +35,63 @@ def test_moa_slot_picker_excludes_unconfigured_providers(monkeypatch):
     assert captured["include_unconfigured"] is False
 
 
+def _stub_provider_pick(monkeypatch, *, reasoning: bool):
+    from hermes_cli import moa_cmd
+
+    provider = {
+        "slug": "opencode-go",
+        "models": ["deepseek-v4-pro"],
+        "capabilities": {"deepseek-v4-pro": {"reasoning": reasoning}},
+    }
+    monkeypatch.setattr(moa_cmd, "_model_options", lambda: [provider])
+    # First _prompt_choice call picks the provider, second picks the model.
+    monkeypatch.setattr(moa_cmd, "_prompt_choice", lambda *a, **k: 0)
+
+
+def test_pick_slot_prompts_reasoning_effort_when_model_supports_it(monkeypatch):
+    from hermes_cli import moa_cmd
+
+    _stub_provider_pick(monkeypatch, reasoning=True)
+
+    captured = {}
+
+    def fake_prompt_effort(efforts, current_effort=""):
+        captured["efforts"] = efforts
+        captured["current_effort"] = current_effort
+        return "high"
+
+    monkeypatch.setattr(
+        "hermes_cli.main._prompt_reasoning_effort_selection", fake_prompt_effort
+    )
+
+    slot = moa_cmd._pick_slot({"provider": "opencode-go", "model": "deepseek-v4-pro", "reasoning_effort": "low"})
+
+    assert slot == {
+        "provider": "opencode-go",
+        "model": "deepseek-v4-pro",
+        "reasoning_effort": "high",
+    }
+    assert captured["current_effort"] == "low"
+    assert list(captured["efforts"]) == list(moa_cmd._REASONING_EFFORT_LEVELS)
+
+
+def test_pick_slot_skips_reasoning_prompt_when_model_lacks_capability(monkeypatch):
+    from hermes_cli import moa_cmd
+
+    _stub_provider_pick(monkeypatch, reasoning=False)
+
+    def fail_prompt_effort(*_args, **_kwargs):
+        raise AssertionError("should not prompt for reasoning effort")
+
+    monkeypatch.setattr(
+        "hermes_cli.main._prompt_reasoning_effort_selection", fail_prompt_effort
+    )
+
+    slot = moa_cmd._pick_slot(None)
+
+    assert slot == {"provider": "opencode-go", "model": "deepseek-v4-pro"}
+
+
 def _enabled_refs(refs):
     return [{**slot, "enabled": True} for slot in refs]
 
