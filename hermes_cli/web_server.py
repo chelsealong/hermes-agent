@@ -19815,6 +19815,17 @@ def start_server(
 
     apply_nofile_soft_limit()
 
+    # `serve`/`dashboard` are not in main.py's `_AGENT_COMMANDS`, so
+    # `_prepare_agent_startup()` never runs discovery for this process. The
+    # other `discover_plugins()` calls in this module are request-time-only
+    # (channels-page rendering, terminal-backend picker), so without this,
+    # plugin-registered hooks (`pre_llm_call`, ...) silently never fire for
+    # any turn run over this server (#102592). Idempotent — safe even when
+    # discovery already ran.
+    from hermes_cli.plugins import discover_plugins
+
+    discover_plugins()
+
     import uvicorn
 
     try:
