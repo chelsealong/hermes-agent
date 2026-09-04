@@ -247,6 +247,41 @@ async def test_reconnect_closes_previous_client_to_prevent_zombie_websocket(monk
 
 
 @pytest.mark.asyncio
+async def test_connect_clears_stale_fatal_error(monkeypatch):
+    """Regression (#102554): a successful (re)connect must clear a previously
+    recorded fatal error, the same as every other platform adapter's
+    ``_mark_connected()`` call. Without it, a transient failure that once
+    triggered ``_set_fatal_error`` leaves ``gateway_state.json`` stuck on
+    ``fatal`` forever, even while the bot is connected and serving messages.
+    """
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
+    adapter._set_fatal_error("discord_connect_error", "Discord startup failed: DNS blip", retryable=True)
+    assert adapter.has_fatal_error is True
+
+    monkeypatch.setattr("gateway.status.acquire_scoped_lock", lambda scope, identity, metadata=None: (True, None))
+    monkeypatch.setattr("gateway.status.release_scoped_lock", lambda scope, identity: None)
+
+    intents = SimpleNamespace(
+        message_content=False, dm_messages=False, guild_messages=False,
+        members=False, voice_states=False,
+    )
+    monkeypatch.setattr(discord_platform.Intents, "default", lambda: intents)
+    monkeypatch.setattr(discord_platform.commands, "Bot", FakeBot)
+    monkeypatch.setattr(adapter, "_resolve_allowed_usernames", AsyncMock())
+
+    assert await adapter.connect() is True
+
+    assert adapter.has_fatal_error is False, (
+        "a successful reconnect must clear the stale fatal state so the "
+        "dashboard stops reporting a failure the adapter has already recovered from"
+    )
+    assert adapter.fatal_error_code is None
+    assert adapter.fatal_error_message is None
+
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_connect_timeout_cancels_bot_task(monkeypatch):
     """Regression: connect() timeout must cancel _bot_task so the zombie
     Discord client cannot fire on_message after the adapter is discarded.
