@@ -35,6 +35,8 @@ import type { MutableRefObject } from 'react'
 
 import { resolveSessionOwner } from '@/app/session/hooks/use-session-actions/utils'
 import type { ClientSessionState } from '@/app/types'
+import { fetchStoredTranscriptAcrossBackends } from '@/hermes'
+import { markStoredTranscriptReadOnly, readOnlyRuntimeIdFor } from '@/store/read-only-transcript'
 import { isSessionGoneForBackgroundPolling } from '@/store/runtime-gone'
 import { getSessionOwnerHint, knownSessionOwner, ownerLookupSessionRows, requestSessionResume } from '@/store/session'
 import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
@@ -96,6 +98,20 @@ export function createSessionRpcDispatcher(deps: SessionRpcDispatcherDeps): Ambi
     // A request that names a session but whose owner nobody can name must not
     // ride the ambient socket: that turns missing metadata into a misleading
     // backend "session not found" on a backend that never held the runtime.
+    // #94724 no-owner recovery, applied here too (use-session-tile-delegate
+    // already has it): a session.resume that fails this gate degrades to the
+    // stored transcript read-only instead of dead-ending every dispatcher
+    // caller on an unrecoverable SessionOwnerResolutionError (#102618).
+    if (!owner && method === 'session.resume' && routingSessionId) {
+      const stored = await fetchStoredTranscriptAcrossBackends(routingSessionId).catch(() => null)
+
+      if (stored) {
+        markStoredTranscriptReadOnly(routingSessionId)
+
+        return { messages: stored.messages, session_id: readOnlyRuntimeIdFor(routingSessionId) } as T
+      }
+    }
+
     assertSessionOwnerResolved(owner, { method, sessionId: paramSessionId ? routingSessionId : null })
 
     try {

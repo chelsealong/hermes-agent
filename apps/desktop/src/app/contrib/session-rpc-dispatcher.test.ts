@@ -24,6 +24,7 @@ vi.mock('@/store/gateway', async importActual => ({
 
 const probe = vi.hoisted(() => ({ resolveSessionOwner: vi.fn(async () => undefined as unknown) }))
 const sessionMocks = vi.hoisted(() => ({ requestSessionResume: vi.fn() }))
+const transcriptMocks = vi.hoisted(() => ({ fetchStoredTranscriptAcrossBackends: vi.fn(async () => null as unknown) }))
 
 vi.mock('@/app/session/hooks/use-session-actions/utils', async importActual => ({
   ...(await importActual<Record<string, unknown>>()),
@@ -35,6 +36,11 @@ vi.mock('@/store/session', async importActual => ({
   requestSessionResume: sessionMocks.requestSessionResume
 }))
 
+vi.mock('@/hermes', async importActual => ({
+  ...(await importActual<Record<string, unknown>>()),
+  fetchStoredTranscriptAcrossBackends: transcriptMocks.fetchStoredTranscriptAcrossBackends
+}))
+
 const { createSessionRpcDispatcher } = await import('./session-rpc-dispatcher')
 const { $connectionsRegistry } = await import('@/store/connection-registry-state')
 const { $profiles } = await import('@/store/profile')
@@ -44,6 +50,7 @@ const { _resetSessionOwnerHintsForTests, setCronSessions, setMessagingSessions, 
   await import('@/store/session')
 
 const { isSessionOwnerResolutionError } = await import('@/store/session-owner-resolution')
+const { $readOnlyStoredTranscripts, isStoredTranscriptReadOnly } = await import('@/store/read-only-transcript')
 const { $sessionTiles } = await import('@/store/session-states')
 const { makeSessionInfo } = await import('@/test/session-info')
 
@@ -67,6 +74,7 @@ beforeEach(() => {
   $connectionsRegistry.set({ connections: [{ id: 'local' }] } as never)
   $profiles.set([{ name: 'default' }, { name: 'omar' }] as never)
   probe.resolveSessionOwner.mockResolvedValue(undefined)
+  transcriptMocks.fetchStoredTranscriptAcrossBackends.mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -76,6 +84,7 @@ afterEach(() => {
   setMessagingSessions([])
   $sessionTiles.set([])
   $profiles.set([])
+  $readOnlyStoredTranscripts.set(new Set())
   $removedSessionIds.set(new Set())
   $sessionMutationsInFlight.set(new Set())
   _resetSessionOwnerHintsForTests({ storage: true })
@@ -131,6 +140,42 @@ describe('createSessionRpcDispatcher: fail closed', () => {
     await expect(dispatcher().request('session.resume', { session_id: 'stored-x' })).rejects.toSatisfy(
       isSessionOwnerResolutionError
     )
+  })
+})
+
+describe('createSessionRpcDispatcher: no-owner session.resume recovery (#102618)', () => {
+  it('degrades to the stored transcript read-only instead of dead-ending, when one is reachable', async () => {
+    gatewayMocks.activeConnectionId = null
+    $connectionsRegistry.set(null)
+    $profiles.set([{ name: 'default' }, { name: 'omar' }] as never)
+    transcriptMocks.fetchStoredTranscriptAcrossBackends.mockResolvedValue({
+      messages: [{ role: 'user' }],
+      session_id: 'stored-x'
+    } as never)
+    const { ambientRequest, request } = dispatcher()
+
+    await expect(request('session.resume', { session_id: 'stored-x' })).resolves.toEqual({
+      messages: [{ role: 'user' }],
+      session_id: 'read-only:stored-x'
+    })
+
+    expect(transcriptMocks.fetchStoredTranscriptAcrossBackends).toHaveBeenCalledWith('stored-x')
+    expect(isStoredTranscriptReadOnly('stored-x')).toBe(true)
+    expect(ambientRequest).not.toHaveBeenCalled()
+    expect(gatewayMocks.requestGatewayForAgent).not.toHaveBeenCalled()
+    expect(gatewayMocks.requestGatewayForProfile).not.toHaveBeenCalled()
+  })
+
+  it('still fails closed with the owner-resolution error when no backend holds the transcript either', async () => {
+    gatewayMocks.activeConnectionId = null
+    $connectionsRegistry.set(null)
+    $profiles.set([{ name: 'default' }, { name: 'omar' }] as never)
+    transcriptMocks.fetchStoredTranscriptAcrossBackends.mockResolvedValue(null)
+
+    await expect(dispatcher().request('session.resume', { session_id: 'stored-orphan' })).rejects.toSatisfy(
+      isSessionOwnerResolutionError
+    )
+    expect(isStoredTranscriptReadOnly('stored-orphan')).toBe(false)
   })
 })
 
