@@ -3222,6 +3222,50 @@ class TestModelContextLength:
         assert result["model"]["default"] == "anthropic/claude-opus-4.6"
 
 
+class TestApplyMainModelAssignmentContextLength:
+    """``_apply_main_model_assignment`` backs /api/model/set and custom-endpoint
+    save/activate. It must only drop ``context_length`` on a real provider or
+    model change, not on a no-op re-assignment (#102626: re-saving an already-
+    active custom endpoint silently wiped the user's configured context window
+    on every subsequent new conversation)."""
+
+    def test_reassigning_same_provider_and_model_preserves_context_length(self):
+        from hermes_cli.web_server import _apply_main_model_assignment
+
+        model_cfg = {
+            "provider": "custom:anyu",
+            "default": "gpt-5.6-terra",
+            "base_url": "https://www.uselink.top/v1",
+            "context_length": 1500000,
+        }
+        result = _apply_main_model_assignment(
+            model_cfg, "custom:anyu", "gpt-5.6-terra", "https://www.uselink.top/v1",
+        )
+        assert result["context_length"] == 1500000
+
+    def test_switching_provider_still_drops_context_length(self):
+        from hermes_cli.web_server import _apply_main_model_assignment
+
+        model_cfg = {
+            "provider": "ollama-local",
+            "default": "llama3.2",
+            "context_length": 128000,
+        }
+        result = _apply_main_model_assignment(model_cfg, "openrouter", "google/gemini-2.5-flash")
+        assert "context_length" not in result
+
+    def test_switching_model_same_provider_still_drops_context_length(self):
+        from hermes_cli.web_server import _apply_main_model_assignment
+
+        model_cfg = {
+            "provider": "openrouter",
+            "default": "anthropic/claude-opus-4.6",
+            "context_length": 200000,
+        }
+        result = _apply_main_model_assignment(model_cfg, "openrouter", "anthropic/claude-sonnet-4.6")
+        assert "context_length" not in result
+
+
 class TestDenormalizeProviderSwitch:
     """The flat Config-page Model field carries no provider info. When the
     model string changes to one served by a different provider, the saved

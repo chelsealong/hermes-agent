@@ -2064,8 +2064,11 @@ def _apply_main_model_assignment(
     The runtime resolver reads ``model.base_url`` from config (it ignores
     ``OPENAI_BASE_URL``) and only honors it when the configured provider matches
     and the pool entry is on the registry default, so preserving it here is what
-    lets the override actually route. The hardcoded ``context_length`` override
-    is always dropped since the new model may have a different context window.
+    lets the override actually route. The ``context_length`` override is dropped
+    when the provider or model actually changes, since the new model may have a
+    different context window — but a no-op re-assignment (re-saving or
+    re-activating the same provider+model, e.g. re-saving an active custom
+    endpoint) must not wipe a context_length the user configured separately.
 
     Returns the same dict (coerced to a fresh dict if the input wasn't one) so
     callers can assign it straight back onto the model config.
@@ -2073,6 +2076,7 @@ def _apply_main_model_assignment(
     if not isinstance(model_cfg, dict):
         model_cfg = {}
     prev_provider = str(model_cfg.get("provider") or "").strip().lower()
+    prev_model = str(model_cfg.get("default") or "").strip()
     new_provider = provider.strip().lower()
     model_cfg["provider"] = provider
     model_cfg["default"] = model
@@ -2099,7 +2103,8 @@ def _apply_main_model_assignment(
         clear_model_endpoint_credentials(model_cfg, clear_api_mode=False)
     if new_provider != prev_provider:
         clear_model_endpoint_credentials(model_cfg, clear_api_key=False)
-    model_cfg.pop("context_length", None)
+    if new_provider != prev_provider or model.strip() != prev_model:
+        model_cfg.pop("context_length", None)
     return model_cfg
 
 
