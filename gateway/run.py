@@ -68,7 +68,7 @@ from agent.interrupt_compat import request_hard_interrupt
 from agent.turn_context import (
     compression_made_progress,
 )
-from hermes_cli.config import _is_ssh_remote_tilde_cwd, cfg_get
+from hermes_cli.config import TURN_LIMIT_UNLIMITED, _is_ssh_remote_tilde_cwd, cfg_get
 from hermes_cli.fallback_config import get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
@@ -715,6 +715,22 @@ def _ensure_windows_gateway_venv_imports() -> None:
 def _gateway_platform_value(platform: Any) -> str:
     """Return a normalized gateway platform value for enums or raw strings."""
     return str(getattr(platform, "value", platform) or "").strip().lower()
+
+
+def _format_iteration_status(count: Any, max_iterations: Any) -> str:
+    """Render "iteration N/M", dropping the bound when it is unbounded.
+
+    ``agent.max_iterations`` defaults to ``TURN_LIMIT_UNLIMITED``
+    (``sys.maxsize``) when the user hasn't set a cap. Printing that raw
+    number to a user or a log line reads as a bug, not "no limit" (#102806).
+    """
+    try:
+        max_iter = int(max_iterations)
+    except (TypeError, ValueError):
+        max_iter = 0
+    if max_iter <= 0 or max_iter >= TURN_LIMIT_UNLIMITED:
+        return f"iteration {count}"
+    return f"iteration {count}/{max_iter}"
 
 
 def _non_conversational_metadata(
@@ -11626,7 +11642,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if elapsed_min > 0:
                         status_parts.append(f"{elapsed_min} min elapsed")
                 if max_iter:
-                    status_parts.append(f"iteration {iteration}/{max_iter}")
+                    status_parts.append(_format_iteration_status(iteration, max_iter))
                 if current_tool:
                     status_parts.append(f"running: {current_tool}")
             except Exception:
@@ -32136,7 +32152,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _parts = []
                         if _want_iteration_detail:
                             _parts.append(
-                                f"iteration {_a['api_call_count']}/{_a['max_iterations']}"
+                                _format_iteration_status(
+                                    _a["api_call_count"], _a["max_iterations"]
+                                )
                             )
                         _action = _a.get("current_tool") or _a.get("last_activity_desc")
                         if _action:
@@ -32489,16 +32507,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     f"⏱️ Agent inactive for {_timeout_mins} min — no tool calls "
                     f"or API responses."
                 ]
+                _iter_status = _format_iteration_status(_iter_n, _iter_max)
                 if _cur_tool:
                     _diag_lines.append(
                         f"The agent appears stuck on tool `{_cur_tool}` "
                         f"({_secs_ago:.0f}s since last activity, "
-                        f"iteration {_iter_n}/{_iter_max})."
+                        f"{_iter_status})."
                     )
                 else:
                     _diag_lines.append(
                         f"Last activity: {_last_desc} ({_secs_ago:.0f}s ago, "
-                        f"iteration {_iter_n}/{_iter_max}). "
+                        f"{_iter_status}). "
                         "The agent may have been waiting on an API response."
                     )
                 _diag_lines.append(
