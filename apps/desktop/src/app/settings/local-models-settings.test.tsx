@@ -358,9 +358,10 @@ describe('LocalModelsSettings', () => {
       tag: 'b10679',
       configured_tag: 'b10679'
     })
+
     // Server order: running-first-then-most-recent — the later, successful
     // attempt sorts before the earlier failed one.
-    $localRuntimeJobs.set([
+    const jobs: LocalRuntimeJob[] = [
       {
         job_id: 'j-newer-success',
         kind: 'runtime-install',
@@ -385,7 +386,17 @@ describe('LocalModelsSettings', () => {
         done_bytes: 0,
         error: 'version check failed for llama-server: expected b10679, got:'
       }
-    ])
+    ]
+
+    // The mount effect's watchLocalRuntimeJobs() kicks a real poll() that
+    // fetches getLocalModelsJobs() and, if it disagrees with the store,
+    // overwrites it — a bare $localRuntimeJobs.set() here would only
+    // survive to assertion time by accident of a leftover timer from an
+    // earlier test's polling loop (module-level, never reset). Mocking the
+    // fetch to agree with the seeded store makes the assertion hold
+    // regardless of whether that poll actually fires during this test.
+    mocked.getLocalModelsJobs.mockResolvedValue({ jobs })
+    $localRuntimeJobs.set(jobs)
 
     await renderFullPane()
 
