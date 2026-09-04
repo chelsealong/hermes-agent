@@ -349,6 +349,49 @@ describe('LocalModelsSettings', () => {
 
     expect(await screen.findByText(/integrity check/)).toBeTruthy()
   })
+
+  it('drops a stale runtime-install error once a later install of the same kind succeeded', async () => {
+    mocked.getLocalModelsStatus.mockResolvedValue({
+      ...BASE_STATUS,
+      runtime_installed: true,
+      runtime_backend: 'metal',
+      tag: 'b10679',
+      configured_tag: 'b10679'
+    })
+    // Server order: running-first-then-most-recent — the later, successful
+    // attempt sorts before the earlier failed one.
+    $localRuntimeJobs.set([
+      {
+        job_id: 'j-newer-success',
+        kind: 'runtime-install',
+        target: 'llama.cpp b10679 (metal)',
+        model_id: null,
+        status: 'done',
+        phase: 'done',
+        detail: 'llama.cpp b10679 ready (metal)',
+        total_bytes: null,
+        done_bytes: 0,
+        error: null
+      },
+      {
+        job_id: 'j-older-failure',
+        kind: 'runtime-install',
+        target: 'llama.cpp b10679 (metal)',
+        model_id: null,
+        status: 'error',
+        phase: 'downloading',
+        detail: '',
+        total_bytes: null,
+        done_bytes: 0,
+        error: 'version check failed for llama-server: expected b10679, got:'
+      }
+    ])
+
+    await renderFullPane()
+
+    expect(await screen.findByText('Engine up to date')).toBeTruthy()
+    expect(screen.queryByText(/version check failed/)).toBeNull()
+  })
 })
 
 describe('quickstart', () => {

@@ -139,6 +139,17 @@ export function runningRuntimeInstall(jobs: readonly LocalRuntimeJob[]): LocalRu
   return jobs.find(j => j.kind === 'runtime-install' && j.status === 'running') ?? null
 }
 
+// Selector: the error to show for a job kind, if any. ``jobs`` arrives
+// running-first-then-most-recent (server order), so the first entry of a
+// kind is that kind's latest attempt. A stale error from an earlier attempt
+// must not outlive a later attempt that succeeded — only the LATEST job of
+// the kind gets to report an error.
+export function latestJobError(jobs: readonly LocalRuntimeJob[], kind: LocalRuntimeJob['kind']): LocalRuntimeJob | null {
+  const latest = jobs.find(j => j.kind === kind)
+
+  return latest?.status === 'error' ? latest : null
+}
+
 // One engine-update toast per app session: checked at boot (after the
 // gateway is ready), only when the user runs the local engine. The
 // download itself is always a button click in Local Models — this is a

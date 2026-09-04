@@ -42,6 +42,7 @@ import {
 import { cn } from '@/lib/utils'
 import {
   $localRuntimeJobs,
+  latestJobError,
   runningDownloadFor,
   runningRuntimeInstall,
   watchLocalRuntimeJobs
@@ -292,7 +293,9 @@ export function LocalModelsSettings() {
   }
 
   const rJob = runningRuntimeInstall(jobs)
-  const lastError = jobs.find(j => j.status === 'error')
+  const quickstartError = latestJobError(jobs, 'quickstart')
+  const runtimeInstallError = latestJobError(jobs, 'runtime-install')
+  const modelDownloadError = latestJobError(jobs, 'model-download')
 
   const sortedCatalog = [...catalog].sort((a, b) => fitRank(a) - fitRank(b))
 
@@ -392,8 +395,8 @@ export function LocalModelsSettings() {
               </>
             ) : null}
 
-            {lastError?.kind === 'quickstart' && !qJob && (
-              <p className="mt-4 text-[0.75rem] text-destructive">{lastError.error}</p>
+            {quickstartError && !qJob && (
+              <p className="mt-4 text-[0.75rem] text-destructive">{quickstartError.error}</p>
             )}
           </div>
         </div>
@@ -516,7 +519,7 @@ export function LocalModelsSettings() {
           />
         )}
 
-        {lastError?.kind === 'runtime-install' && <p className="text-[0.75rem] text-destructive">{lastError.error}</p>}
+        {runtimeInstallError && <p className="text-[0.75rem] text-destructive">{runtimeInstallError.error}</p>}
       </SettingsSection>
 
       {/* ── This machine ── */}
@@ -831,7 +834,7 @@ export function LocalModelsSettings() {
             })}
         </div>
 
-        {lastError?.kind === 'model-download' && <p className="text-[0.75rem] text-destructive">{lastError.error}</p>}
+        {modelDownloadError && <p className="text-[0.75rem] text-destructive">{modelDownloadError.error}</p>}
       </SettingsSection>
 
       <BrowseSection onChanged={refresh} />
