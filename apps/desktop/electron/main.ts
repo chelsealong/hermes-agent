@@ -13284,8 +13284,8 @@ function spawnSecondaryWindow({
 
   wireWindowReveal(win)
 
-  win.on('enter-full-screen', () => sendWindowStateChanged(true))
-  win.on('leave-full-screen', () => sendWindowStateChanged(false))
+  win.on('enter-full-screen', () => sendWindowStateChanged(true, win))
+  win.on('leave-full-screen', () => sendWindowStateChanged(false, win))
 
   streamThrottle.register(win)
   wireCommonWindowHandlers(win, zoomWiringForWindowKind('chat'))
@@ -13370,8 +13370,8 @@ function spawnBrowserWindow(tabId) {
 
   wireWindowReveal(win)
 
-  win.on('enter-full-screen', () => sendWindowStateChanged(true))
-  win.on('leave-full-screen', () => sendWindowStateChanged(false))
+  win.on('enter-full-screen', () => sendWindowStateChanged(true, win))
+  win.on('leave-full-screen', () => sendWindowStateChanged(false, win))
 
   streamThrottle.register(win)
   wireCommonWindowHandlers(win, zoomWiringForWindowKind('chat'))
@@ -14646,8 +14646,14 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
   const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
   const connection = await backendDialClaims.run(backendScopeKey(null, profileKey), () => ensureBackend(profile))
   const connectionId = resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
+  // startHermes() caches its connection promise for the backend's lifetime, so
+  // ...getWindowState() baked into `connection` is the snapshot from cold
+  // start, not live state. Attach a fresh one here so every republish (this
+  // handler re-fires on reconnect/gateway switch) agrees with the live
+  // enter/leave-full-screen push instead of clobbering it.
+  const freshConnection = { ...connection, ...getWindowState(BrowserWindow.fromWebContents(_event.sender) || mainWindow) }
 
-  return connectionId ? { ...connection, connectionId } : connection
+  return connectionId ? { ...freshConnection, connectionId } : freshConnection
 })
 // Registry-scoped variant: resolve a backend for (connectionId, profile).
 // connectionId '' / 'local' / the registry primary all behave sensibly; the
@@ -14662,8 +14668,11 @@ ipcMain.handle('hermes:connection:for', async (_event, payload) => {
   // (connectionId, profile) scope (#90812): concurrent registry dials for one
   // scope share the first spawn instead of bootstrapping duplicate remotes.
   const connection = await backendDialClaims.run(backendScopeKey(id, profile), () => ensureRegistryBackend(id, profile))
+  // See 'hermes:connection' above: refresh window state so a stale cold-start
+  // snapshot never overwrites the live fullscreen flag on republish.
+  const freshConnection = { ...connection, ...getWindowState(BrowserWindow.fromWebContents(_event.sender) || mainWindow) }
 
-  return { ...connection, connectionId: id, registryScoped: true }
+  return { ...freshConnection, connectionId: id, registryScoped: true }
 })
 
 const windowConnectionRoutes = new WindowConnectionRouteRegistry()
