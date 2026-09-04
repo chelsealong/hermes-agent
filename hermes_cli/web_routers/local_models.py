@@ -677,18 +677,19 @@ async def local_models_runtime_install(body: RuntimeInstallBody):
     from hermes_cli.local_runtime.binaries import (
         default_tag,
         resolve_assets,
-        select_backend,
+        resolve_auto_backend,
     )
     from hermes_cli.local_runtime.bootstrap import _detect_gpu_vendor
 
     section = _runtime_section()
     tag = section.get("tag") or default_tag()
     backend = body.backend or section.get("backend", "auto")
-    if backend == "auto":
-        backend = select_backend(_detect_gpu_vendor())
     # Resolve first so an impossible combination fails the POST, not the job.
     try:
-        plan = resolve_assets(tag, backend)
+        if backend == "auto":
+            backend, plan = resolve_auto_backend(tag, _detect_gpu_vendor())
+        else:
+            plan = resolve_assets(tag, backend)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -921,7 +922,7 @@ async def local_models_quickstart(body: QuickstartBody):
         default_tag,
         installed_tags,
         resolve_assets,
-        select_backend,
+        resolve_auto_backend,
     )
     from hermes_cli.local_runtime.bootstrap import (
         _detect_gpu_vendor,
@@ -969,13 +970,14 @@ async def local_models_quickstart(body: QuickstartBody):
     section = _runtime_section()
     tag = section.get("tag") or default_tag()
     backend = section.get("backend", "auto")
-    if backend == "auto":
-        backend = select_backend(_detect_gpu_vendor())
     need_runtime = not installed_tags()
     if need_runtime:
         # Same preflight as /runtime/install: impossible combos fail the POST.
         try:
-            resolve_assets(tag, backend)
+            if backend == "auto":
+                backend, _ = resolve_auto_backend(tag, _detect_gpu_vendor())
+            else:
+                resolve_assets(tag, backend)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=str(exc))
 

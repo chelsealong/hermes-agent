@@ -140,6 +140,26 @@ def select_backend(gpu_vendor: str | None, os_name: str | None = None) -> str:
     return "cpu"
 
 
+def resolve_auto_backend(tag: str, gpu_vendor: str | None, os_name: str | None = None,
+                         arch: str | None = None) -> tuple[str, "AssetPlan"]:
+    """select_backend()'s pick, demoted down the cuda -> vulkan -> cpu ladder
+    when the release ships no prebuilt asset for it (Linux CUDA today).
+    Only for backend="auto" callers — an explicit backend request should
+    fail loudly instead of being silently downgraded."""
+    backend = select_backend(gpu_vendor, os_name=os_name)
+    ladder = {"cuda": "vulkan", "vulkan": "cpu"}
+    while True:
+        try:
+            return backend, resolve_assets(tag, backend, os_name=os_name, arch=arch)
+        except BinaryResolutionError:
+            next_backend = ladder.get(backend)
+            if next_backend is None:
+                raise
+            logger.info("no prebuilt %s asset at %s; falling back to %s",
+                       backend, tag, next_backend)
+            backend = next_backend
+
+
 def resolve_assets(tag: str, backend: str, os_name: str | None = None,
                    arch: str | None = None) -> AssetPlan:
     """Compose the asset list for (tag, backend, platform).

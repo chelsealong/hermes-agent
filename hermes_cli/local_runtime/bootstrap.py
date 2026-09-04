@@ -217,15 +217,12 @@ def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":
     try:
         from hermes_cli.local_runtime.binaries import (
             ensure_runtime_installed,
-            select_backend,
+            resolve_auto_backend,
         )
         from hermes_cli.local_runtime.hardware import probe_budget
         from hermes_cli.local_runtime.presets import generate_presets
         from hermes_cli.local_runtime.supervisor import LlamaServerSupervisor
 
-        backend = section.get("backend", "auto")
-        if backend == "auto":
-            backend = select_backend(_detect_gpu_vendor())
         # Boot ladder: serve what is INSTALLED, never download here. The
         # configured tag (config root-of-trust; deep-merge supplies the
         # Hermes-release default when unpinned) is preferred; when it isn't
@@ -245,6 +242,10 @@ def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":
             logger.info("configured tag %s not installed; serving %s "
                         "(update is a click in Local Models)", tag, have[0])
             tag = have[0]
+
+        backend = section.get("backend", "auto")
+        if backend == "auto":
+            backend, _ = resolve_auto_backend(tag, _detect_gpu_vendor())
         install_dir = ensure_runtime_installed(tag, backend)
 
         mdir = models_dir()

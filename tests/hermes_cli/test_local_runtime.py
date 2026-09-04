@@ -21,6 +21,7 @@ from hermes_cli.local_runtime.binaries import (
     AssetPlan,
     BinaryResolutionError,
     resolve_assets,
+    resolve_auto_backend,
     select_backend,
 )
 from hermes_cli.local_runtime.detect import DetectedServer, probe_port
@@ -226,6 +227,24 @@ def test_install_dir_is_profile_scoped(tmp_path, monkeypatch):
 ])
 def test_backend_selection(vendor, os_name, expected):
     assert select_backend(vendor, os_name=os_name) == expected
+
+
+def test_resolve_auto_backend_falls_back_from_cuda_on_linux():
+    """Linux + NVIDIA: select_backend alone picks cuda, but ggml-org ships
+    no Linux CUDA prebuilt, so an "auto" resolution must demote to vulkan
+    instead of raising BinaryResolutionError (#102565)."""
+    backend, plan = resolve_auto_backend(
+        "b10290", "nvidia", os_name="ubuntu", arch="x64")
+    assert backend == "vulkan"
+    assert plan.assets and all("vulkan" in a for a in plan.assets)
+
+
+def test_resolve_auto_backend_keeps_working_backend():
+    """A backend the release does ship (Windows CUDA) must not be demoted."""
+    backend, plan = resolve_auto_backend(
+        "b10290", "nvidia", os_name="win", arch="x64")
+    assert backend == "cuda"
+    assert plan.assets
 
 
 def test_sha256_mismatch_rejects(tmp_path, monkeypatch):
