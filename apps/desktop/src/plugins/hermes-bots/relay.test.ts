@@ -590,6 +590,78 @@ describe('the drain loop wires drain → deliver → reply', () => {
 
     stopBotRelay()
   })
+
+  it('backs off a connection that keeps failing instead of re-dialing it every tick (#102913)', async () => {
+    // 'a' models a route that needs a local backend the pool has no room for:
+    // every RPC against it fails, exactly like a spawn that times out waiting
+    // for a free slot. 'b' is healthy throughout, as the control.
+    const calls = respondWith(call => {
+      if (call.connectionId === 'a') {
+        throw new Error('Local backend start for "a" timed out while waiting for a free slot.')
+      }
+
+      return call.method === 'bot_relay.outbox.drain' ? { envelopes: [] } : {}
+    })
+
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(0)
+    calls.length = 0
+
+    // Five minutes at the 30s drain cadence is 10 ticks; the roster loop
+    // adds 5 more at its 60s cadence — 15 attempts against 'a' with no
+    // backoff. Bounded retry must land meaningfully under that.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+
+    const attemptsOnA = calls.filter(
+      call => call.connectionId === 'a' && (call.method === 'profiles.list' || call.method === 'bot_relay.outbox.drain')
+    )
+
+    const attemptsOnB = calls.filter(
+      call => call.connectionId === 'b' && (call.method === 'profiles.list' || call.method === 'bot_relay.outbox.drain')
+    )
+
+    expect(attemptsOnA.length).toBeGreaterThan(0)
+    expect(attemptsOnA.length).toBeLessThan(15)
+    // The healthy connection is never throttled by its sick sibling's backoff.
+    expect(attemptsOnB.length).toBe(15)
+
+    stopBotRelay()
+  })
+
+  it('resets a connection’s backoff the moment it answers again', async () => {
+    let healthy = false
+
+    const calls = respondWith(call => {
+      if (call.connectionId === 'a' && !healthy) {
+        throw new Error('Local backend start for "a" timed out while waiting for a free slot.')
+      }
+
+      return call.method === 'bot_relay.outbox.drain' ? { envelopes: [] } : {}
+    })
+
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // First drain tick fails and arms the backoff.
+    await vi.advanceTimersByTimeAsync(RELAY_DRAIN_INTERVAL_MS)
+    const blockedTick = calls.filter(call => call.connectionId === 'a').length
+    expect(blockedTick).toBeGreaterThan(0)
+
+    healthy = true
+    // Ride out the backoff window, then confirm 'a' is dialed again and
+    // stays unblocked on the very next tick once it is healthy.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    calls.length = 0
+    await vi.advanceTimersByTimeAsync(RELAY_DRAIN_INTERVAL_MS)
+
+    expect(calls.some(call => call.connectionId === 'a' && call.method === 'bot_relay.outbox.drain')).toBe(true)
+
+    stopBotRelay()
+  })
 })
 
 describe('stop halts both loops', () => {

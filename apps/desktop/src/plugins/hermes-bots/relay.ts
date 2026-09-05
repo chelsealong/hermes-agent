@@ -207,10 +207,16 @@ async function relayConnections(): Promise<RelayConnection[]> {
  *  check (bot_relay._target_liveness) reads "absent from a fresh roster" as
  *  definitively offline → false runtime_offline refusals (#93091 item 2). */
 async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow[] | null> {
+  if (relayPollBlocked(connection.id)) {
+    return null
+  }
+
   try {
     const res = await host.requestProfile<{ profiles?: RosterRow[] }>(connection.route, 'profiles.list', {
       include_sessions: false
     })
+
+    notePollSuccess(connection.id)
 
     const profiles = Array.isArray(res?.profiles) ? res.profiles : []
     // TODO(bot-mode-types): neither `connectionLabel` nor `label` can exist on
@@ -230,6 +236,8 @@ async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow
       }))
       .filter(row => row.profile)
   } catch {
+    notePollFailure(connection.id)
+
     return null
   }
 }
@@ -242,6 +250,34 @@ async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow
  *  reach ids that stopped being fetched. */
 const RELAY_AGENTS_CACHE_MAX = 32
 const relayAgentsCache = new LruCache<string, RelayAgentRow[]>(RELAY_AGENTS_CACHE_MAX)
+
+/** Backoff for a connection's background poll RPCs (profiles.list,
+ *  bot_relay.roster.sync, bot_relay.outbox.drain) — never the on-demand
+ *  bot_relay.deliver path, which carries real user traffic and must always
+ *  be attempted. Without this, a route that requires spawning a local
+ *  backend against a full pool gets re-dialed on every 30s/60s tick forever:
+ *  each attempt blocks up to POOL_SLOT_WAIT_MS before failing, and the
+ *  failed spawn's teardown fans out another sessions.changed burst (#102913).
+ *  Doubles up to a 5-minute ceiling and resets the moment a poll succeeds. */
+const RELAY_POLL_BACKOFF_MAX_MS = 5 * 60_000
+const relayPollBackoff = new LruCache<string, { failures: number; nextAttemptAt: number }>(RELAY_AGENTS_CACHE_MAX)
+
+function relayPollBlocked(connectionId: string): boolean {
+  const state = relayPollBackoff.get(connectionId)
+
+  return state !== undefined && Date.now() < state.nextAttemptAt
+}
+
+function notePollSuccess(connectionId: string) {
+  relayPollBackoff.delete(connectionId)
+}
+
+function notePollFailure(connectionId: string) {
+  const failures = (relayPollBackoff.get(connectionId)?.failures || 0) + 1
+  const delay = Math.min(RELAY_DRAIN_INTERVAL_MS * 2 ** (failures - 1), RELAY_POLL_BACKOFF_MAX_MS)
+
+  relayPollBackoff.set(connectionId, { failures, nextAttemptAt: Date.now() + delay })
+}
 
 /** Push every gateway the union roster of agents on the OTHER connections. */
 async function syncRelayRosters() {
@@ -288,6 +324,10 @@ async function syncRelayRosters() {
 
     await Promise.all(
       connections.map(async connection => {
+        if (relayPollBlocked(connection.id)) {
+          return
+        }
+
         const others: RelayAgentRow[] = []
 
         for (const [id, agents] of agentsByConnection) {
@@ -300,8 +340,12 @@ async function syncRelayRosters() {
           await host.requestProfile(connection.route, 'bot_relay.roster.sync', {
             agents: others
           })
+          notePollSuccess(connection.id)
         } catch {
-          // Older backend without the relay RPCs — skip this connection.
+          // Older backend without the relay RPCs, or a connection whose
+          // route needs a backend the local pool has no room for — either
+          // way, back off instead of re-dialing next tick.
+          notePollFailure(connection.id)
         }
       })
     )
@@ -343,6 +387,10 @@ async function drainRelayOutboxes() {
     const byId = new Map(connections.map(connection => [connection.id, connection]))
 
     for (const sender of connections) {
+      if (relayPollBlocked(sender.id)) {
+        continue
+      }
+
       let envelopes: RelayEnvelope[] = []
 
       try {
@@ -352,8 +400,11 @@ async function drainRelayOutboxes() {
           {}
         )
 
+        notePollSuccess(sender.id)
         envelopes = Array.isArray(res?.envelopes) ? res.envelopes : []
       } catch {
+        notePollFailure(sender.id)
+
         continue
       }
 
