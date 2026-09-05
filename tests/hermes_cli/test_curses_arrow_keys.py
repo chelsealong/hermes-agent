@@ -225,7 +225,7 @@ def test_numbered_fallback_ctrl_c_dispatches_scoped_cancel(monkeypatch):
 
 
 def test_navigation_handler_programming_error_is_not_hidden_by_fallback(monkeypatch):
-    fake = FakeStdscr([13])
+    fake = ExhaustingStdscr([13])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(curses, "wrapper", lambda draw: draw(fake))
     monkeypatch.setattr(curses, "curs_set", lambda _value: None)
@@ -247,10 +247,10 @@ def test_navigation_handler_programming_error_is_not_hidden_by_fallback(monkeypa
 def test_standalone_model_flow_renders_previous_and_reopens_provider(monkeypatch):
     from hermes_cli import main as main_mod
 
-    provider_screen = FakeStdscr([13])
-    model_back_screen = FakeStdscr([curses.KEY_LEFT])
-    provider_reselect_screen = FakeStdscr([13])
-    model_select_screen = FakeStdscr([13])
+    provider_screen = ExhaustingStdscr([13])
+    model_back_screen = ExhaustingStdscr([curses.KEY_LEFT])
+    provider_reselect_screen = ExhaustingStdscr([13])
+    model_select_screen = ExhaustingStdscr([13])
     screens = [
         provider_screen,
         model_back_screen,
@@ -298,7 +298,7 @@ def test_radiolist_dispatches_contextual_back_navigation(monkeypatch):
         pass
 
     events = []
-    fake = FakeStdscr([curses.KEY_LEFT])
+    fake = ExhaustingStdscr([curses.KEY_LEFT])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(curses, "wrapper", lambda draw: draw(fake))
     monkeypatch.setattr(curses, "curs_set", lambda _value: None)
@@ -325,7 +325,10 @@ def test_radiolist_dispatches_contextual_escape_cancellation(monkeypatch):
     class Cancelled(BaseException):
         pass
 
-    fake = FakeStdscr([27])
+    # The trailing -1 is the scripted "no continuation byte" reply that a lone ESC's
+    # lookahead peek (``_decode_escape_sequence``) expects; without it ExhaustingStdscr
+    # would wrongly treat that legitimate peek as an unscripted extra ``getch()``.
+    fake = ExhaustingStdscr([27, -1])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(curses, "wrapper", lambda draw: draw(fake))
     monkeypatch.setattr(curses, "curs_set", lambda _value: None)
