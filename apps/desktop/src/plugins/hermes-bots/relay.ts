@@ -207,7 +207,7 @@ async function relayConnections(): Promise<RelayConnection[]> {
  *  check (bot_relay._target_liveness) reads "absent from a fresh roster" as
  *  definitively offline → false runtime_offline refusals (#93091 item 2). */
 async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow[] | null> {
-  if (relayPollBlocked(connection.id)) {
+  if (relayPollBlocked(connection.id, 'profiles.list')) {
     return null
   }
 
@@ -216,7 +216,7 @@ async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow
       include_sessions: false
     })
 
-    notePollSuccess(connection.id)
+    notePollSuccess(connection.id, 'profiles.list')
 
     const profiles = Array.isArray(res?.profiles) ? res.profiles : []
     // TODO(bot-mode-types): neither `connectionLabel` nor `label` can exist on
@@ -236,7 +236,7 @@ async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow
       }))
       .filter(row => row.profile)
   } catch {
-    notePollFailure(connection.id)
+    notePollFailure(connection.id, 'profiles.list')
 
     return null
   }
@@ -258,25 +258,40 @@ const relayAgentsCache = new LruCache<string, RelayAgentRow[]>(RELAY_AGENTS_CACH
  *  backend against a full pool gets re-dialed on every 30s/60s tick forever:
  *  each attempt blocks up to POOL_SLOT_WAIT_MS before failing, and the
  *  failed spawn's teardown fans out another sessions.changed burst (#102913).
- *  Doubles up to a 5-minute ceiling and resets the moment a poll succeeds. */
+ *  Doubles up to a 5-minute ceiling and resets the moment a poll succeeds.
+ *
+ *  Keyed by (connectionId, method) rather than connectionId alone: an older
+ *  backend permanently lacking bot_relay.roster.sync/outbox.drain but still
+ *  answering profiles.list fine is an already-supported degraded mode (see
+ *  the header comment above), not the pool-contention case this backoff
+ *  targets. A shared per-connection bucket would let the permanently-failing
+ *  RPCs arm a backoff that then starves the still-working one indefinitely. */
 const RELAY_POLL_BACKOFF_MAX_MS = 5 * 60_000
-const relayPollBackoff = new LruCache<string, { failures: number; nextAttemptAt: number }>(RELAY_AGENTS_CACHE_MAX)
 
-function relayPollBlocked(connectionId: string): boolean {
-  const state = relayPollBackoff.get(connectionId)
+const relayPollBackoff = new LruCache<string, { failures: number; nextAttemptAt: number }>(
+  RELAY_AGENTS_CACHE_MAX * 3
+)
+
+function relayPollKey(connectionId: string, method: string): string {
+  return `${connectionId}::${method}`
+}
+
+function relayPollBlocked(connectionId: string, method: string): boolean {
+  const state = relayPollBackoff.get(relayPollKey(connectionId, method))
 
   return state !== undefined && Date.now() < state.nextAttemptAt
 }
 
-function notePollSuccess(connectionId: string) {
-  relayPollBackoff.delete(connectionId)
+function notePollSuccess(connectionId: string, method: string) {
+  relayPollBackoff.delete(relayPollKey(connectionId, method))
 }
 
-function notePollFailure(connectionId: string) {
-  const failures = (relayPollBackoff.get(connectionId)?.failures || 0) + 1
+function notePollFailure(connectionId: string, method: string) {
+  const key = relayPollKey(connectionId, method)
+  const failures = (relayPollBackoff.get(key)?.failures || 0) + 1
   const delay = Math.min(RELAY_DRAIN_INTERVAL_MS * 2 ** (failures - 1), RELAY_POLL_BACKOFF_MAX_MS)
 
-  relayPollBackoff.set(connectionId, { failures, nextAttemptAt: Date.now() + delay })
+  relayPollBackoff.set(key, { failures, nextAttemptAt: Date.now() + delay })
 }
 
 /** Push every gateway the union roster of agents on the OTHER connections. */
@@ -324,7 +339,7 @@ async function syncRelayRosters() {
 
     await Promise.all(
       connections.map(async connection => {
-        if (relayPollBlocked(connection.id)) {
+        if (relayPollBlocked(connection.id, 'bot_relay.roster.sync')) {
           return
         }
 
@@ -340,12 +355,14 @@ async function syncRelayRosters() {
           await host.requestProfile(connection.route, 'bot_relay.roster.sync', {
             agents: others
           })
-          notePollSuccess(connection.id)
+          notePollSuccess(connection.id, 'bot_relay.roster.sync')
         } catch {
           // Older backend without the relay RPCs, or a connection whose
           // route needs a backend the local pool has no room for — either
-          // way, back off instead of re-dialing next tick.
-          notePollFailure(connection.id)
+          // way, back off instead of re-dialing next tick. Backoff is keyed
+          // to this RPC alone so it never blocks this same connection's
+          // profiles.list/outbox.drain polls.
+          notePollFailure(connection.id, 'bot_relay.roster.sync')
         }
       })
     )
@@ -387,7 +404,7 @@ async function drainRelayOutboxes() {
     const byId = new Map(connections.map(connection => [connection.id, connection]))
 
     for (const sender of connections) {
-      if (relayPollBlocked(sender.id)) {
+      if (relayPollBlocked(sender.id, 'bot_relay.outbox.drain')) {
         continue
       }
 
@@ -400,10 +417,10 @@ async function drainRelayOutboxes() {
           {}
         )
 
-        notePollSuccess(sender.id)
+        notePollSuccess(sender.id, 'bot_relay.outbox.drain')
         envelopes = Array.isArray(res?.envelopes) ? res.envelopes : []
       } catch {
-        notePollFailure(sender.id)
+        notePollFailure(sender.id, 'bot_relay.outbox.drain')
 
         continue
       }

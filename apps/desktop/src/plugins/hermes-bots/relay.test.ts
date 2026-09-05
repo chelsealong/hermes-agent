@@ -54,6 +54,7 @@ vi.mock('./data', () => ({
 
 const RELAY_PUSH_DEBOUNCE_MS = 250
 const RELAY_DRAIN_INTERVAL_MS = 30_000
+const RELAY_ROSTER_INTERVAL_MS = 60_000
 
 const route = (id: string): ProfileRoute => ({
   connectionId: id,
@@ -659,6 +660,36 @@ describe('the drain loop wires drain → deliver → reply', () => {
     await vi.advanceTimersByTimeAsync(RELAY_DRAIN_INTERVAL_MS)
 
     expect(calls.some(call => call.connectionId === 'a' && call.method === 'bot_relay.outbox.drain')).toBe(true)
+
+    stopBotRelay()
+  })
+
+  it('does not let a permanently-failing RPC starve a healthy one on the same connection', async () => {
+    // 'a' is an older backend (see the header comment's degraded mode): it
+    // permanently lacks bot_relay.roster.sync/outbox.drain but still answers
+    // profiles.list fine, so its bots must stay discoverable to 'b' via the
+    // union roster. Backoff on the two failing RPCs must never gate the
+    // still-working one.
+    const calls = respondWith(call => {
+      if (call.connectionId === 'a' && call.method !== 'profiles.list') {
+        throw new Error('unknown method')
+      }
+
+      return call.method === 'bot_relay.outbox.drain' ? { envelopes: [] } : {}
+    })
+
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(0)
+    calls.length = 0
+
+    // 10 minutes at the 60s roster cadence is 10 ticks.
+    await vi.advanceTimersByTimeAsync(10 * RELAY_ROSTER_INTERVAL_MS)
+
+    const profilesListOnA = calls.filter(call => call.connectionId === 'a' && call.method === 'profiles.list')
+
+    expect(profilesListOnA).toHaveLength(10)
 
     stopBotRelay()
   })
