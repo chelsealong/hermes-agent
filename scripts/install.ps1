@@ -2579,6 +2579,13 @@ function Install-Venv {
     $venvBackupName = $null
     $venvParked = $false
     try {
+    # A previous Install-Venv attempt may have parked the original working
+    # venv and never reached Install-Dependencies' commit/rollback (the
+    # stage host was interrupted before dependencies ran). That marker's
+    # target is the only generation that ever passed validation; whatever is
+    # currently named "venv" is this attempt's unvalidated replacement, not a
+    # second rollback source (#103751).
+    $priorPendingBackup = Get-PendingVenvBackup
     if (Test-Path -LiteralPath "venv") {
         $venvHadExistingVenv = $true
         Write-Info "Virtual environment already exists, recreating..."
@@ -2683,6 +2690,16 @@ function Install-Venv {
                 "python.exe that resolved into this venv via PATH). Close those " +
                 "processes and retry - the previous install was left intact."
             )
+        }
+        if ($priorPendingBackup) {
+            # The venv we just parked was never validated by
+            # Install-Dependencies -- it is disposable, not a rollback
+            # source. Point every downstream use of $venvBackupName (the
+            # marker write, the stale-tree sweep exclusion, and the failure
+            # rollback below) at the original pending backup instead, so the
+            # unvalidated replacement is swept like any other stale tree and
+            # the verified original is never overwritten or deleted.
+            $venvBackupName = $priorPendingBackup
         }
     }
     
