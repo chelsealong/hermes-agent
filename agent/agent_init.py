@@ -245,6 +245,10 @@ def _normalized_custom_base_url(value: Any) -> str:
 
 def _custom_provider_model_matches(agent_model: str, entry: Dict[str, Any]) -> bool:
     agent_model_norm = str(agent_model or "").strip().lower()
+    # Desktop/TUI can build the agent before a session model string is resolved — an unknown
+    # model must not block provider-level extra_body (e.g. a required proxy `user` field).
+    if not agent_model_norm:
+        return True
     # Multi-model entries (`providers.<name>.models` mapping / legacy `models:` list):
     # matching ANY catalog entry counts, else a provider whose `model` differs from the
     # session model drops its extra_body (e.g. OpenAI service_tier) → wrong billing tier.
@@ -260,12 +264,20 @@ def _custom_provider_extra_body_for_agent(
     *, provider: str, model: str, base_url: str, custom_providers: List[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
     provider_norm = (provider or "").strip().lower()
-    if provider_norm != "custom" and not provider_norm.startswith("custom:"):
-        return None
-    provider_key_filter = provider_norm.partition(":")[2].strip()
     target_url = _normalized_custom_base_url(base_url)
     if not target_url:
         return None
+    # Desktop/TUI often build the agent with an empty/"auto" provider (or the catalog name
+    # without a "custom:" prefix) even though base_url is a configured custom endpoint — match
+    # on URL alone there. A named provider ("custom:<name>" or a bare catalog name like
+    # "openrouter") still filters by name/provider_key so it never inherits a differently
+    # named entry that happens to share the URL.
+    if provider_norm in ("", "custom", "auto"):
+        provider_key_filter = ""
+    elif provider_norm.startswith("custom:"):
+        provider_key_filter = provider_norm.partition(":")[2].strip()
+    else:
+        provider_key_filter = provider_norm
 
     fallback: Optional[Dict[str, Any]] = None
     for entry in custom_providers or []:
