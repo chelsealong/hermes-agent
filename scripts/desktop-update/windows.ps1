@@ -105,9 +105,10 @@ function Write-HandoffLog([string]$Message) {
 # spike (Co-authored-by: teknium1), reshaped to the quiet update-surface
 # contract (#75895/#83634): loader, one title, one line, no dashboard.
 $script:UiState = [hashtable]::Synchronized(@{
-    status     = "running"      # running | done | manual | error
-    message    = $script:UiStage
-    clock      = $script:UiStopwatch
+    status       = "running"      # running | done | manual | error
+    message      = $script:UiStage
+    clock        = $script:UiStopwatch
+    servedStatus = $null          # last status the runspace actually served
 })
 $script:UiServer = $null     # @{ Listener; Runspace; PowerShell; Port; BrowserProc; Profile }
 
@@ -191,13 +192,17 @@ function Start-UiServer([string]$HtmlPath) {
                     # Drain headers so the client doesn't see a reset mid-send.
                     while ($true) { $h = $reader.ReadLine(); if ($null -eq $h -or $h -eq "") { break } }
                     if ($request -match "^GET /progress") {
+                        $statusNow = $State.status
                         $elapsed = [Math]::Floor($State.clock.Elapsed.TotalSeconds)
                         $snapshot = @{
-                            status          = $State.status
+                            status          = $statusNow
                             message         = $State.message
                             elapsed_seconds = $elapsed
                         } | ConvertTo-Json -Compress
                         Send-Response $stream "200 OK" "application/json; charset=utf-8" ([System.Text.Encoding]::UTF8.GetBytes($snapshot))
+                        # Record what actually reached a client so Publish-UiEvent can
+                        # wait for delivery instead of guessing a fixed delay (#103747).
+                        $State.servedStatus = $statusNow
                     } elseif ($request -match "^GET / ") {
                         Send-Response $stream "200 OK" "text/html; charset=utf-8" $HtmlBytes
                     } else {
@@ -283,11 +288,23 @@ function Stop-UiServer([switch]$LeaveWindow) {
 }
 
 function Publish-UiEvent([string]$Status, [string]$Message) {
-    # The event the shim listens for. One beat of poll latency (400ms) before
-    # teardown so the page actually renders the terminal state.
+    # The event the shim listens for. A fixed 900ms delay before teardown
+    # assumed a poll (every 400ms) always lands inside that window. A
+    # backgrounded tab, a slow connection, or a busy scheduler can miss it;
+    # once the listener is torn down every later poll fails forever and the
+    # page holds "Updating Hermes" indefinitely even though the update
+    # finished (#103747). Wait for actual delivery instead of guessing: poll
+    # servedStatus until a client has been served this terminal status, up to
+    # a bounded ceiling so a crashed/closed browser can't hang the hand-off.
     $script:UiState.message = $Message
     $script:UiState.status = $Status
-    if ($script:UiServer) { Start-Sleep -Milliseconds 900 }
+    if ($script:UiServer) {
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(8000)
+        while ($script:UiState.servedStatus -ne $Status -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        Start-Sleep -Milliseconds 200
+    }
 }
 
 function Get-UiElapsedText {
