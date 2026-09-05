@@ -120,6 +120,17 @@ describe('the catalog owns model curation', () => {
 
     expect($modelVisibilityOpen.get()).toBe(true)
   })
+
+  // The heading must read as a heading (accent hue), not one luminance rung
+  // below the model rows it groups — see issue #103432.
+  it('gives the provider heading the accent color, not the model rows tone', async () => {
+    renderMenu()
+    await screen.findByText(/Gemini 3\.1 Pro/i)
+
+    const heading = screen.getByText('Google').closest('[role="menuitem"]')
+
+    expect(heading?.className).toContain('text-(--ui-accent)')
+  })
 })
 
 describe('in-flight local downloads', () => {
