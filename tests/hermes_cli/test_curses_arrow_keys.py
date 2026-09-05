@@ -167,7 +167,7 @@ def test_enhanced_control_keys_dispatch_while_search_is_active(
     class NavigationDispatched(Exception):
         pass
 
-    fake = FakeStdscr([ord("/"), ord("g"), *enhanced_keys])
+    fake = ExhaustingStdscr([ord("/"), ord("g"), *enhanced_keys])
     events = []
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(curses, "wrapper", lambda draw: draw(fake))
