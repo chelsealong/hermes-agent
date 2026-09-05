@@ -323,6 +323,29 @@ class TestPreloadResumedSession:
         assert "safe resume limit is 20000" in output.getvalue()
         mock_db.get_resume_conversations.assert_not_called()
 
+    def test_title_with_rich_markup_does_not_crash(self):
+        """Regression: a stored session title containing Rich markup characters
+        (e.g. produced by the /plan slash command: "[/plan — plan mode]") must
+        not raise rich.errors.MarkupError when the resume status line is printed."""
+        cli = _make_cli(resume="markup_title_session")
+        messages = [{"role": "user", "content": "hi"}]
+        mock_db = MagicMock()
+        mock_db.get_session.return_value = {
+            "id": "markup_title_session",
+            "title": "[/plan — plan mode]",
+        }
+        mock_db.get_resume_conversations.return_value = (messages, messages)
+        mock_db.resolve_resume_session_id.return_value = "markup_title_session"
+        cli._session_db = mock_db
+
+        buf = StringIO()
+        cli.console.file = buf
+        result = cli._preload_resumed_session()
+
+        assert result is True
+        output = buf.getvalue()
+        assert "plan mode" in output
+
     def test_tip_only_guard_goes_through_the_shared_resume_guard(self):
         """The mid-setup path loads only the tip, so it asks the ONE resume
         guard for a tip-only bound instead of borrowing the export guard."""
