@@ -65,3 +65,31 @@ def test_multiplex_gateway_routes_profile_records_to_their_own_logs(
         assert not _contains(default_home, filename, "BETA-GATEWAY-WARN"), filename
     assert _contains(default_home, "gateway.log", "DEFAULT-GATEWAY-INFO")
     assert not _contains(beta_home, "gateway.log", "DEFAULT-GATEWAY-INFO")
+
+
+def test_deleted_profile_does_not_loop_filenotfounderror(tmp_path, monkeypatch, clean_logging, capsys):
+    """#103777: a profile deleted after routing was enabled must fall back to the
+    default log instead of repeatedly raising FileNotFoundError trying to recreate
+    its tombstoned ``logs/`` directory."""
+    from hermes_constants import mark_named_profile_deleted
+
+    default_home = tmp_path / "default"
+    beta_home = tmp_path / "default" / "profiles" / "beta"
+    beta_home.mkdir(parents=True)
+    homes = [("default", default_home), ("beta", beta_home)]
+    monkeypatch.setattr(run, "_multiplex_profile_homes", lambda _cfg: homes)
+
+    hermes_logging.setup_logging(hermes_home=default_home, mode="gateway")
+    assert run._enable_multiplex_log_routing(types.SimpleNamespace(multiplex_profiles=True)) is True
+
+    # Profile is deleted (tombstoned) before the router ever writes to it.
+    mark_named_profile_deleted(beta_home)
+
+    _emit_under(beta_home, "gateway.run", logging.WARNING, "BETA-AFTER-DELETE")
+    hermes_logging.flush_log_queue()
+
+    assert not (beta_home / "logs").exists()
+    assert _contains(default_home, "gateway.log", "BETA-AFTER-DELETE")
+    err = capsys.readouterr().err
+    assert "FileNotFoundError" not in err
+    assert "Logging error" not in err

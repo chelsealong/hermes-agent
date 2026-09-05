@@ -35,7 +35,9 @@ else:
     from logging.handlers import RotatingFileHandler  # noqa: E402
 
 
-from hermes_constants import get_config_path, get_hermes_home, mkdir_under_hermes_home
+from hermes_constants import (
+    get_config_path, get_hermes_home, mkdir_under_hermes_home, named_profile_is_deleted,
+)
 
 # setup_logging() is idempotent: a second call is a no-op unless ``force=True``.
 _logging_initialized = False
@@ -383,7 +385,14 @@ class _ProfileRoutingFileHandler(logging.Handler):
             candidate = Path(raw_home).expanduser().resolve()
         except (TypeError, ValueError, OSError):
             candidate = self._default_home
-        return candidate if candidate in self._profile_homes else self._default_home
+        if candidate not in self._profile_homes:
+            return self._default_home
+        # `profile_homes` is fixed at startup; a profile deleted afterward (tombstoned
+        # or its tree removed) must not be re-created by routing a record to it.
+        if candidate not in self._profile_handlers and (
+                named_profile_is_deleted(candidate) or not candidate.exists()):
+            return self._default_home
+        return candidate
 
     def _handler_for_home(self, home: Path) -> _ManagedRotatingFileHandler:
         with self._profile_handlers_lock:
