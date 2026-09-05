@@ -93,7 +93,7 @@ def progress(tmp_path):
 
         class Progress:
             def publish(self, state: str, message: str) -> None:
-                status.write_text(json.dumps({"status": state, "message": message}))
+                status.write_text(json.dumps({"status": state, "message": message}), encoding="utf-8")
 
             @property
             def url(self) -> str:
@@ -110,7 +110,7 @@ def test_done_status_sets_the_terminal_heading(tmp_path, progress) -> None:
     progress.publish("done", "")
 
     harness = tmp_path / "harness.js"
-    harness.write_text(_HARNESS)
+    harness.write_text(_HARNESS, encoding="utf-8")
     result = subprocess.run(
         ["node", str(harness), progress.url],
         capture_output=True,
