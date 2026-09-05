@@ -15,6 +15,7 @@ Pins the contract:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -238,6 +239,54 @@ class TestCleanStreamEndMidToolCall:
         assert getattr(response, "_dropped_tool_names", None) == ["execute_code"]
 
 
+class TestRepetitionDominatedToolArgsRoutedToStub:
+    """A tool call's arguments can be well-formed JSON while the payload itself
+    is a degenerate repetition loop (#103599, real incident: a heredoc command
+    whose body degenerated into thousands of tokens of one repeated phrase).
+    ``json.loads`` succeeds, so the truncated-JSON repair branch never fires —
+    without a repetition check on the parsed-clean argument string, this would
+    be dispatched and executed as-is instead of being treated as a dropped
+    tool call.
+    """
+
+    @patch("run_agent.AIAgent._create_request_openai_client")
+    @patch("run_agent.AIAgent._close_request_openai_client")
+    def test_repetition_dominated_valid_json_args_routes_to_stub(
+        self, _mock_close, mock_create, monkeypatch,
+    ):
+        _degenerate_command = "peace out yo wassup amen shalom salaam " * 30
+        _arguments = json.dumps({"command": _degenerate_command})
+
+        def _clean_ending_stream():
+            yield _make_stream_chunk(tool_calls=[
+                _make_tool_call_delta(index=0, tc_id="call_x", name="terminal"),
+            ])
+            yield _make_stream_chunk(tool_calls=[
+                _make_tool_call_delta(index=0, arguments=_arguments),
+            ])
+            # falls off the end — clean close, no finish_reason chunk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = (
+            lambda *a, **kw: _clean_ending_stream()
+        )
+        mock_create.return_value = mock_client
+
+        agent = _make_agent()
+        agent._fire_stream_delta = lambda text: None
+
+        response = agent._interruptible_streaming_api_call({})
+
+        assert response.id == PARTIAL_STREAM_STUB_ID, (
+            "Repetition-dominated tool-call arguments must be treated as a "
+            "dropped tool call, not dispatched for execution just because "
+            "the JSON happened to parse cleanly."
+        )
+        assert response.choices[0].finish_reason == FINISH_REASON_LENGTH
+        assert response.choices[0].message.tool_calls is None, (
+            "Degenerate repeated-content tool arguments must never auto-execute."
+        )
+        assert getattr(response, "_dropped_tool_names", None) == ["terminal"]
 
 
 # ── Clean stream-end before any argument byte arrives (#80498) ─────────────

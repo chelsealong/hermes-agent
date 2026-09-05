@@ -38,6 +38,7 @@ from agent.message_content import flatten_message_text
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.message_sanitization import (_sanitize_surrogates, _repair_tool_call_arguments)
 from agent.reasoning_summaries import separate_glued_reasoning_blocks
+from agent.repetition_guard import is_repetition_dominated
 from agent.stream_single_writer import claim_stream_writer, stream_writer_is_current
 from tools.terminal_tool_lifecycle import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
@@ -3061,6 +3062,16 @@ class _StreamingCall:
                     if repaired != "{}":
                         arguments = repaired
                     else:
+                        has_truncated_tool_args = True
+                else:
+                    if is_repetition_dominated(arguments):
+                        # Valid JSON but the payload is a degenerate repetition loop
+                        # (#103599): dispatching it would execute garbage instead of
+                        # retrying/aborting through the truncated-tool-call path.
+                        logger.warning(
+                            "Tool call '%s' arguments are repetition-dominated (degenerate "
+                            "model output); treating as a dropped tool call instead of executing.",
+                            tc["function"]["name"] or "?")
                         has_truncated_tool_args = True
             elif finish_reason is None:
                 # Name arrived, zero arg bytes, no finish_reason: unflagged this
