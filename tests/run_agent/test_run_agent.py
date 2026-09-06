@@ -54,6 +54,30 @@ def test_is_destructive_command_treats_cp_as_mutating():
     assert _is_destructive_command("cp .env.local .env") is True
 
 
+def test_wrap_verbose_preserves_bytes_when_stdout_is_not_a_tty(monkeypatch):
+    """Piped/redirected stdout (e.g. the kanban dispatcher's per-task log file, opened as
+    ``stdout=log_f`` in kanban_db_dispatch.py) must get the tool result back byte-for-byte —
+    reflowing it for a terminal width nobody is reading breaks exact-string evidence capture
+    (issue #103936)."""
+    sentinel = "X" * 60 + "BASE_OFFSET=35542" + "Y" * 60
+    long_line = f"prefix {sentinel} suffix"
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    result = AIAgent._wrap_verbose("Result: ", long_line)
+    assert "BASE_OFFSET=35542" in result
+    assert long_line in result
+
+
+def test_wrap_verbose_still_wraps_for_a_real_terminal(monkeypatch):
+    """Interactive terminals keep the existing cosmetic reflow behavior."""
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("shutil.get_terminal_size", lambda *_a, **_kw: SimpleNamespace(columns=40, lines=24))
+    long_line = "word " * 40
+    result = AIAgent._wrap_verbose("Result: ", long_line)
+    assert "BASE_OFFSET" not in result
+    assert long_line not in result
+    assert len(result.splitlines()) > 1
+
+
 
 
 

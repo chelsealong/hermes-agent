@@ -1313,7 +1313,17 @@ class AIAgent(
     @staticmethod
     def _wrap_verbose(label: str, text: str, indent: str = "     ") -> str:
         """Word-wrap verbose tool output to the terminal width (each existing line separately), continuation
-        lines indented."""
+        lines indented. Skipped when stdout isn't a real terminal (piped/redirected, e.g. the kanban
+        dispatcher's per-task log file) so byte-exact evidence capture never gets corrupted by a
+        cosmetic reflow meant for humans watching a live terminal."""
+        import sys
+        try:
+            is_tty = sys.stdout.isatty()
+        except (AttributeError, ValueError, OSError):
+            is_tty = False
+        if not is_tty:
+            out_lines = text.split("\n")
+            return f"{indent}{label}" + ("\n" + indent).join(out_lines)
         import shutil, textwrap
         wrap_width = max(40, shutil.get_terminal_size((120, 24)).columns - len(indent))
         out_lines: list[str] = []
