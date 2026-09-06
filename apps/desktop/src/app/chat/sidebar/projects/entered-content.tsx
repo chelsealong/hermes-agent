@@ -22,7 +22,8 @@ import {
   overlayRepoLanes,
   type SidebarProjectTree,
   type SidebarSessionGroup,
-  type SidebarWorkspaceTree
+  type SidebarWorkspaceTree,
+  visibleWorktreeGroups
 } from './workspace-groups'
 import { WorkspaceAddButton, WorkspaceHeader } from './workspace-header'
 
@@ -120,23 +121,11 @@ function RepoFlatSection({
     return mergeRepoWorktreeGroups({ id: repo.id, path: repo.path, groups }, discoveredWorktrees)
   }, [repo, mergedGroups, discoveredWorktrees, liveSessions, removedSessionIds])
 
-  const discoveredWorktreePaths = useMemo(
-    () =>
-      new Set(
-        (discoveredWorktrees ?? [])
-          .map(worktree => worktree.path?.trim())
-          .filter((path): path is string => Boolean(path))
-      ),
-    [discoveredWorktrees]
-  )
-
   // Main lanes are always visible; linked worktrees can be user-dismissed.
-  // A live `git worktree list` hit wins over an old dismissal: if git says the
-  // worktree exists again (or still exists after "hide from sidebar"), surface it.
-  const ordered = overlaidGroups.filter(
-    group =>
-      group.isMain || !dismissedWorktrees.includes(group.id) || (group.path && discoveredWorktreePaths.has(group.path))
-  )
+  // Dismissal always wins, even while the worktree is still on disk — that's
+  // the whole point of "hide from sidebar, leave the worktree alone". Recovery
+  // goes through restoreWorktree (wired to explicitly opening a session there).
+  const ordered = visibleWorktreeGroups(overlaidGroups, dismissedWorktrees)
 
   // Removal asks how: actually `git worktree remove` it, or just hide the lane
   // and leave the worktree on disk. A dirty worktree escalates to a force prompt

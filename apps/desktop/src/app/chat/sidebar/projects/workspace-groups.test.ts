@@ -17,7 +17,8 @@ import {
   sessionProjectColor,
   type SidebarProjectTree,
   type SidebarSessionGroup,
-  sortWorktreeGroups
+  sortWorktreeGroups,
+  visibleWorktreeGroups
 } from './workspace-groups'
 
 // The grouping itself now lives on the backend (tui_gateway/project_tree.py,
@@ -82,6 +83,26 @@ describe('sortWorktreeGroups', () => {
     const groups = [lane({ id: 'b', label: 'beta', isMain: false }), lane({ id: 'a', label: 'alpha', isMain: false })]
 
     expect(sortWorktreeGroups(groups).map(g => g.label)).toEqual(['alpha', 'beta'])
+  })
+})
+
+describe('visibleWorktreeGroups', () => {
+  const main = lane({ id: '/repo::branch::main', label: 'main', isMain: true, path: '/repo' })
+  const wt = lane({ id: '/repo-wt', label: 'feature', path: '/repo-wt' })
+
+  it('always shows main lanes, dismissed or not', () => {
+    expect(visibleWorktreeGroups([main], [main.id]).map(g => g.id)).toEqual([main.id])
+  })
+
+  it('shows a lane that was never dismissed', () => {
+    expect(visibleWorktreeGroups([wt], []).map(g => g.id)).toEqual([wt.id])
+  })
+
+  it('keeps a dismissed lane hidden even though its worktree still exists on disk (the reported bug)', () => {
+    // "Hide from sidebar, leave the worktree on disk" is a no-op if the lane
+    // resurfaces just because the worktree is still there — that IS the state
+    // every such dismissal is made in.
+    expect(visibleWorktreeGroups([wt], [wt.id])).toEqual([])
   })
 })
 

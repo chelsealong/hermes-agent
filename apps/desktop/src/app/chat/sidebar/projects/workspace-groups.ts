@@ -171,6 +171,20 @@ export function sortWorktreeGroups(groups: SidebarSessionGroup[]): SidebarSessio
 }
 
 /**
+ * Linked-worktree lane visibility. Main lanes always show; a dismissed linked
+ * worktree stays hidden even if it's still live on disk — a live `git worktree
+ * list` hit isn't grounds to override an explicit dismissal, since a "hide
+ * from sidebar, leave it on disk" dismissal is by definition made against a
+ * lane that still exists. Recovery is `restoreWorktree`, not re-discovery.
+ */
+export function visibleWorktreeGroups(
+  groups: SidebarSessionGroup[],
+  dismissedIds: readonly string[]
+): SidebarSessionGroup[] {
+  return groups.filter(group => group.isMain || !dismissedIds.includes(group.id))
+}
+
+/**
  * VISUAL enhancer only: inject empty lanes from a live `git worktree list` so a
  * repo shows its branches/worktrees even when they have no Hermes sessions yet.
  * The repo's real session lanes already come fully built from the backend
