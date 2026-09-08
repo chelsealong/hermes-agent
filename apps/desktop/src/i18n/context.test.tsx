@@ -95,6 +95,28 @@ describe('I18nProvider', () => {
     expect(configClient.saveConfig).not.toHaveBeenCalled()
   })
 
+  it('recovers the persisted locale after a transient config load failure', async () => {
+    const configClient: I18nConfigClient = {
+      getConfig: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('gateway not connected'))
+        .mockResolvedValueOnce({ display: { language: 'zh' } }),
+      saveConfig: vi.fn()
+    }
+
+    render(
+      <I18nProvider configClient={configClient}>
+        <LanguageProbe />
+      </I18nProvider>
+    )
+
+    await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'), { timeout: 5000 })
+
+    expect(configClient.getConfig).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('locale').textContent).toBe('zh')
+    expect(screen.getByTestId('label').textContent).toBe('语言')
+  })
+
   it('loads zh-hant from display.language config', async () => {
     const configClient: I18nConfigClient = {
       getConfig: vi.fn().mockResolvedValue({ display: { language: 'zh-TW' } }),

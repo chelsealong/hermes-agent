@@ -57,6 +57,15 @@ function toError(error: unknown): Error {
 
 const RTL_LOCALES = new Set<Locale>(['ar'])
 
+// A config fetch that races the backend coming up after `hermes update`'s
+// relaunch (or any other transient reconnect window) rejects rather than
+// resolving with stale data (HermesGateway surfaces "not connected"/timeout
+// errors, see api/client.ts). Retrying a bounded number of times gives that
+// window a chance to close before giving up and pinning the locale to
+// DEFAULT_LOCALE for the rest of the session.
+const CONFIG_LOAD_MAX_ATTEMPTS = 3
+const CONFIG_LOAD_RETRY_DELAY_MS = 300
+
 function applyDocumentLocale(locale: Locale) {
   if (typeof document === 'undefined') {
     return
@@ -113,31 +122,44 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
     }
 
     let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
 
     setIsLoadingConfig(true)
     setConfigLoadError(null)
 
-    configClient
-      .getConfig()
-      .then(config => {
-        if (!cancelled) {
+    const attemptLoad = (attempt: number) => {
+      configClient
+        .getConfig()
+        .then(config => {
+          if (cancelled) {
+            return
+          }
+
           setLocaleState(normalizeLocale(getConfigDisplayLanguage(config)))
-        }
-      })
-      .catch(error => {
-        if (!cancelled) {
+          setIsLoadingConfig(false)
+        })
+        .catch(error => {
+          if (cancelled) {
+            return
+          }
+
+          if (attempt < CONFIG_LOAD_MAX_ATTEMPTS - 1) {
+            retryTimer = setTimeout(() => attemptLoad(attempt + 1), CONFIG_LOAD_RETRY_DELAY_MS * (attempt + 1))
+
+            return
+          }
+
           setConfigLoadError(toError(error))
           setLocaleState(DEFAULT_LOCALE)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setIsLoadingConfig(false)
-        }
-      })
+        })
+    }
+
+    attemptLoad(0)
 
     return () => {
       cancelled = true
+      clearTimeout(retryTimer)
     }
   }, [configClient, initialLocale])
 
