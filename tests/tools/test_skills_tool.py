@@ -2,7 +2,7 @@
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 import pytest
@@ -375,6 +375,28 @@ class TestSkillView:
         # The skill view advertises what else can be opened.
         assert skill["linked_files"] is not None
         assert "references" in skill["linked_files"]
+
+    def test_view_path_field_uses_posix_separators_on_windows(self, tmp_path, monkeypatch):
+        """`result["path"]` must stay POSIX even when relative_to() returns
+        OS-native (backslash) separators, as it does on Windows.
+
+        `Path.relative_to()` is patched to return `PureWindowsPath` — which
+        renders with backslashes regardless of host OS — to reproduce the
+        Windows behavior deterministically on any platform.
+        """
+        real_relative_to = Path.relative_to
+
+        def windows_relative_to(self, *args, **kwargs):
+            return PureWindowsPath(*real_relative_to(self, *args, **kwargs).parts)
+
+        monkeypatch.setattr(Path, "relative_to", windows_relative_to)
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "my-skill", category="devops")
+            result = json.loads(skill_view("my-skill"))
+
+        assert result["success"] is True
+        assert result["path"] == "devops/my-skill/SKILL.md"
 
     def test_view_file_path_directory_returns_available_files(self, tmp_path):
         """Requesting a directory (e.g. 'references') must not raise.
@@ -969,3 +991,30 @@ class TestSkillViewCollisionDetection:
         assert result["success"] is False
         assert "Ambiguous" in result["error"]
         assert len(result["matches"]) == 2
+
+
+class TestAvailableSkillFilesWindowsSeparators:
+    """`_available_skill_files()` groups files by the first path component
+    of the relative path. `Path.relative_to()` returns OS-native separators,
+    so on Windows a nested file's relative path uses backslashes and never
+    matches the `"/"` split, misrouting it into the "other" group.
+    """
+
+    def test_groups_by_support_dir_even_with_backslash_separators(self, tmp_path, monkeypatch):
+        from tools.skills_tool_plugin import _available_skill_files
+
+        skill_dir = tmp_path / "my-skill"
+        refs_dir = skill_dir / "references"
+        refs_dir.mkdir(parents=True)
+        (refs_dir / "api.md").write_text("# API")
+
+        real_relative_to = Path.relative_to
+
+        def windows_relative_to(self, *args, **kwargs):
+            return PureWindowsPath(*real_relative_to(self, *args, **kwargs).parts)
+
+        monkeypatch.setattr(Path, "relative_to", windows_relative_to)
+
+        groups = _available_skill_files(skill_dir)
+
+        assert groups == {"references": ["references/api.md"]}
