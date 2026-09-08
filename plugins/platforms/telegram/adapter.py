@@ -314,6 +314,32 @@ def _rich_normalize_linebreaks(text: str) -> str:
     return ''.join(out)
 
 
+# Bot API 10.1's rich-message parser promotes a bare leading ``#`` run to a heading even with no
+# trailing space, unlike CommonMark ATX headings (which require one). Literal references such as
+# ``#89`` or ``- #181 ...`` hit this and lose their ``#`` to heading styling (#105483).
+_RICH_LITERAL_HASH_RE = re.compile(r'^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)?(#{1,6})(?!#)(?=\S)', re.MULTILINE)
+
+
+def _rich_escape_literal_hashes(text: str) -> str:
+    """Escape a non-ATX leading ``#`` (no space after it) so sendRichMessage can't promote a literal
+    reference like ``#89`` to a heading. Genuine headings (space after the hashes) are untouched, as are
+    fenced code and pipe tables, which sendRichMessage renders natively."""
+    if not text or '#' not in text:
+        return text
+
+    def _escape(m: "re.Match[str]") -> str:
+        return (m.group(1) or '') + '\\' + m.group(2)
+
+    out: list[str] = []
+    pos = 0
+    for m in _RICH_PROTECTED_REGION_RE.finditer(text):
+        out.append(_RICH_LITERAL_HASH_RE.sub(_escape, text[pos:m.start()]))
+        out.append(m.group(0))  # protected region kept verbatim
+        pos = m.end()
+    out.append(_RICH_LITERAL_HASH_RE.sub(_escape, text[pos:]))
+    return ''.join(out)
+
+
 # Internal safety bounds (not user knobs): no reconnect/teardown path may hang on a dead CLOSE-WAIT
 # socket PTB's polling task is blocked on in epoll.
 _UPDATER_STOP_TIMEOUT = 15.0  # `await updater.stop()`, applied identically at every site
@@ -1317,7 +1343,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def _rich_message_payload(self, content: str, *, skip_entity_detection: bool = False) -> Dict[str, Any]:
         """``InputRichMessage`` from RAW markdown — never ``format_message(content)``, whose MarkdownV2
         escaping destroys table pipes."""
-        payload: Dict[str, Any] = {"markdown": _rich_normalize_linebreaks(content)}
+        payload: Dict[str, Any] = {"markdown": _rich_normalize_linebreaks(_rich_escape_literal_hashes(content))}
         if skip_entity_detection:
             payload["skip_entity_detection"] = True
         return payload
