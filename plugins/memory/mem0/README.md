@@ -126,6 +126,13 @@ Or edit `$HERMES_HOME/mem0.json` directly:
 }
 ```
 
+If your Qdrant instance is reachable over plain HTTP with an `api_key` (e.g. Qdrant and Hermes on the
+same private Docker network, with TLS termination not needed for intra-network traffic),
+`qdrant-client` warns that "Api key is used with an insecure connection" — correct default
+behavior, since it can't tell a private network from a public one. Set `"oss": {"allow_insecure_qdrant": true, ...}`
+in `mem0.json` to silence it once you've confirmed the deployment is trusted; leave it unset
+if Qdrant is reachable from outside that network.
+
 ### OSS to Platform
 
 ```bash

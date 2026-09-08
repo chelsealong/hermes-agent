@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 from typing import Any
+
+# qdrant-client warns whenever an api_key is paired with a non-HTTPS url. Correct default, but
+# noisy for same-network deployments (Qdrant + Hermes on one private Docker network) where the
+# key authenticates Qdrant itself rather than protecting a public endpoint. Opt-in only, via
+# oss.allow_insecure_qdrant in mem0.json — never a blanket suppression.
+_QDRANT_INSECURE_WARNING = "Api key is used with an insecure connection"
+
+
+@contextmanager
+def _qdrant_warnings_scope(allow_insecure: bool):
+    if not allow_insecure:
+        yield
+        return
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=_QDRANT_INSECURE_WARNING, category=UserWarning)
+        yield
 
 
 def _add_kwargs(user_id: str, agent_id: str, infer: bool, metadata: dict | None) -> dict[str, Any]:
@@ -130,6 +147,7 @@ class OSSBackend(Mem0Backend):
             block["config"] = provider_config
             return block
 
+        allow_insecure_qdrant = bool(oss_config.get("allow_insecure_qdrant"))
         vector_store = dict(oss_config["vector_store"])
         vs_config = dict(vector_store.get("config", {}))
         if "path" in vs_config:
@@ -138,24 +156,25 @@ class OSSBackend(Mem0Backend):
         dims = embedder_config.get("embedding_dims") or KNOWN_DIMS.get(embedder_config.get("model", ""))
         if dims:
             vs_config["embedding_model_dims"] = dims
-            self._recreate_collection_if_dims_changed(vector_store.get("provider", "qdrant"), vs_config, dims)
+            self._recreate_collection_if_dims_changed(vector_store.get("provider", "qdrant"), vs_config, dims, allow_insecure_qdrant)
         vector_store["config"] = vs_config
         config = {"vector_store": vector_store, "llm": _provider_block("llm", LLM_PROVIDERS), "embedder": _provider_block("embedder", EMBEDDER_PROVIDERS), "version": "v1.1"}
-        if str(config["llm"].get("provider") or "").strip().lower() == "openai":
-            # mem0 validates LlmConfig.provider before its factory lookup: build the supported OpenAI config, then swap the provider.
-            _register_direct_openai_provider()
-            from mem0.configs.base import MemoryConfig
-            memory_config = MemoryConfig(**config)
-            try:
-                memory_config.llm.provider = _DIRECT_OPENAI_PROVIDER
-            except (AttributeError, TypeError) as exc:
-                raise RuntimeError("mem0 MemoryConfig does not expose a mutable llm.provider for the Hermes OpenAI OSS backend") from exc
-            self._memory = Memory(memory_config)
-        else:
-            self._memory = Memory.from_config(config)
+        with _qdrant_warnings_scope(allow_insecure_qdrant):
+            if str(config["llm"].get("provider") or "").strip().lower() == "openai":
+                # mem0 validates LlmConfig.provider before its factory lookup: build the supported OpenAI config, then swap the provider.
+                _register_direct_openai_provider()
+                from mem0.configs.base import MemoryConfig
+                memory_config = MemoryConfig(**config)
+                try:
+                    memory_config.llm.provider = _DIRECT_OPENAI_PROVIDER
+                except (AttributeError, TypeError) as exc:
+                    raise RuntimeError("mem0 MemoryConfig does not expose a mutable llm.provider for the Hermes OpenAI OSS backend") from exc
+                self._memory = Memory(memory_config)
+            else:
+                self._memory = Memory.from_config(config)
 
     @staticmethod
-    def _recreate_collection_if_dims_changed(provider: str, vs_config: dict, expected_dims: int) -> None:
+    def _recreate_collection_if_dims_changed(provider: str, vs_config: dict, expected_dims: int, allow_insecure_qdrant: bool = False) -> None:
         """Delete stale vector collection when embedding dimensions change."""
         collection_name = vs_config.get("collection_name", "mem0")
         with suppress(Exception):
@@ -165,7 +184,8 @@ class OSSBackend(Mem0Backend):
                 if path:
                     client = QdrantClient(path=path)
                 elif url:
-                    client = QdrantClient(url=url, api_key=vs_config.get("api_key"))
+                    with _qdrant_warnings_scope(allow_insecure_qdrant):
+                        client = QdrantClient(url=url, api_key=vs_config.get("api_key"))
                 else:
                     return
                 with closing(client):

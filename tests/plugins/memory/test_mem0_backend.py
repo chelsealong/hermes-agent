@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import types
+import warnings
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -616,6 +617,39 @@ class TestOSSBackend:
         assert "hermes_openai" not in factory.provider_to_class
         assert state.clients == []
         assert raw == before
+
+
+class TestQdrantInsecureWarningSuppression:
+    """oss.allow_insecure_qdrant opts into silencing qdrant-client's own UserWarning when an
+    api_key rides a non-HTTPS url — same-network deployments where the key isn't protecting
+    a public endpoint. Default behavior (the warning surfaces) must be unchanged."""
+
+    @staticmethod
+    def _install_fake_qdrant_client(monkeypatch):
+        class FakeQdrantClient:
+            def __init__(self, *, url=None, path=None, api_key=None):
+                if url and api_key:
+                    warnings.warn("Api key is used with an insecure connection.", UserWarning, stacklevel=2)
+
+            def collection_exists(self, name):
+                return False
+
+            def close(self):
+                pass
+
+        module = types.ModuleType("qdrant_client")
+        module.QdrantClient = FakeQdrantClient
+        monkeypatch.setitem(sys.modules, "qdrant_client", module)
+
+    def test_warns_by_default(self, monkeypatch, recwarn):
+        self._install_fake_qdrant_client(monkeypatch)
+        OSSBackend._recreate_collection_if_dims_changed("qdrant", {"url": "http://qdrant:6333", "api_key": "secret"}, 768)
+        assert any("insecure connection" in str(w.message) for w in recwarn.list)
+
+    def test_suppressed_when_allow_insecure_qdrant(self, monkeypatch, recwarn):
+        self._install_fake_qdrant_client(monkeypatch)
+        OSSBackend._recreate_collection_if_dims_changed("qdrant", {"url": "http://qdrant:6333", "api_key": "secret"}, 768, allow_insecure_qdrant=True)
+        assert not any("insecure connection" in str(w.message) for w in recwarn.list)
 
 
 httpx = pytest.importorskip("httpx")
