@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from contextlib import closing, contextmanager, suppress
@@ -13,13 +14,20 @@ from typing import Any
 # oss.allow_insecure_qdrant in mem0.json — never a blanket suppression.
 _QDRANT_INSECURE_WARNING = "Api key is used with an insecure connection"
 
+# warnings.catch_warnings() saves/restores the single process-global warnings.filters list, so two
+# overlapping scopes on different threads (real here: OSSBackend.__init__ runs per-session on the
+# gateway's ThreadPoolExecutor, see gateway/run.py's run_sync) can interleave such that one thread's
+# "ignore" filter is captured as the other's baseline and gets restored permanently. The lock forces
+# the whole filter mutate-then-restore window to be exclusive, closing that race.
+_qdrant_warnings_lock = threading.Lock()
+
 
 @contextmanager
 def _qdrant_warnings_scope(allow_insecure: bool):
     if not allow_insecure:
         yield
         return
-    with warnings.catch_warnings():
+    with _qdrant_warnings_lock, warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=_QDRANT_INSECURE_WARNING, category=UserWarning)
         yield
 

@@ -651,6 +651,55 @@ class TestQdrantInsecureWarningSuppression:
         OSSBackend._recreate_collection_if_dims_changed("qdrant", {"url": "http://qdrant:6333", "api_key": "secret"}, 768, allow_insecure_qdrant=True)
         assert not any("insecure connection" in str(w.message) for w in recwarn.list)
 
+    def test_overlapping_scopes_on_different_threads_do_not_leak_filter(self):
+        """warnings.catch_warnings() saves/restores the single process-global warnings.filters
+        list, so two OSSBackend inits overlapping on different threads (the real execution
+        model: one gateway session per thread on run.py's ThreadPoolExecutor) could otherwise
+        interleave such that one session's "ignore" filter is restored back permanently after
+        the other session's scope has already exited. _qdrant_warnings_scope must serialize
+        overlapping scopes so this can't happen."""
+        import threading
+
+        from plugins.memory.mem0 import _backend
+
+        a_entered = threading.Event()
+        a_may_exit = threading.Event()
+        b_entered = threading.Event()
+        b_may_exit = threading.Event()
+
+        def thread_a():
+            with _backend._qdrant_warnings_scope(True):
+                a_entered.set()
+                a_may_exit.wait(timeout=5)
+
+        def thread_b():
+            assert a_entered.wait(timeout=5)
+            with _backend._qdrant_warnings_scope(True):
+                b_entered.set()
+                b_may_exit.wait(timeout=5)
+
+        ta = threading.Thread(target=thread_a)
+        tb = threading.Thread(target=thread_b)
+        ta.start()
+        tb.start()
+        try:
+            assert a_entered.wait(timeout=5)
+            # B must not be able to enter its own scope while A's is still open — that's the
+            # exact interleaving (A live, B enters+snapshots, A exits, B exits) that leaks A's
+            # filter process-wide once B later restores its stale snapshot.
+            assert not b_entered.wait(timeout=0.2), "B entered while A's scope was still open"
+            a_may_exit.set()
+            ta.join(timeout=5)
+            assert b_entered.wait(timeout=5), "B never got a chance to enter after A exited"
+            b_may_exit.set()
+        finally:
+            tb.join(timeout=5)
+
+        assert not any(
+            f[0] == "ignore" and f[1] is not None and f[1].search(_backend._QDRANT_INSECURE_WARNING)
+            for f in warnings.filters
+        )
+
 
 httpx = pytest.importorskip("httpx")
 
