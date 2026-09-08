@@ -159,6 +159,28 @@ def _nvidia_vram() -> tuple[int, int] | None:
     return None
 
 
+_DRM_SYSFS_ROOT = Path("/sys/class/drm")
+
+
+def _amd_vram() -> tuple[int, int] | None:
+    """(total, free) bytes from the amdgpu sysfs VRAM bar, or None.
+
+    No ROCm/rocm-smi dependency: the kernel driver publishes these files for
+    every amdgpu device, including headless/gateway sessions with a stripped
+    PATH. Windows/macOS have no /sys/class/drm, so the glob is simply empty
+    there.
+    """
+    for card in sorted(_DRM_SYSFS_ROOT.glob("card[0-9]*/device")):
+        with suppress(OSError, ValueError):
+            if (card / "vendor").read_text(encoding="utf-8").strip() != "0x1002":
+                continue
+            total = int((card / "mem_info_vram_total").read_text(encoding="utf-8").strip())
+            used = int((card / "mem_info_vram_used").read_text(encoding="utf-8").strip())
+            if total > 0:
+                return total, max(0, total - used)
+    return None
+
+
 def _cuda_driver_pool() -> "tuple[int, bool | None] | None":
     """(allocator_total_bytes, integrated_or_None) from the CUDA driver API via ctypes against the
     driver's own DLL/SO — no toolkit, no subprocess, ~ms. INTEGRATED is the vendor's own
@@ -290,9 +312,17 @@ def probe_budget(*, planning: bool = False) -> HardwareBudget:
         return _uma_budget(base, unified)
 
     if vram is None:
-        # No NVIDIA device visible: Metal/Vulkan/CPU paths budget from RAM as UMA (Apple
-        # Silicon) — conservative for discrete AMD until a vendor probe lands.
-        return _uma_budget(ram_total if planning else ram_avail, ram_total)
+        amd = _amd_vram()
+        # A BIOS-carve APU's VRAM bar tracks system RAM (the Strix Halo shape in #102593);
+        # only a bar far smaller than RAM is a discrete card's own memory, not a carve
+        # mirroring the host's. Reuses the same RAM-fraction gate as the NVIDIA carve-out
+        # check above, applied in the opposite direction.
+        if amd is not None and amd[0] < int(ram_total * _POOL_RAM_FRACTION):
+            vram = amd
+        else:
+            # No discrete device visible: Metal/Vulkan/CPU and BIOS-carve APU paths budget
+            # from RAM as UMA.
+            return _uma_budget(ram_total if planning else ram_avail, ram_total)
 
     total, free = vram
     margin = max(_MARGIN_FLOOR, int(total * _MARGIN_FRACTION))
