@@ -1223,7 +1223,12 @@ check_network_prerequisites() {
 
     local url
     local failed=false
+    # pypi.org is what the install itself depends on. duckduckgo.com is only
+    # used by the web-search tool at runtime, so a network that blocks it
+    # while pypi.org is healthy (e.g. some residential networks) should get
+    # an informational note, not the same alarming warning — see #106025.
     local checks=("https://pypi.org/simple/" "https://duckduckgo.com/")
+    local critical=(true false)
 
     if ! command -v curl >/dev/null 2>&1; then
         log_warn "curl not found; skipping connectivity probes"
@@ -1251,8 +1256,12 @@ check_network_prerequisites() {
     i=0
     for url in "${checks[@]}"; do
         if [ ! -e "$tmpdir/ok_$i" ]; then
-            failed=true
-            log_warn "Could not reach $url"
+            if [ "${critical[$i]}" = true ]; then
+                failed=true
+                log_warn "Could not reach $url"
+            else
+                log_info "Could not reach $url (used by the web search tool; continuing — install is unaffected)"
+            fi
         fi
         i=$((i + 1))
     done
