@@ -271,8 +271,20 @@ def openrouter_model_reasoning_capabilities(
     model_id: Optional[str], *, timeout: float = 6.0, allow_fetch: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Live-catalog reasoning capabilities for an OpenRouter model (tri-state, see module doc).
-    CACHE-ONLY by default — safe on per-request hot paths (never blocks on HTTP)."""
-    return _model_caps(_OPENROUTER_CAPS, model_id, timeout=timeout, allow_fetch=allow_fetch)
+    CACHE-ONLY by default — safe on per-request hot paths (never blocks on HTTP).
+
+    Routing-variant suffixes (``:nitro``, ``:floor``, ``:exacto``, ``:online``) are request-time
+    modifiers, not catalog entries — ``/v1/models`` lists only the base id, so a suffixed id misses
+    the exact lookup and (without this) falls through to the static prefix list even for a
+    well-known vendor (#106493). Retried with the shared base/suffix split
+    (``hermes_cli.models._openrouter_variant_base``) so the two never disagree.
+    """
+    caps = _model_caps(_OPENROUTER_CAPS, model_id, timeout=timeout, allow_fetch=allow_fetch)
+    if caps is None:
+        base = _origin()._openrouter_variant_base(model_id or "")
+        if base is not None:
+            caps = _model_caps(_OPENROUTER_CAPS, base, timeout=timeout, allow_fetch=allow_fetch)
+    return caps
 
 
 def nous_model_reasoning_capabilities(

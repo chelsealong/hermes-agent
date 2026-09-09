@@ -209,6 +209,30 @@ def test_pricing_fetch_seeds_the_mirror(cold_process, offline, monkeypatch):
     assert caps is not None
 
 
+def test_routing_variant_suffix_falls_back_to_base_id(cold_process, offline, monkeypatch):
+    """A ``:floor``/``:nitro``/... suffix is a request-time routing hint, never a catalog id — the
+    exact-id lookup must miss and retry with the base id instead of resolving "unknown" and falling
+    through to the static prefix list for every vendor the list doesn't happen to name (#106493).
+    """
+    monkeypatch.setattr(
+        models_mod, "_urlopen_model_catalog_request",
+        lambda req, *, timeout: _response(_CATALOG),
+    )
+    caps = models_reasoning_caps.openrouter_model_reasoning_capabilities(
+        "arcee-ai/trinity-large-thinking:floor", allow_fetch=True
+    )
+    assert caps is not None
+    assert caps["mandatory"] is True
+
+    # A suffix outside the recognized routing set (a real catalog SKU, or garbage) must not be
+    # rewritten — the miss stays a miss.
+    cold_process()
+    monkeypatch.setattr(models_mod, "_urlopen_model_catalog_request", offline)
+    assert models_reasoning_caps.openrouter_model_reasoning_capabilities(
+        "arcee-ai/trinity-large-thinking:free"
+    ) is None
+
+
 def test_a_missing_mirror_is_looked_for_once_per_process(cold_process, monkeypatch):
     """Coming up empty must not re-cost the lookup on every later turn.
 
