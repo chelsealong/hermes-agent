@@ -84,6 +84,18 @@ class TestKnownPrefixes:
         text = "fw-tooshort fw_tooshort fpk_tooshort"
         assert redact_sensitive_text(text) == text
 
+    def test_dashscope_style_dotted_sk_key(self):
+        """DashScope/Alibaba JWT-style ``sk-`` keys use ``.`` separators, which
+        used to break the contiguous ``sk-`` prefix match — issue #106508.
+
+        Uses ``code_file=True`` (and plain prose, not ``KEY=value``) so this
+        exercises the ``_PREFIX_RE`` pass in isolation, not the separate
+        ENV-assignment pass (which already handles any value shape by key name).
+        """
+        token = "sk-ws-H.EEPXREE.pFau.MEUCIQC6UnD-jj2a1234567890"
+        result = redact_sensitive_text(f"provider error {token}", code_file=True)
+        assert token not in result
+
 
 
 
@@ -962,6 +974,19 @@ class TestTerminalOutputRedaction:
         assert "export MISTRAL_API_KEY=*** # prod key" in red
 
 
+
+    def test_grep_env_dotted_sk_key_masked(self):
+        """grep'ing a .env for a JWT-style ``sk-`` key must not leak it — issue #106508.
+
+        ``grep`` isn't a recognized .env-reader, so this relies on the
+        DASHSCOPE-style dotted value matching the ``sk-`` prefix regex directly,
+        not on the KEY=value ENV-assignment pass.
+        """
+        from agent.redact import redact_terminal_output
+        out = "DASHSCOPE_API_KEY=sk-ws-H.EEPXREE.pFau.MEUCIQC6UnD-jj2a1234567890\n"
+        cmd = 'grep -i "DASHSCOPE|alibaba|qwen" ~/.hermes/.env | grep -v "^#"'
+        red = redact_terminal_output(out, cmd)
+        assert "sk-ws-H.EEPXREE.pFau.MEUCIQC6UnD-jj2a1234567890" not in red
 
     def test_disabled_passes_through(self, monkeypatch):
         from agent.redact import redact_terminal_output
