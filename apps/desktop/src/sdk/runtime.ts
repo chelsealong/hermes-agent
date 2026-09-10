@@ -13,21 +13,35 @@ import * as jsxRuntime from 'react/jsx-runtime'
 
 import * as sdk from './index'
 
-const GLOBALS = {
-  __HERMES_PLUGIN_SDK__: sdk,
-  __HERMES_REACT__: React,
-  __HERMES_REACT_JSX__: jsxRuntime,
-  __HERMES_REACT_JSX_DEV__: jsxDevRuntime
-} as const
+// A function, not a module-level const: `./index` re-exports `SkillsView`
+// from `@/app/skills`, whose tree imports `@/contrib/runtime-loader`, which
+// imports this file — a real import cycle back to `./index`. The production
+// bundler places this module's code ahead of `./index`'s in their shared
+// chunk, so a top-level object literal here would capture `sdk` before
+// index.ts's own module body has run (#107291 — every runtime plugin failed
+// with "Cannot convert undefined or null to object" at eval of the sdk
+// chunk). Deferring the snapshot to call time reads the live binding once
+// every module in the cycle has finished initializing — both call sites here
+// only ever run well after boot, when a plugin actually loads.
+function globals() {
+  return {
+    __HERMES_PLUGIN_SDK__: sdk,
+    __HERMES_REACT__: React,
+    __HERMES_REACT_JSX__: jsxRuntime,
+    __HERMES_REACT_JSX_DEV__: jsxDevRuntime
+  } as const
+}
 
 export function installPluginSdk(): void {
-  Object.assign(globalThis, GLOBALS)
+  Object.assign(globalThis, globals())
 }
 
 /** Build a shim ESM blob that re-exports a global namespace's live members.
  *  Export names come from the namespace itself, so the list can't drift. */
-function shimUrl(globalKey: keyof typeof GLOBALS): string {
-  const names = Object.keys(GLOBALS[globalKey]).filter(name => name !== 'default' && /^[A-Za-z_$][\w$]*$/.test(name))
+function shimUrl(globalKey: keyof ReturnType<typeof globals>): string {
+  const names = Object.keys(globals()[globalKey]).filter(
+    name => name !== 'default' && /^[A-Za-z_$][\w$]*$/.test(name)
+  )
 
   const source =
     `const m = globalThis.${globalKey};\n` +
