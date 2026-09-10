@@ -324,7 +324,12 @@ class GatewayAgentCacheMixin:
         logger.debug("Cleared conversation scope for %s (%s)", session_key, reason)
 
     def _clear_session_boundary_security_state(self, session_key: str) -> None:
-        """Clear per-session control state that must not survive a boundary switch."""
+        """Clear per-session control state that must not survive a boundary switch.
+
+        Also drops the session's recorded terminal cwd (`tools.terminal_tool._session_cwd`):
+        it lives outside `_CONVERSATION_SCOPED_STATE` (a different module's dict, not a
+        `self` attribute) but a stale record must not outlive `/new` either — see #107156.
+        """
         if not session_key:
             return
         pending_skills_reload_notes = getattr(self, "_pending_skills_reload_notes", None)
@@ -335,7 +340,9 @@ class GatewayAgentCacheMixin:
             state.persistent.approvals = None
             state.persistent.update_prompt_pending = False
         for mod, attr, what in (
-            ("tools.slash_confirm", "clear", "slash-confirm"), ("tools.approval", "clear_session", "approval"),
+            ("tools.slash_confirm", "clear", "slash-confirm"),
+            ("tools.approval", "clear_session", "approval"),
+            ("tools.terminal_tool", "clear_session_cwd", "session cwd"),
         ):
             try:
                 clear = getattr(importlib.import_module(mod), attr)

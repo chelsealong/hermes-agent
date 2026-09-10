@@ -9,10 +9,18 @@ The funnel clears every dict registered in _CONVERSATION_SCOPED_STATE plus
 the boundary security state, in one call.
 """
 
+import pytest
+
+import tools.terminal_tool as tt
 from gateway.run import _CONVERSATION_SCOPED_STATE, GatewayRunner
 
 KEY = "agent:main:telegram:dm:777"
 OTHER = "agent:main:discord:dm:888"
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_cwd_store(monkeypatch):
+    monkeypatch.setattr(tt, "_session_cwd", {})
 
 
 def _bare_runner() -> GatewayRunner:
@@ -53,3 +61,17 @@ def test_funnel_also_clears_boundary_security_state():
     assert OTHER in runner._pending_approvals
     assert KEY not in runner._update_prompt_pending
     assert KEY not in runner._pending_skills_reload_notes
+
+
+def test_funnel_drops_stale_session_cwd_record_on_new(tmp_path):
+    # #107156: a chat's recorded terminal cwd is keyed by session_key, lives in
+    # tools.terminal_tool (not a `self` attribute), and previously outlived /new —
+    # a fresh session in the same chat inherited a ghost cwd that could point at a
+    # since-deleted directory and brick every terminal call with exit 126.
+    dead_dir = str(tmp_path / "since-deleted")
+    tt.record_session_cwd(KEY, dead_dir)
+    tt.record_session_cwd(OTHER, "/still/alive")
+    runner = _bare_runner()
+    runner._clear_conversation_scope(KEY, reason="session_reset")
+    assert tt.get_session_cwd(KEY) is None
+    assert tt.get_session_cwd(OTHER) == "/still/alive"
