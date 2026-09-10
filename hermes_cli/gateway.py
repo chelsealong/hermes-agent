@@ -2830,6 +2830,11 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
     path_entries.extend(_build_user_local_paths(user_home, path_entries))
     path_entries.extend(_build_wsl_interop_paths(path_entries))
     path_entries.extend(["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"])
+    if not system:
+        # Mirror generate_launchd_plist(): append the invoking shell's PATH too, so
+        # coreutils resolve on distros that don't keep them under the FHS dirs above
+        # (e.g. NixOS's /run/current-system/sw/bin).
+        path_entries = list(dict.fromkeys(path_entries + [p for p in os.environ.get("PATH", "").split(":") if p]))
     sane_path = ":".join(path_entries)
     return f"""[Unit]
 Description={SERVICE_DESCRIPTION}

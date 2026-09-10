@@ -362,6 +362,18 @@ class TestGeneratedSystemdUnits:
         assert str(local_bin) in unit
         assert str(profile_node_bin) not in unit
 
+    def test_user_unit_includes_invoking_shell_path(self, monkeypatch):
+        # #107296: on NixOS, coreutils only live under /run/current-system/sw/bin, which
+        # is not one of the hardcoded FHS fallback dirs. generate_launchd_plist() already
+        # appends the invoking shell's PATH (see the plist twin below); the systemd unit
+        # must do the same or the gateway process starts without a working `ls`/`date`/etc.
+        monkeypatch.setenv("PATH", "/run/current-system/sw/bin:/some/other/dir")
+
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert "/run/current-system/sw/bin" in unit
+        assert "/some/other/dir" in unit
+
     def test_launchd_plist_does_not_leak_profile_node_symlink_target(self, tmp_path, monkeypatch):
         # Same #48700 regression for the macOS twin generate_launchd_plist().
         local_bin = tmp_path / ".local" / "bin"
