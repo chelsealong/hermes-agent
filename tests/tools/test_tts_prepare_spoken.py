@@ -42,6 +42,22 @@ class TestThinkBlockStrip:
         assert "one" in spoken and "two" in spoken
 
 
+class TestLeadingReasoningLabelStrip:
+    def test_english_colon_label_stripped(self):
+        spoken = prepare_spoken_text("Reasoning: This is the visible answer.")
+        assert "Reasoning" not in spoken
+        assert "This is the visible answer" in spoken
+
+    def test_chinese_fullwidth_colon_label_stripped(self):
+        spoken = strip_nonspoken_blocks("thinking：请继续。")
+        assert "thinking" not in spoken
+        assert spoken == "请继续。"
+
+    def test_label_mid_sentence_untouched(self):
+        raw = "The reasoning is clear."
+        assert strip_nonspoken_blocks(raw) == raw
+
+
 class TestVerifierFooterStrip:
     FOOTER = (
         "⚠️ File-mutation verifier: 2 file(s) were NOT modified this turn "

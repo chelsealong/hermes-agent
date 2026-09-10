@@ -176,11 +176,20 @@ _THINK_BLOCK_OPEN_RE = re.compile(r"<think[\s>].*\Z", flags=re.DOTALL | re.IGNOR
 # header line plus indented ``•`` bullets) is a UI affordance, not speech.
 _VERIFIER_FOOTER_RE = re.compile(r"^\s*⚠️?\s*File-mutation verifier:.*(?:\n[ \t]+•.*)*", flags=re.MULTILINE)
 
+# A model can also emit a plain, untagged section label ("Reasoning:", "thinking：") at the
+# very start of its reply instead of a <think> block (see #34213). Only strip it there, so
+# the same words spoken mid-sentence ("The reasoning is clear.") stay audible. See #107044.
+_LEADING_REASONING_LABEL_RE = re.compile(
+    r"\A\s*(?:reasoning|thinking|analysis|推理|思考|分析)\b\s*(?:[:：]|\n)\s*", flags=re.IGNORECASE,
+)
+
 
 def strip_nonspoken_blocks(text: str) -> str:
-    """Remove ``<think>`` reasoning blocks and the file-mutation verifier footer."""
+    """Remove ``<think>`` reasoning blocks, a leading reasoning/thinking/analysis label, and the
+    file-mutation verifier footer."""
     if not text:
         return ""
+    text = _LEADING_REASONING_LABEL_RE.sub("", text, count=1)
     for pattern in (_THINK_BLOCK_RE, _THINK_BLOCK_OPEN_RE, _VERIFIER_FOOTER_RE):
         text = pattern.sub(" ", text)
     return text
