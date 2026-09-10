@@ -56,6 +56,11 @@ def _write_stderr_log_header(server_name: str) -> None:
 # Env vars safe to pass to stdio subprocesses (no secrets).
 _SAFE_ENV_KEYS = frozenset({"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR"})
 
+# Proxy vars, checked case-insensitively since convention splits between lowercase (curl, most
+# POSIX tools) and uppercase (some Windows/Java clients) — without this a stdio MCP server behind
+# an egress proxy connects fine but every tool call touching the network silently times out.
+_PROXY_ENV_KEYS_CASE_INSENSITIVE = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"})
+
 # Windows process/location vars needed by launcher-style tools (e.g. Docker Desktop's MCP plugin discovery).
 _SAFE_ENV_KEYS_CASE_INSENSITIVE = frozenset({
     "ALLUSERSPROFILE", "APPDATA", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
@@ -93,8 +98,8 @@ _CONTEXT_VAR_RESOLVERS = {
 
 def _build_safe_env(user_env: Optional[dict]) -> dict:
     """Filtered env for stdio subprocesses so API keys/tokens don't leak: the safe baseline
-    keys, ``XDG_*``, vars injected by an external secret source (users configured that backend
-    precisely so subprocesses can consume them), plus the server config's own ``env``."""
+    keys, proxy vars, ``XDG_*``, vars injected by an external secret source (users configured that
+    backend precisely so subprocesses can consume them), plus the server config's own ``env``."""
     try:
         from hermes_cli.env_loader import get_secret_source
     except Exception:  # pragma: no cover — early bootstrap/import fallback
@@ -102,6 +107,7 @@ def _build_safe_env(user_env: Optional[dict]) -> dict:
     env = {
         key: value for key, value in os.environ.items()
         if key in _SAFE_ENV_KEYS or key.upper() in _SAFE_ENV_KEYS_CASE_INSENSITIVE
+        or key.upper() in _PROXY_ENV_KEYS_CASE_INSENSITIVE
         or key.startswith("XDG_") or (get_secret_source is not None and get_secret_source(key))}
     for key in ("HERMES_KANBAN_DB", "HERMES_KANBAN_BOARD"):
         if key in os.environ:

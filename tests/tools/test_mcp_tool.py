@@ -1392,6 +1392,28 @@ class TestBuildSafeEnv:
         assert result["NOTION_TOKEN"] == "from-op"
         assert "UNTRACKED_SECRET_KEY" not in result
 
+    def test_proxy_vars_passed_case_insensitively(self):
+        """Proxy vars reach stdio MCP servers regardless of case convention, so tool calls
+        behind an egress proxy don't silently time out."""
+        from tools.mcp_tool_config import _build_safe_env
+
+        fake_env = {
+            "PATH": "/usr/bin",
+            "http_proxy": "http://proxy.internal:8080",
+            "https_proxy": "http://proxy.internal:8080",
+            "no_proxy": "localhost,127.0.0.1",
+            "HTTPS_PROXY": "http://proxy.internal:8080",
+            "GITHUB_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        }
+        with patch.dict("os.environ", fake_env, clear=True):
+            result = _build_safe_env(None)
+
+        assert result["http_proxy"] == "http://proxy.internal:8080"
+        assert result["https_proxy"] == "http://proxy.internal:8080"
+        assert result["no_proxy"] == "localhost,127.0.0.1"
+        assert result["HTTPS_PROXY"] == "http://proxy.internal:8080"
+        assert "GITHUB_TOKEN" not in result
+
     def test_windows_location_vars_passed_without_secrets(self):
         """Windows launcher tools need location vars, but secrets stay filtered."""
         from tools.mcp_tool_config import _build_safe_env
