@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -31,6 +30,11 @@ def _kbc():
 def _kbd():
     from hermes_cli import kanban_db_dispatch
     return kanban_db_dispatch
+
+
+def _kb():
+    from hermes_cli import kanban_db
+    return kanban_db
 
 _CORRUPT_DB_MARKERS = ("file is not a database", "database disk image is malformed")
 
@@ -256,11 +260,16 @@ class _KanbanDispatcher:
         for slug in self._board_slugs():
             if attempted >= auto_decompose_per_tick:
                 break
-            # Pin the board via env for the call: the decomposer connects
-            # with no board kwarg (same pattern as the dashboard specify endpoint).
-            prev_env = os.environ.get("HERMES_KANBAN_BOARD")
-            try:
-                os.environ["HERMES_KANBAN_BOARD"] = slug
+            # Pin the board via the context-local override for the call: the
+            # decomposer connects with no board kwarg (same pattern as the
+            # dashboard specify endpoint), and this now runs concurrently with
+            # tick_once in a separate thread/Context, so a process-global
+            # os.environ pin would leak the wrong board into that other
+            # thread's get_current_board() resolution (e.g. lifecycle hook
+            # payloads via _fire_task_hook). scoped_current_board is
+            # contextvar-based and each _to_thread_process_service call gets
+            # its own fresh Context, so this stays confined to this call.
+            with _kb().scoped_current_board(slug):
                 try:
                     triage_ids = _decomp.list_triage_ids()
                 except Exception as exc:
@@ -271,11 +280,6 @@ class _KanbanDispatcher:
                         break
                     attempted += 1
                     successes += self._decompose_one(_decomp, slug, tid)
-            finally:
-                if prev_env is None:
-                    os.environ.pop("HERMES_KANBAN_BOARD", None)
-                else:
-                    os.environ["HERMES_KANBAN_BOARD"] = prev_env
         return successes
 
     @staticmethod
