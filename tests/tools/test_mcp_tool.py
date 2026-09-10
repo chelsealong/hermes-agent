@@ -2613,6 +2613,35 @@ class TestMCPSelectiveToolLoading:
         )
         assert registered == []
 
+    def test_allowed_tools_alias_enforces_whitelist(self):
+        """``allowed_tools`` (the name users reach for by analogy with other MCP clients) must
+        actually restrict registration like ``tools.include`` — not be silently ignored (#106983)."""
+        config = {
+            "url": "https://mcp.example.com",
+            "allowed_tools": ["safe_tool"],
+        }
+        registered, _ = self._run_discover(
+            "ink",
+            ["safe_tool", "run"],
+            config,
+            session=SimpleNamespace(),
+        )
+        assert registered == ["mcp__ink__safe_tool"]
+
+    def test_tools_include_takes_precedence_over_allowed_tools(self):
+        config = {
+            "url": "https://mcp.example.com",
+            "tools": {"include": ["run"]},
+            "allowed_tools": ["safe_tool"],
+        }
+        registered, _ = self._run_discover(
+            "ink",
+            ["safe_tool", "run"],
+            config,
+            session=SimpleNamespace(),
+        )
+        assert registered == ["mcp__ink__run"]
+
     def test_enabled_false_skips_connection_attempt(self):
         from tools.mcp_tool_discovery import discover_mcp_tools
 

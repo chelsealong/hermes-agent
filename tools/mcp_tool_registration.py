@@ -187,7 +187,14 @@ def _make_tool_filter(name: str, config: dict) -> Callable[[str], bool]:
     # (an explicit empty whitelist, as written by the install checklist's "uncheck everything" path) Neither
     # set → register all tools (backward-compatible default)
     include_raw = tools_filter.get("include")
-    include_set = _normalize_name_filter(include_raw, f"mcp_servers.{name}.tools.include")
+    include_label = f"mcp_servers.{name}.tools.include"
+    if include_raw is None and config.get("allowed_tools") is not None:
+        # ``allowed_tools`` is the name users reach for by analogy with other MCP clients; as an
+        # unrecognized top-level key it was silently read by nothing, so a whitelist written there
+        # enforced no restriction at all (#106983). Treat it as ``tools.include``.
+        include_raw = config.get("allowed_tools")
+        include_label = f"mcp_servers.{name}.allowed_tools"
+    include_set = _normalize_name_filter(include_raw, include_label)
     exclude_set = _normalize_name_filter(tools_filter.get("exclude"), f"mcp_servers.{name}.tools.exclude")
     if isinstance(include_raw, (str, list, tuple, set)):
         return lambda tool_name: matches_name_filter(tool_name, include_set)
