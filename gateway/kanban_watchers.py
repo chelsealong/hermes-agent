@@ -29,6 +29,7 @@ from gateway.kanban_watchers_dispatcher import (
     _KanbanDispatcher,
     _log_spawn_results,
     _resolve_dispatcher_settings,
+    _run_decompose_and_dispatch,
 )
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -277,10 +278,9 @@ class GatewayKanbanWatchersMixin:
                     # Re-read the auto-decompose toggle live so disabling it
                     # takes effect on the next tick, not on restart.
                     _ad_enabled, _ad_per_tick = _resolve_auto_decompose_settings(_load_config)
-                    # See #49638.
-                    if _ad_enabled:
-                        await _to_thread_process_service(dispatcher.auto_decompose_tick, _ad_per_tick)
-                    results = await _to_thread_process_service(dispatcher.tick_once)
+                    # See #49638. Runs concurrently with the spawn tick; see
+                    # _run_decompose_and_dispatch for why (#106985).
+                    results = await _run_decompose_and_dispatch(dispatcher, _ad_enabled, _ad_per_tick)
                     any_spawned = _log_spawn_results(results)
                     ready_pending = await _to_thread_process_service(dispatcher.ready_nonempty)
                     bad_ticks = bad_ticks + 1 if ready_pending and not any_spawned else 0

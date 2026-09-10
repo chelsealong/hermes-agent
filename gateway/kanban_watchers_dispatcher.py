@@ -7,6 +7,7 @@ the singleton lock and the health telemetry; everything that only needs the
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import sqlite3
@@ -14,7 +15,12 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from gateway.kanban_watchers_common import _board_slugs, _positive_int_setting, logger
+from gateway.kanban_watchers_common import (
+    _board_slugs,
+    _positive_int_setting,
+    _to_thread_process_service,
+    logger,
+)
 
 
 def _kbc():
@@ -289,6 +295,26 @@ class _KanbanDispatcher:
         else:
             logger.info("kanban auto-decompose [%s]: %s → single task (no fanout)", slug, tid)
         return 1
+
+
+async def _run_decompose_and_dispatch(
+    dispatcher: "_KanbanDispatcher", auto_decompose_enabled: bool, auto_decompose_per_tick: int,
+) -> list:
+    """Run auto-decompose concurrently with the spawn tick.
+
+    A slow or stuck decompose call (reasoning-heavy aux model, retried
+    malformed response) used to run to completion before ``tick_once`` even
+    started, so it delayed spawning every other unrelated ready task for the
+    whole tick. Running both at once means the spawn step no longer waits on
+    it. See #106985.
+    """
+    if not auto_decompose_enabled:
+        return await _to_thread_process_service(dispatcher.tick_once)
+    _, results = await asyncio.gather(
+        _to_thread_process_service(dispatcher.auto_decompose_tick, auto_decompose_per_tick),
+        _to_thread_process_service(dispatcher.tick_once),
+    )
+    return results
 
 
 def _log_spawn_results(results: Optional[list]) -> bool:
