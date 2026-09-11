@@ -167,6 +167,38 @@ def test_discovery_does_not_rescan_when_plugin_source_unchanged(tmp_path, monkey
     assert len(calls) == 1
 
 
+def test_duplicate_plugin_names_get_independent_scan_roots_and_fingerprints(tmp_path, monkeypatch):
+    """Regression: `name` is the plugin's own author-chosen display name, not a uniqueness guarantee —
+    `manifest_key()` (`key` or `name`) is what plugins.py's dedup (`winners = {manifest_key(m): m ...}`)
+    actually keys on, so two co-loaded plugins can share a `name` while having distinct `key`/`path`.
+    Keying the compat-report cache's scan roots by the bare `name` let the second manifest's root
+    silently clobber the first's, so editing the first plugin never changed the fingerprint the cache
+    key was built from and the new hit was masked behind a stale cache entry."""
+    from hermes_cli.plugins_manifest import PluginManifest
+    monkeypatch.setattr(pc, "load_manifest", lambda: MANIFEST)
+    monkeypatch.setattr(pc, "removal_in_effect", lambda today=None: False)
+    monkeypatch.setattr(pc, "report_file_path", lambda: tmp_path / "r.json")
+    pc._report_cache.clear()
+    plugin_a = tmp_path / "catA" / "dupname"; plugin_a.mkdir(parents=True)
+    (plugin_a / "plugin.yaml").write_text("name: dupname\nversion: 0.1\ndescription: t\n")
+    (plugin_a / "__init__.py").write_text("def register(ctx):\n    pass\n")
+    plugin_b = tmp_path / "catB" / "dupname"; plugin_b.mkdir(parents=True)
+    (plugin_b / "plugin.yaml").write_text("name: dupname\nversion: 0.1\ndescription: t\n")
+    (plugin_b / "__init__.py").write_text("def register(ctx):\n    pass\n")
+    a = PluginManifest(name="dupname", version="0.1", description="t", source="user",
+                        path=str(plugin_a), key="catA/dupname")
+    b = PluginManifest(name="dupname", version="0.1", description="t", source="user",
+                        path=str(plugin_b), key="catB/dupname")
+
+    report1 = pc.compat_report([a, b])
+    assert report1 == {}
+
+    # A starts using a to-be-removed import path; B (same display `name`, different `key`/`path`) is untouched.
+    (plugin_a / "__init__.py").write_text("from tools.web_tools import prefers_gateway\ndef register(ctx):\n    pass\n")
+    report2 = pc.compat_report([a, b])
+    assert "dupname" in report2 and report2["dupname"][0].old == "tools.web_tools.prefers_gateway"
+
+
 def test_scan_root_never_falls_back_to_cwd(tmp_path, monkeypatch):
     """Windows dir paths and ``module:attr`` entry points used to collapse to ``.`` and scan the
     launch directory; an entry point must resolve to its installed package, everything else to None."""

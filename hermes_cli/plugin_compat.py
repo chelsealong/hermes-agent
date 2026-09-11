@@ -222,15 +222,19 @@ def compat_report(manifests=None, *, force: bool = False) -> Dict[str, List[Hit]
         except Exception:
             return {}
     external = [m for m in manifests if getattr(m, "source", "") != "bundled" and getattr(m, "path", None)]
-    roots = {m.name: _scan_root(m) for m in external}
-    key = tuple(sorted(f"{m.name}@{m.path}@{_fingerprint(roots[m.name])}" for m in external))
+    # Keyed by object identity, not the bare (author-chosen, non-unique) `name` — two co-loaded
+    # plugins can legitimately share a `name` while having distinct `key`/`path`, and would
+    # otherwise clobber each other's scan root here (misattributing hits and masking edits behind
+    # the other plugin's unrelated fingerprint).
+    roots = {id(m): _scan_root(m) for m in external}
+    key = tuple(sorted(f"{m.name}@{m.path}@{_fingerprint(roots[id(m)])}" for m in external))
     with _report_lock:
         if not force and key in _report_cache:
             return _report_cache[key]
     manifest = load_manifest()
     out: Dict[str, List[Hit]] = {}
     for m in external:
-        hits = scan_plugin(roots[m.name], manifest)
+        hits = scan_plugin(roots[id(m)], manifest)
         if hits:
             out[m.name] = hits
     with _report_lock:
