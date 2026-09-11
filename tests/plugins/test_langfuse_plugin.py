@@ -28,7 +28,7 @@ class TestManifest:
         assert data["name"] == "langfuse"
         assert data["version"]
         # All eleven hooks the plugin implements.
-        assert set(data["hooks"]) == {
+        assert set(data["provides_hooks"]) == {
             "pre_api_request", "post_api_request", "api_request_error",
             "pre_llm_call", "post_llm_call",
             "pre_tool_call", "post_tool_call",
