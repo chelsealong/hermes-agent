@@ -1402,7 +1402,16 @@ def _config_model_provider() -> Tuple[Any, Optional[str]]:
         model_cfg = (load_config() or {}).get("model")
         provider = model_cfg.get("provider") if isinstance(model_cfg, dict) else None
         provider = provider.strip().lower() if isinstance(provider, str) else ""
-        return model_cfg, (provider if provider in PROVIDER_REGISTRY else None)
+        # Registry membership alone misses "custom"/"openrouter"/"custom:<name>"/"moa" — those are
+        # valid `model.provider` values (set by cli_model_switch_mixin.py, model_setup_flows.py) but
+        # deliberately excluded from PROVIDER_REGISTRY (_REGISTRY_PLUGIN_SKIP). Without this, a
+        # config-only custom/local endpoint falls through resolve_provider("auto") entirely, so
+        # anything gating on it (setup.status's free-tier bootstrap) reports "not configured" even
+        # though `_has_any_provider_configured()` (which checks model_cfg directly) says otherwise.
+        # "auto" itself must stay excluded — it means "not set", not a resolved identity, and must
+        # fall through to the env/oauth/free-tier rungs below.
+        routable = provider != "auto" and is_runtime_provider_routable(provider)
+        return model_cfg, (provider if routable else None)
     except Exception as e:
         logger.debug("Could not read config.yaml model.provider for auto-resolution: %s", e)
         return None, None

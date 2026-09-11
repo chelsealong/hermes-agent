@@ -145,3 +145,28 @@ class TestFreeTierBeatsImplicitHostCredentials:
         assert resolve_provider("auto") == "nous"
         with pytest.raises(AuthError):
             resolve_provider("auto", skip_free_tier=True)
+
+
+class TestConfigOnlyCustomProvider:
+    """#108383: a config-only `model.provider: custom` (a local OpenAI-compatible server that needs
+    no API key) must resolve via `resolve_provider("auto")`, not fall through to
+    `no_provider_configured`. "custom"/"openrouter" are deliberately excluded from
+    `PROVIDER_REGISTRY` (aggregator/user-supplied, handled outside the registry — see
+    `_REGISTRY_PLUGIN_SKIP`), so a plain registry-membership check on `model.provider` misses them."""
+
+    def test_custom_provider_with_no_credentials_resolves_via_config(self, monkeypatch):
+        _clear_provider_env(monkeypatch)
+        _no_aws(monkeypatch)
+        _logged_out(monkeypatch)
+        _free_tier(monkeypatch, on=False, identity=False)
+        _config(monkeypatch, {"provider": "custom", "default": "local-model",
+                              "base_url": "http://127.0.0.1:8000/v1"})
+        assert resolve_provider("auto") == "custom"
+
+    def test_openrouter_config_provider_with_no_credentials_resolves_via_config(self, monkeypatch):
+        _clear_provider_env(monkeypatch)
+        _no_aws(monkeypatch)
+        _logged_out(monkeypatch)
+        _free_tier(monkeypatch, on=False, identity=False)
+        _config(monkeypatch, {"provider": "openrouter", "default": "some/model"})
+        assert resolve_provider("auto") == "openrouter"
