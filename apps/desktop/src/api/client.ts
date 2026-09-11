@@ -25,12 +25,25 @@ const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000
 // ever fires when the turn itself would have been abandoned server-side.
 export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 
+// The heartbeat watchdog (apps/shared json-rpc-gateway.ts) treats "no inbound
+// frame for heartbeatDeadlineMs" as a dead socket and tears the connection
+// down. A preflight context-compaction pass can legitimately keep the backend
+// busy (no frames at all, ping included) for 90-120s on a large session — the
+// same "alive but busy" shape as the boot burst above, just later in the
+// session's life. The library default (DEFAULT_HEARTBEAT_DEADLINE_MS =
+// 45_000) tears the connection down mid-compaction, which kills the in-flight
+// turn and restarts the backend on every turn past the trip point (#108325).
+// Give it enough headroom to outlast a compaction pass; a truly dead socket
+// is still detected, just a little later.
+const GATEWAY_HEARTBEAT_DEADLINE_MS = 180_000
+
 export class HermesGateway extends JsonRpcGatewayClient {
   constructor() {
     super({
       closedErrorMessage: 'Hermes gateway connection closed',
       connectErrorMessage: 'Could not connect to Hermes gateway',
       createRequestId: nextId => nextId,
+      heartbeatDeadlineMs: GATEWAY_HEARTBEAT_DEADLINE_MS,
       notConnectedErrorMessage: 'Hermes gateway is not connected',
       requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
     })
