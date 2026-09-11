@@ -21,11 +21,17 @@ from agent.codex_responses_adapter import _format_responses_error
 from agent.redact import redact_sensitive_text
 from agent.transports.codex_app_server import CodexAppServerClient, CodexAppServerError
 from agent.transports.codex_event_projector import CodexEventProjector, ProjectionResult
+from tools import approval_context
 
 logger = logging.getLogger(__name__)
 
 
 _STDERR_TAIL_LINES = 12  # stderr tail on generic errors: legible, yet enough for a config/auth diagnostic
+
+# Synthetic pattern_key for observer hooks: this callback isn't gated by a command-pattern rule,
+# it's the shared human-prompted approval surface, following existing synthetic keys such as
+# "mcp_elicitation" and "protected_instruction_file".
+_CODEX_RUNTIME_PATTERN_KEY = "codex_runtime"
 
 # Hermes' tools.terminal.security_mode -> Codex permissions profile id.
 # Missing config -> workspace-write (Codex's own default).
@@ -584,18 +590,32 @@ class CodexAppServerSession:
 
         Approval mode/timeout resolution lives upstream (codex_runtime.py derives the
         auto flags; the callback runs the shared gate). Do not re-read config here.
+
+        The callback is the same interactive CLI/TUI approval surface other paths use, so it is
+        wrapped in the shared pre/post approval hooks (mirroring tools/approval.py) — otherwise a
+        shell-hook observer never sees a human-prompted Codex approval at all. Auto-approved and
+        no-callback (fail-closed) requests never prompt a human, so they fire no hooks.
         """
         if auto_approve:
             return "accept"
         if self._approval_callback is None:
             return "decline"
         command, description = prompt()
+        hook_kwargs = dict(
+            command=redact_sensitive_text(command, force=True),
+            description=redact_sensitive_text(description, force=True),
+            pattern_key=_CODEX_RUNTIME_PATTERN_KEY, pattern_keys=[_CODEX_RUNTIME_PATTERN_KEY],
+            session_key=approval_context.get_current_session_key(), surface="cli",
+        )
+        approval_context._fire_approval_hook("pre_approval_request", **hook_kwargs)
         try:
             choice = self._approval_callback(command, description, allow_permanent=False)
-            return _approval_choice_to_codex_decision(choice)
         except Exception:
             logger.exception("approval_callback raised on %s", log_label)
+            approval_context._fire_approval_hook("post_approval_response", **hook_kwargs, choice="notify_failed")
             return "decline"
+        approval_context._fire_approval_hook("post_approval_response", **hook_kwargs, choice=choice)
+        return _approval_choice_to_codex_decision(choice)
 
     def _decide_exec_approval(self, params: dict) -> str:
         def prompt() -> tuple[str, str]:

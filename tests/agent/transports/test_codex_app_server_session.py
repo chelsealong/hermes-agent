@@ -703,6 +703,83 @@ class TestApprovalPromptEnrichment:
         assert "apply some changes" in captured["command"]
 
 
+class TestApprovalHooks:
+    """A human-prompted Codex approval must go through the same
+    pre_approval_request / post_approval_response observer lifecycle as
+    every other approval surface (tools/approval.py) — otherwise a
+    shell-hook observer is silent for this one path."""
+
+    def test_prompted_approval_fires_pre_and_post_hooks(self):
+        client = FakeClient()
+        client.queue_server_request(
+            "item/commandExecution/requestApproval", request_id="r1",
+            command="ghp_abcdefghijklmnopqrstuvwxyz0123456789", cwd="/tmp",
+        )
+        client.queue_notification(
+            "turn/completed", threadId="t",
+            turn={"id": "tu1", "status": "completed", "error": None},
+        )
+        captured = {}
+
+        def cb(command, description, *, allow_permanent=True):
+            captured["command"] = command  # callback must still get the raw, unredacted command
+            return "once"
+
+        s = make_session(client, approval_callback=cb)
+        with patch.object(session_mod.approval_context, "_fire_approval_hook") as fire:
+            s.run_turn("hi", turn_timeout=1.0)
+
+        assert captured["command"] == "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+        names = [call.args[0] for call in fire.call_args_list]
+        assert names == ["pre_approval_request", "post_approval_response"], (
+            "expected exactly one pre/post pair around the callback"
+        )
+        pre_kwargs, post_kwargs = fire.call_args_list[0].kwargs, fire.call_args_list[1].kwargs
+        assert pre_kwargs["surface"] == "cli"
+        assert pre_kwargs["pattern_key"] == "codex_runtime"
+        assert pre_kwargs["pattern_keys"] == ["codex_runtime"]
+        # observer payload is force-redacted even though the callback got the raw text
+        assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in pre_kwargs["command"]
+        assert post_kwargs["choice"] == "once"
+
+    def test_callback_exception_reports_notify_failed_not_a_denial(self):
+        client = FakeClient()
+        client.queue_server_request(
+            "item/commandExecution/requestApproval", request_id="r1",
+            command="ls", cwd="/tmp",
+        )
+        client.queue_notification(
+            "turn/completed", threadId="t",
+            turn={"id": "tu1", "status": "completed", "error": None},
+        )
+
+        def cb(command, description, *, allow_permanent=True):
+            raise RuntimeError("boom")
+
+        s = make_session(client, approval_callback=cb)
+        with patch.object(session_mod.approval_context, "_fire_approval_hook") as fire:
+            s.run_turn("hi", turn_timeout=1.0)
+
+        assert ("r1", {"decision": "decline"}) in client.responses
+        post_kwargs = fire.call_args_list[1].kwargs
+        assert post_kwargs["choice"] == "notify_failed"
+
+    def test_auto_approve_and_no_callback_fire_no_hooks(self):
+        """No human is prompted on these paths, so no observer hooks fire."""
+        client = FakeClient()
+        client.queue_server_request(
+            "item/commandExecution/requestApproval", request_id="r1", command="ls", cwd="/tmp",
+        )
+        client.queue_notification(
+            "turn/completed", threadId="t",
+            turn={"id": "tu1", "status": "completed", "error": None},
+        )
+        s = make_session(client, request_routing=_ServerRequestRouting(auto_approve_exec=True))
+        with patch.object(session_mod.approval_context, "_fire_approval_hook") as fire:
+            s.run_turn("hi", turn_timeout=1.0)
+        fire.assert_not_called()
+
+
 # ---- openclaw beta.8 parity: retire/wedge/oauth/abort marker ----
 
 class TestSessionRetirement:
