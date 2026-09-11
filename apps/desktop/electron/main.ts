@@ -159,7 +159,8 @@ import {
   shouldDeferLocalEnumeration,
   shouldRetrySshInventory,
   updateEligibility,
-  upsertConnection
+  upsertConnection,
+  withRegistryLocalProfile
 } from './connection-registry'
 import type { RosterProfileMetadata } from './connection-registry'
 import { describeCrashReason, installCrashForensics } from './crash-forensics'
@@ -11786,7 +11787,7 @@ async function ensureRegistryBackend(
     })
 
     if (localRoute.delegate) {
-      return ensureBackend(profile, { passive, spawnPriority })
+      return withRegistryLocalProfile(await ensureBackend(profile, { passive, spawnPriority }), profileKey)
     }
 
     const stoppingLocal = poolStopper.inFlight(localRoute.poolKey)

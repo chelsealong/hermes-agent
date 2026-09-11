@@ -41,7 +41,8 @@ import {
   shouldRetrySshInventory,
   uniqueLabel,
   updateEligibility,
-  upsertConnection
+  upsertConnection,
+  withRegistryLocalProfile
 } from './connection-registry'
 
 function emptyRegistry(): ConnectionRegistry {
@@ -778,6 +779,24 @@ test('registry local route: per-profile override wins when global remote is also
   })
 
   assert.deepEqual(route, { delegate: true, poolKey: 'research' })
+})
+
+// --- withRegistryLocalProfile (stamps a profile-less delegate descriptor) ---
+
+test('withRegistryLocalProfile: stamps the requested profile onto a primary descriptor that carries none (#108136)', () => {
+  // The v1 primary route omits `profile` entirely once the requested profile
+  // IS the primary — there is nothing to scope on the wire. A named primary
+  // profile (e.g. "xiaolu") switching back to "This device" must still see
+  // its own name here, not silently read as the unrelated 'default'.
+  const descriptor = { baseUrl: 'http://127.0.0.1:53100', mode: 'local' as const }
+
+  assert.deepEqual(withRegistryLocalProfile(descriptor, 'xiaolu'), { ...descriptor, profile: 'xiaolu' })
+})
+
+test('withRegistryLocalProfile: leaves an already-scoped descriptor untouched', () => {
+  const descriptor = { baseUrl: 'http://127.0.0.1:53100', mode: 'local' as const, profile: 'research' }
+
+  assert.deepEqual(withRegistryLocalProfile(descriptor, 'xiaolu'), descriptor)
 })
 
 // --- shouldDeferLocalEnumeration (roster's connect-on-demand for 'local') ---

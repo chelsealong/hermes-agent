@@ -513,6 +513,22 @@ export function resolveRegistryLocalRoute(
 }
 
 /**
+ * Stamp a delegated local descriptor with the profile it was resolved for.
+ * The v1 primary route (ensureBackend) omits `profile` entirely when the
+ * requested profile IS the primary — no wire scoping is needed to reach it —
+ * so a descriptor for a named (non-"default") primary profile otherwise
+ * reaches the renderer profile-less. There, normalizeProfileKey's fallback
+ * reads that as 'default', and the post-activation check spuriously fails
+ * every switch back to "This device" (#108136). A descriptor that already
+ * carries a profile (e.g. a scoped remote) is left untouched.
+ */
+export function withRegistryLocalProfile<T extends object>(descriptor: T, profileKey: string): T & { profile: string } {
+  const profile = (descriptor as { profile?: string }).profile
+
+  return { ...descriptor, profile: profile ?? profileKey }
+}
+
+/**
  * Whether the roster enumeration should SKIP the registry's local entry as
  * connect-on-demand. True when the local source is the forced-local route
  * (primary resolves remote — enumerating would spawn a local backend the
