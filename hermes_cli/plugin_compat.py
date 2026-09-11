@@ -168,6 +168,18 @@ _report_lock = threading.Lock()
 _report_cache: Dict[Tuple[str, ...], Dict[str, List[Hit]]] = {}
 
 
+def _fingerprint(root: Optional[Path]) -> str:
+    """Cheap (path, size, mtime) signature for every ``.py`` file under ``root`` — stat only, no
+    ``ast.parse``. Changes whenever a scanned file is added, removed, or edited, so it can stand in
+    for ``force=True`` in the cache key without ever masking a real content change."""
+    if root is None:
+        return ""
+    try:
+        return "|".join(f"{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}" for p in sorted(_iter_py(root)))
+    except OSError:
+        return ""
+
+
 def _scan_root(manifest) -> Optional[Path]:
     """Directory to scan for ONE manifest, or None when there is nothing safe to scan.
 
@@ -196,7 +208,10 @@ def _scan_root(manifest) -> Optional[Path]:
 def compat_report(manifests=None, *, force: bool = False) -> Dict[str, List[Hit]]:
     """``{plugin_name: hits}`` for every ENABLED external (non-bundled) plugin with at least one hit.
 
-    ``manifests`` defaults to the current PluginManager's discovered manifests. Cached per manifest set.
+    ``manifests`` defaults to the current PluginManager's discovered manifests. Cached per manifest
+    set *and* per-file (size, mtime) fingerprint, so an unforced call only pays the ``ast.parse`` cost
+    when a scanned plugin's source actually changed since the last report — ``force`` still bypasses
+    the cache outright for callers that want a guaranteed-fresh scan regardless of the fingerprint.
     """
     if manifests is None:
         try:
@@ -207,14 +222,15 @@ def compat_report(manifests=None, *, force: bool = False) -> Dict[str, List[Hit]
         except Exception:
             return {}
     external = [m for m in manifests if getattr(m, "source", "") != "bundled" and getattr(m, "path", None)]
-    key = tuple(sorted(f"{m.name}@{m.path}" for m in external))
+    roots = {m.name: _scan_root(m) for m in external}
+    key = tuple(sorted(f"{m.name}@{m.path}@{_fingerprint(roots[m.name])}" for m in external))
     with _report_lock:
         if not force and key in _report_cache:
             return _report_cache[key]
     manifest = load_manifest()
     out: Dict[str, List[Hit]] = {}
     for m in external:
-        hits = scan_plugin(_scan_root(m), manifest)
+        hits = scan_plugin(roots[m.name], manifest)
         if hits:
             out[m.name] = hits
     with _report_lock:

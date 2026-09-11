@@ -1322,10 +1322,14 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         The Desktop boot modal has no Python runtime of its own and reads that file after the ``serve``
         backend is up, so the scan must run wherever plugins are discovered — not only under the CLI
         banner / doctor / update, which never run inside the Desktop's backend. Fail-open: never raises.
+
+        Not forced: compat_report()'s cache key already includes a per-file fingerprint, so a discovery
+        pass over an unchanged plugin set is a cache hit instead of a full re-``ast.parse`` of every
+        non-bundled plugin (this ran on every ``session/new`` — see #108362).
         """
         try:
             from hermes_cli.plugin_compat import compat_report
-            compat_report(manifests, force=True)
+            compat_report(manifests)
         except Exception as exc:
             logger.debug("plugin compat report refresh skipped: %s", exc)
 

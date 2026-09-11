@@ -138,6 +138,35 @@ def test_discovery_refreshes_report_file(tmp_path, monkeypatch):
     assert not (tmp_path / "r.json").exists()
 
 
+def test_discovery_does_not_rescan_when_plugin_source_unchanged(tmp_path, monkeypatch):
+    """Regression for #108362: discovery used to force a full ast.parse rescan of every non-bundled
+    plugin on *every* pass (~7s of an ACP session/new), even when nothing had changed since the last
+    pass. A second refresh over the same, untouched plugin must be a cache hit."""
+    from hermes_cli.plugins import PluginManager
+    monkeypatch.setattr(pc, "load_manifest", lambda: MANIFEST)
+    monkeypatch.setattr(pc, "removal_in_effect", lambda today=None: False)
+    monkeypatch.setattr(pc, "report_file_path", lambda: tmp_path / "r.json")
+    pc._report_cache.clear()
+    plugin = tmp_path / "plugins" / "oldpaths"; plugin.mkdir(parents=True)
+    (plugin / "plugin.yaml").write_text("name: oldpaths\nversion: 0.1\ndescription: t\n")
+    (plugin / "__init__.py").write_text("from tools.web_tools import prefers_gateway\ndef register(ctx):\n    pass\n")
+    from hermes_cli.plugins_manifest import PluginManifest
+    real = PluginManifest(name="oldpaths", version="0.1", description="t", source="user", path=str(plugin))
+    mgr = PluginManager(scope_key=str(tmp_path))
+
+    calls = []
+    real_scan_plugin = pc.scan_plugin
+
+    def counting_scan_plugin(*a, **k):
+        calls.append(1)
+        return real_scan_plugin(*a, **k)
+
+    monkeypatch.setattr(pc, "scan_plugin", counting_scan_plugin)
+    mgr._refresh_plugin_compat_report([real])
+    mgr._refresh_plugin_compat_report([real])
+    assert len(calls) == 1
+
+
 def test_scan_root_never_falls_back_to_cwd(tmp_path, monkeypatch):
     """Windows dir paths and ``module:attr`` entry points used to collapse to ``.`` and scan the
     launch directory; an entry point must resolve to its installed package, everything else to None."""
