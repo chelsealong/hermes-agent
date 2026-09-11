@@ -176,7 +176,38 @@ function releaseRelayRetention() {
   relayRouteRetentions.clear()
 }
 
-/** One representative route per reachable connection id. */
+/** The registered connection currently marked primary, or `null` when the
+ *  Desktop shell predates `host.connections()` — in which case a local
+ *  route's eligibility is left alone rather than guessed at. */
+async function primaryConnectionId(): Promise<null | string> {
+  if (typeof host.connections !== 'function') {
+    return null
+  }
+
+  try {
+    const value = await host.connections()
+
+    // Rows on current SDKs; the pre-unwrap envelope ({primary, connections})
+    // on desktops that predate the SDK-side unwrap — accept both shapes.
+    const rows = Array.isArray(value)
+      ? value
+      : Array.isArray((value as { connections?: unknown })?.connections)
+        ? (value as { connections: Array<{ id?: string; primary?: boolean }> }).connections
+        : []
+
+    return String(rows.find(row => row?.primary)?.id || '')
+  } catch {
+    return null
+  }
+}
+
+/** One representative route per reachable connection id. A non-primary
+ *  `local` route is excluded: it is never a peer to relay messages TO (the
+ *  primary connection is where the user's own Desktop lives), so counting it
+ *  toward eligibility only kept its Electron-spawned backend alive forever —
+ *  every relay tick touching it refreshed the pool's idle clock, and the
+ *  reaper meant to reclaim an unused local backend could never fire (#108088).
+ */
 async function relayConnections(): Promise<RelayConnection[]> {
   if (typeof host.profileRoutes !== 'function' || typeof host.requestProfile !== 'function') {
     return []
@@ -184,14 +215,21 @@ async function relayConnections(): Promise<RelayConnection[]> {
 
   try {
     const routes = await host.profileRoutes()
+    const primaryId = await primaryConnectionId()
     const byConnection = new Map<string, ProfileRoute>()
 
     for (const route of Array.isArray(routes) ? routes : []) {
       const id = String(route?.connectionId || '')
 
-      if (id && !byConnection.has(id)) {
-        byConnection.set(id, route)
+      if (!id || byConnection.has(id)) {
+        continue
       }
+
+      if (route?.mode === 'local' && primaryId !== null && id !== primaryId) {
+        continue
+      }
+
+      byConnection.set(id, route)
     }
 
     return [...byConnection.entries()].map(([id, route]) => ({

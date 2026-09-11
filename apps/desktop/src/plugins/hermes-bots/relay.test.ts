@@ -29,6 +29,7 @@ import type { ProfileRoute } from './types'
 const { clearBotAttentionMock, hostMock, noteBotAttentionMock, UnboundedCache } = vi.hoisted(() => ({
   clearBotAttentionMock: vi.fn(),
   hostMock: {
+    connections: vi.fn(),
     onEvent: vi.fn(),
     profileRoutes: vi.fn(),
     requestProfile: vi.fn(),
@@ -55,9 +56,9 @@ vi.mock('./data', () => ({
 const RELAY_PUSH_DEBOUNCE_MS = 250
 const RELAY_DRAIN_INTERVAL_MS = 30_000
 
-const route = (id: string): ProfileRoute => ({
+const route = (id: string, mode: ProfileRoute['mode'] = 'remote'): ProfileRoute => ({
   connectionId: id,
-  mode: 'remote',
+  mode,
   profile: 'default',
   targetProfile: 'default'
 })
@@ -128,6 +129,7 @@ async function pushAndSettle(times = 1) {
 beforeEach(() => {
   vi.useFakeTimers()
   vi.clearAllMocks()
+  hostMock.connections = vi.fn(async () => [])
   hostMock.onEvent = vi.fn(() => vi.fn())
   hostMock.profileRoutes = vi.fn(async () => [route('a'), route('b')])
   hostMock.requestProfile = vi.fn(async () => ({}))
@@ -466,6 +468,49 @@ describe('the roster loop pushes the OTHER connections’ agents', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(calls).toHaveLength(0)
+
+    stopBotRelay()
+  })
+
+  it('excludes a non-primary local route from the peer set (#108088)', async () => {
+    // Remote is primary; 'local' is a forced-local child nobody asked for
+    // (spawned as a side effect of enumeration, never the user's workspace).
+    // Counting it toward the peer set would poll it forever and keep its
+    // pool entry's idle clock refreshed, so the reaper meant to reclaim it
+    // never fires.
+    hostMock.profileRoutes = vi.fn(async () => [route('remote-1'), route('local', 'local')])
+    hostMock.connections = vi.fn(async () => [
+      { id: 'remote-1', primary: true },
+      { id: 'local', primary: false }
+    ])
+
+    const calls = respondWith(() => ({}))
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Only one real peer remains once the phantom local route is excluded —
+    // below the >= 2 threshold, so neither connection is touched at all.
+    expect(calls).toHaveLength(0)
+
+    stopBotRelay()
+  })
+
+  it('keeps a PRIMARY local route in the peer set — it is the user’s own workspace', async () => {
+    hostMock.profileRoutes = vi.fn(async () => [route('local', 'local'), route('remote-1')])
+    hostMock.connections = vi.fn(async () => [
+      { id: 'local', primary: true },
+      { id: 'remote-1', primary: false }
+    ])
+
+    const calls = respondWith(() => ({ envelopes: [] }))
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls.some(call => call.connectionId === 'local')).toBe(true)
 
     stopBotRelay()
   })
