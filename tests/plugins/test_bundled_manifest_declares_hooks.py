@@ -4,7 +4,7 @@
 diffing declared hooks against what ``register()`` actually registers
 (``hermes_cli/plugin_validate.py``); a manifest using the legacy ``hooks:`` key
 is silently ignored, so every hook the plugin registers shows up as
-"undeclared" (issue #108371, following #97765 / #92642).
+"undeclared" (issue #108371).
 """
 
 from pathlib import Path
@@ -25,6 +25,7 @@ _AFFECTED_PLUGIN_DIRS = [
     "plugins/disk-cleanup",
     "plugins/google_meet",
     "plugins/observability/langfuse",
+    "plugins/security-guidance",
 ]
 
 
