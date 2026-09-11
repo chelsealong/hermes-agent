@@ -1257,22 +1257,23 @@ class ProcessRegistry(ProcessCheckpointMixin):
         """Move a session from running to finished.
         Idempotent: kill_process() and the reader thread can both call this; only
         the FIRST move enqueues the completion notification, so no duplicates.
-        The claim (popping from ``_running``) happens under the lock so only one
-        caller proceeds, but ``save_completed_result``'s disk I/O runs outside
-        it -- the lock must only guard in-memory state, never a filesystem write,
-        or every ``get()``/``is_session_waiting()`` call from the gateway's
+        The claim (popping from ``_running`` and inserting into ``_finished``)
+        happens atomically under one lock acquisition so only one caller proceeds
+        AND ``get()``/``is_session_waiting()`` can never observe the session as
+        absent from both maps. ``save_completed_result``'s disk I/O runs outside
+        the lock -- the lock must only guard in-memory state, never a filesystem
+        write, or every ``get()``/``is_session_waiting()`` call from the gateway's
         asyncio event loop blocks for as long as the write takes (#108327)."""
         with self._lock:
             was_running = session.id in self._running
             if was_running:
                 self._running.pop(session.id)
+            self._finished[session.id] = session
         if was_running:
             # A finite parent must not observe completion and exit before this
             # write lands; that gate is session._completion_event, set below
             # only after the write (and notification) complete.
             save_completed_result(session)
-        with self._lock:
-            self._finished[session.id] = session
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
             notification = {

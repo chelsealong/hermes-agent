@@ -167,6 +167,44 @@ class TestCompletionQueue:
                 release_save.set()
                 mover.join(timeout=5)
 
+    def test_get_finds_session_during_result_save(self, registry):
+        """get() must never return None for a session mid-flight in save_completed_result().
+
+        Regression test: freeing the lock around the disk write (#108327) must not
+        reopen a window where the session is in neither _running nor _finished. The
+        gateway's completion watcher (_run_process_watcher) treats a None get() as
+        "session gone" and permanently stops watching -- silently dropping the
+        notify_on_complete notification for exactly the slow-write case this fix
+        targets.
+        """
+        save_started = threading.Event()
+        release_save = threading.Event()
+
+        def slow_save(_session):
+            save_started.set()
+            assert release_save.wait(timeout=5), "test setup: never released"
+
+        s = _make_session(notify_on_complete=True, exit_code=0)
+        s.exited = True
+        registry._running[s.id] = s
+
+        with patch("tools.process_registry.save_completed_result", slow_save), \
+                patch("tools.process_registry.load_completed_results", return_value={}), \
+                patch.object(registry, "_write_checkpoint"):
+            mover = threading.Thread(target=registry._move_to_finished, args=(s,))
+            mover.start()
+            try:
+                assert save_started.wait(timeout=2), "save_completed_result never ran"
+                assert registry.get(s.id) is not None, (
+                    "session vanished from get() while save_completed_result was in flight"
+                )
+                assert registry.is_session_waiting(s.id) is False
+            finally:
+                release_save.set()
+                mover.join(timeout=5)
+
+        assert registry.get(s.id) is not None
+
 
 # =========================================================================
 # Checkpoint persistence
