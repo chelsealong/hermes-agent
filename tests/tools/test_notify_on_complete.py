@@ -10,6 +10,7 @@ Covers:
 
 import json
 import os
+import threading
 import time
 import pytest
 from unittest.mock import MagicMock, patch
@@ -129,6 +130,42 @@ class TestCompletionQueue:
         assert len(completions) == 3
         ids = {c["session_id"] for c in completions}
         assert ids == {"proc_0", "proc_1", "proc_2"}
+
+    def test_registry_lock_free_during_result_save(self, registry):
+        """_move_to_finished must not hold registry._lock across the disk write.
+
+        Regression test for #108327: save_completed_result() does synchronous
+        disk I/O and used to run inside `with self._lock:`, so a slow write (a
+        stalled disk, antivirus scan, ...) blocked every other thread waiting
+        on the same lock -- including the gateway's asyncio event loop calling
+        get()/is_session_waiting() -- for as long as the write took.
+        """
+        save_started = threading.Event()
+        release_save = threading.Event()
+
+        def slow_save(_session):
+            save_started.set()
+            assert release_save.wait(timeout=5), "test setup: never released"
+
+        s = _make_session(notify_on_complete=True, exit_code=0)
+        s.exited = True
+        registry._running[s.id] = s
+
+        with patch("tools.process_registry.save_completed_result", slow_save), \
+                patch.object(registry, "_write_checkpoint"):
+            mover = threading.Thread(target=registry._move_to_finished, args=(s,))
+            mover.start()
+            try:
+                assert save_started.wait(timeout=2), "save_completed_result never ran"
+                # The write is in flight; the registry lock must be free for
+                # other callers (e.g. get()) to proceed without blocking.
+                acquired = registry._lock.acquire(timeout=1)
+                if acquired:
+                    registry._lock.release()
+                assert acquired, "registry lock was held during disk I/O"
+            finally:
+                release_save.set()
+                mover.join(timeout=5)
 
 
 # =========================================================================
