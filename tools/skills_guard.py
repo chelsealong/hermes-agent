@@ -148,7 +148,10 @@ THREAT_PATTERNS = [
     (r'(?-i:ENV)\[.*(?:KEY|TOKEN|SECRET|PASSWORD)', "ruby_env_secret", "critical", "exfiltration", "reads secret via Ruby ENV[]"),
     # ── Exfiltration: DNS and staging ──
     # Do not match flag names such as llama.cpp `--host 127.0.0.1 --port $PORT`.
-    (r'(?<![-/])\b(dig|nslookup|host)\s+[^\n]*\$',
+    # The gap before `$` must look like shell arguments (flags starting with
+    # +/-), not prose: "Set the host value and run `${SKILL_DIR}/..." has
+    # plain English words in that gap and must not match (#108873).
+    (r'(?<![-/])\b(dig|nslookup|host)\s+(?:[+-]\S+\s+)*\$',
      "dns_exfil", "critical", "exfiltration", "DNS lookup with variable interpolation (possible DNS exfiltration)"),
     (r'>\s*/tmp/[^\s]*\s*&&\s*(curl|wget|nc|python)',
      "tmp_staging", "critical", "exfiltration", "writes to /tmp then exfiltrates"),
