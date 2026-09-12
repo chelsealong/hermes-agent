@@ -148,10 +148,16 @@ THREAT_PATTERNS = [
     (r'(?-i:ENV)\[.*(?:KEY|TOKEN|SECRET|PASSWORD)', "ruby_env_secret", "critical", "exfiltration", "reads secret via Ruby ENV[]"),
     # ── Exfiltration: DNS and staging ──
     # Do not match flag names such as llama.cpp `--host 127.0.0.1 --port $PORT`.
-    # The gap before `$` must look like shell arguments (flags starting with
-    # +/-), not prose: "Set the host value and run `${SKILL_DIR}/..." has
-    # plain English words in that gap and must not match (#108873).
-    (r'(?<![-/])\b(dig|nslookup|host)\s+(?:[+-]\S+\s+)*\$',
+    # Real dig/nslookup/host invocations allow bare positional args (record
+    # types, zone/resolver names: `dig TXT $DOMAIN`, `dig @8.8.8.8 $DOMAIN`,
+    # `dig axfr $DOMAIN`) alongside flags, so the gap before `$` can't be
+    # restricted to flag-shaped tokens. Instead reject only when a token in
+    # that gap is common English glue text, which is what actually
+    # distinguishes prose like "Set the host value and run `${SKILL_DIR}/..."
+    # from a shell command line (#108873).
+    (r'(?<![-/])\b(dig|nslookup|host)\s+(?:(?!(?:the|a|an|is|are|was|were|be|been|to|of|in|on|at|for|and|or|but'
+     r'|value|values|set|run|running|command|name|names|address|addresses|entry|entries|your|this|that|which'
+     r'|who|please|here|below|above|record|records|file|files|variable|variables|into|onto|with|from)\b)\S+\s+)*\$',
      "dns_exfil", "critical", "exfiltration", "DNS lookup with variable interpolation (possible DNS exfiltration)"),
     (r'>\s*/tmp/[^\s]*\s*&&\s*(curl|wget|nc|python)',
      "tmp_staging", "critical", "exfiltration", "writes to /tmp then exfiltrates"),

