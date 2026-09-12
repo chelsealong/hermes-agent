@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -360,6 +361,84 @@ def _rewrite_real_sudo_invocations(command: str) -> tuple[str, int]:
 def _count_real_sudo_invocations(command: str) -> int:
     """Return how many real sudo command words appear in *command*."""
     return _rewrite_real_sudo_invocations(command)[1]
+
+
+# --- Electron/Chromium NO_NEW_PRIVS escape (LocalEnvironment, Linux only) ---
+# Electron sets PR_SET_NO_NEW_PRIVS on itself at startup; the kernel latch is one-way and
+# inherited by every descendant, so a Desktop-spawned local backend can never regain the
+# setuid privilege sudo needs even with a correct password — the same profile run via the
+# CLI or gateway has the flag clear and sudo works fine there. A transient unit started BY
+# the systemd --user manager (rather than forked from our own latched tree) begins with the
+# flag clear, so re-launching the sudo-bearing command through it recovers sudo. Only
+# reached from ``LocalEnvironment._run_bash`` when the command actually contains a real
+# ``sudo`` invocation.
+
+def _no_new_privs_set(status_path: str = "/proc/self/status") -> bool:
+    """True when this process (and therefore every descendant) carries the kernel's
+    one-way NO_NEW_PRIVS latch."""
+    try:
+        with open(status_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("NoNewPrivs:"):
+                    return line.split()[1].strip() == "1"
+    except OSError:
+        pass
+    return False
+
+
+def _systemd_user_runtime_paths(uid: int) -> tuple[str, str]:
+    """(XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS) for *uid*'s systemd user manager,
+    derived from the uid rather than trusted from the process env: the Desktop app points
+    DBUS_SESSION_BUS_ADDRESS at Electron's own private bus, which systemd-run cannot use
+    to reach the real user manager."""
+    runtime_dir = f"/run/user/{uid}"
+    return runtime_dir, f"unix:path={runtime_dir}/bus"
+
+
+def _no_new_privs_escape_runtime_paths(uid: int) -> tuple[str, str] | None:
+    """The (runtime_dir, bus_address) pair when *uid*'s systemd user manager is actually
+    reachable, else None — fail closed so the command runs unwrapped (today's behavior:
+    sudo fails with its usual "password is required" message) rather than risk a
+    systemd-run invocation that cannot connect."""
+    if shutil.which("systemd-run") is None:
+        return None
+    runtime_dir, bus_address = _systemd_user_runtime_paths(uid)
+    bus_path = bus_address.split("unix:path=", 1)[1]
+    if not os.path.isdir(runtime_dir) or not os.path.exists(bus_path):
+        return None
+    return runtime_dir, bus_address
+
+
+def _wrap_argv_for_no_new_privs(
+    argv: list[str],
+    run_env: dict[str, str],
+    timeout: "int | float | None" = None,
+) -> list[str]:
+    """Wrap *argv* to run inside a transient ``systemd-run --user`` unit instead of the
+    current NO_NEW_PRIVS-latched process tree. ``run_env`` — the already-scrubbed
+    environment *argv* would otherwise receive — is forwarded into the unit one
+    ``--setenv`` at a time, since a transient unit otherwise starts near-empty; the user
+    manager supplies its own correct XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS, so those two
+    keys are left out of the forwarded set (the caller overrides them in the Popen ``env``
+    for systemd-run's OWN connection to the manager; see
+    ``LocalEnvironment._maybe_escape_no_new_privs``). ``--wait`` keeps systemd-run alive for
+    the unit's full run — required for the unit's exit code and stdio (wired through
+    ``--pipe``) to reach us at all — and ``RuntimeMaxSec`` gives the unit itself a hard
+    stop, because once wrapped, killing *our* subprocess (on our own timeout or an
+    interrupt) only stops the local systemd-run monitor, not the manager-spawned unit."""
+    setenv = [f"--setenv={key}={value}" for key, value in run_env.items()
+              if key not in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")]
+    props = []
+    try:
+        seconds = int(timeout)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds > 0:
+        props.append(f"--property=RuntimeMaxSec={seconds}s")
+    return [
+        "systemd-run", "--user", "--pipe", "--wait", "--quiet", "--collect", "--same-dir",
+        *props, *setenv, "--", *argv,
+    ]
 
 
 def _rewrite_compound_background(command: str) -> str:

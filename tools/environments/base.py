@@ -182,6 +182,11 @@ class BaseEnvironment(ABC):
         # True when login bash is unusable (e.g. broken Git-for-Windows startup)
         # so execute() must fall back to non-login ``bash -c``, not ``bash -l``.
         self._prefer_nonlogin = False
+        # Set by execute() just before _run_bash(); None on a direct _run_bash() call
+        # that bypassed execute() (snapshot bootstrap, the NOPASSWD probe) — those pass
+        # cmd_string straight through with no eval wrapping, so _run_bash falls back to
+        # scanning cmd_string itself in that case.
+        self._pending_has_real_sudo: "bool | None" = None
 
     # --- Abstract methods ---
     def _run_bash(
@@ -506,6 +511,13 @@ class BaseEnvironment(ABC):
         if rewrite_compound_background:
             from tools.terminal_tool_sudo import _rewrite_compound_background
             exec_command = _rewrite_compound_background(exec_command)
+        # Recorded on the resolved (post-rewrite, pre-``_wrap_command``) text: once wrapped,
+        # a literal ``sudo`` is nested inside an opaque ``eval '...'`` payload that the
+        # sudo-invocation scanner deliberately does not parse (see
+        # ``_rewrite_real_sudo_invocations``). Consumed once by ``LocalEnvironment._run_bash``
+        # (Electron NO_NEW_PRIVS escape); every other backend leaves it unread.
+        from tools.terminal_tool_sudo import _count_real_sudo_invocations
+        self._pending_has_real_sudo = _count_real_sudo_invocations(exec_command) > 0
         effective_timeout = timeout or self.timeout
         effective_cwd = cwd or self.cwd
 

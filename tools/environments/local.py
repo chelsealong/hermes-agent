@@ -32,6 +32,7 @@ from tools.environments.local_pythonpath import (
 
 
 _IS_WINDOWS = platform.system() == "Windows"
+_IS_LINUX = platform.system() == "Linux"
 
 logger = logging.getLogger(__name__)
 
@@ -780,8 +781,17 @@ class LocalEnvironment(BaseEnvironment):
             cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
         args = [bash, *(["-l"] if login else []), "-c", cmd_string]
         self._recover_cwd()
+        run_env = _make_run_env(self.env)
+        if not _IS_WINDOWS and _IS_LINUX:
+            has_real_sudo = self._pending_has_real_sudo
+            self._pending_has_real_sudo = None  # consume; a direct _run_bash() call leaves it None
+            if has_real_sudo is None:
+                from tools.terminal_tool_sudo import _count_real_sudo_invocations
+                has_real_sudo = _count_real_sudo_invocations(cmd_string) > 0
+            if has_real_sudo:
+                args, run_env = self._maybe_escape_no_new_privs(args, run_env, timeout)
         proc = subprocess.Popen(
-            args, text=True, env=_make_run_env(self.env), encoding="utf-8", errors="replace",
+            args, text=True, env=run_env, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
             start_new_session=True, cwd=self.cwd,
@@ -792,6 +802,27 @@ class LocalEnvironment(BaseEnvironment):
         if stdin_data is not None:
             _pipe_stdin(proc, stdin_data)
         return proc
+
+    def _maybe_escape_no_new_privs(
+        self, args: list[str], run_env: dict, timeout: int,
+    ) -> tuple[list[str], dict]:
+        """Re-launch *args* through this user's ``systemd-run --user`` unit when this
+        process carries the Electron/Chromium NO_NEW_PRIVS latch (see
+        ``terminal_tool_sudo``); *args* is already known to contain a real ``sudo``
+        invocation. Falls through to *args*/*run_env* unchanged — today's behavior,
+        sudo fails with its usual message — whenever the escape isn't cleanly available,
+        so a host without a reachable systemd user session is never worse off."""
+        from tools.terminal_tool_sudo import (
+            _no_new_privs_escape_runtime_paths, _no_new_privs_set, _wrap_argv_for_no_new_privs)
+        if not _no_new_privs_set():
+            return args, run_env
+        runtime_paths = _no_new_privs_escape_runtime_paths(os.getuid())  # windows-footgun: ok — only called under _IS_LINUX (see _run_bash)
+        if runtime_paths is None:
+            return args, run_env
+        wrapped_args = _wrap_argv_for_no_new_privs(args, run_env, timeout)
+        wrapped_env = dict(run_env)
+        wrapped_env["XDG_RUNTIME_DIR"], wrapped_env["DBUS_SESSION_BUS_ADDRESS"] = runtime_paths
+        return wrapped_args, wrapped_env
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""
