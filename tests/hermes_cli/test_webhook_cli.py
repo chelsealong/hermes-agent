@@ -37,6 +37,7 @@ def _make_args(**kwargs):
         "secret": "",
         "payload": "",
         "script": "",
+        "profile": "",
     }
     defaults.update(kwargs)
     return Namespace(**defaults)
@@ -65,6 +66,24 @@ class TestSubscribe:
         webhook_command(_make_args(webhook_action="subscribe", name="s"))
         secret = _load_subscriptions()["s"]["secret"]
         assert len(secret) > 20
+
+
+class TestSubscribeProfile:
+
+    def test_valid_profile_written_to_route(self, tmp_path):
+        (tmp_path / "profiles" / "compta").mkdir(parents=True)
+        webhook_command(_make_args(webhook_action="subscribe", name="s", profile="compta"))
+        assert _load_subscriptions()["s"]["profile"] == "compta"
+
+    def test_omitted_profile_leaves_route_unbound(self):
+        webhook_command(_make_args(webhook_action="subscribe", name="s"))
+        assert "profile" not in _load_subscriptions()["s"]
+
+    def test_unknown_profile_rejected(self, capsys):
+        webhook_command(_make_args(webhook_action="subscribe", name="s", profile="ghost"))
+        out = capsys.readouterr().out
+        assert "does not exist" in out
+        assert "s" not in _load_subscriptions()
 
 
 class TestList:

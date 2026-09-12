@@ -36,6 +36,10 @@ def build_webhook_parser(subparsers, *, cmd_webhook: Callable) -> None:
         help="Filter/transform script under ~/.hermes/scripts/. The route "
         "payload is passed as JSON on stdin; empty stdout, [SILENT], or a "
         "nonzero exit code ignores the webhook.")
+    wh_sub.add_argument(
+        "--profile", default="",
+        help="Bind this subscription to <profile>, so it is only reachable "
+        "at /p/<profile>/webhooks/<name> (default: the 'default' profile).")
 
     webhook_subparsers.add_parser("list", aliases=["ls"], help="List all dynamic subscriptions")
 

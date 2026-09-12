@@ -110,6 +110,18 @@ def _cmd_subscribe(args):
         print(f"Error: Invalid name '{name}'. Use lowercase alphanumeric with hyphens/underscores.")
         return
 
+    profile = (getattr(args, "profile", "") or "").strip()
+    if profile:
+        from hermes_cli.profiles import normalize_profile_name, profile_exists
+        try:
+            profile = normalize_profile_name(profile)
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
+        if not profile_exists(profile):
+            print(f"Error: Profile '{profile}' does not exist. Run 'hermes profile list' to see available profiles.")
+            return
+
     subs = _load_subscriptions()
     is_update = name in subs
     secret = args.secret or secrets.token_urlsafe(32)
@@ -122,6 +134,8 @@ def _cmd_subscribe(args):
         "skills": [s.strip() for s in args.skills.split(",")] if args.skills else [],
         "deliver": args.deliver or "log",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if profile:
+        route["profile"] = profile
 
     if getattr(args, "deliver_only", False):
         if route["deliver"] == "log":
@@ -138,11 +152,14 @@ def _cmd_subscribe(args):
     subs[name] = route
     _save_subscriptions(subs)
 
+    url_path = f"/p/{profile}/webhooks/{name}" if profile else f"/webhooks/{name}"
     print(f"\n  {'Updated' if is_update else 'Created'} webhook subscription: {name}")
-    print(f"  URL:    {_get_webhook_base_url()}/webhooks/{name}")
+    print(f"  URL:    {_get_webhook_base_url()}{url_path}")
     print(f"  Secret: {secret}")
     print(f"  Events: {', '.join(events) or '(all)'}")
     print(f"  Deliver: {route['deliver']}")
+    if profile:
+        print(f"  Profile: {profile}")
     if route.get("deliver_only"):
         print("  Mode: direct delivery (no agent, zero LLM cost)")
     if route.get("prompt"):
@@ -170,12 +187,16 @@ def _cmd_list(args):
         if route.get("deliver_only"):
             deliver = f"{deliver} (direct — no agent)"
         desc = route.get("description", "")
+        profile = route.get("profile")
+        url_path = f"/p/{profile}/webhooks/{name}" if profile else f"/webhooks/{name}"
         print(f"  ◆ {name}")
         if desc:
             print(f"    {desc}")
-        print(f"    URL:     {base_url}/webhooks/{name}")
+        print(f"    URL:     {base_url}{url_path}")
         print(f"    Events:  {events}")
         print(f"    Deliver: {deliver}")
+        if profile:
+            print(f"    Profile: {profile}")
         if route.get("script"):
             print(f"    Script:  {route['script']}")
         print()
