@@ -311,6 +311,16 @@ def _first_nonzero(obj: Any, *paths: tuple[str, ...]) -> int:
     return next((v for v in (_usage_field(obj, *path) for path in paths) if v), 0)
 
 
+def _usage_decimal_field(obj: Any, *path: str) -> Optional[Decimal]:
+    """Decimal at ``obj.path[0].path[1]...`` (dict or attribute access, like
+    ``_usage_field``); ``None`` if any hop is missing or non-numeric."""
+    for hop in path:
+        if obj is None:
+            return None
+        obj = obj.get(hop) if isinstance(obj, dict) else getattr(obj, hop, None)
+    return _to_decimal(obj)
+
+
 # Picker slugs → snapshot provider key ("openai-api" is the slug for direct
 # api.openai.com). Google and Fireworks are matched by name OR host below.
 _SNAPSHOT_PROVIDER_ALIASES = {
@@ -541,7 +551,7 @@ def normalize_usage(
 
     return CanonicalUsage(
         input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens,
-        cache_write_tokens=cache_write_tokens, reasoning_tokens=reasoning_tokens,
+        cache_write_tokens=cache_write_tokens, reasoning_tokens=reasoning_tokens, raw_usage=u,
     )
 
 
@@ -553,6 +563,16 @@ def estimate_usage_cost(
     model_name: str, usage: CanonicalUsage, *, provider: Optional[str] = None,
     base_url: Optional[str] = None, api_key: Optional[str] = None,
 ) -> CostResult:
+    # Some routes (Nous portal BYOK, ...) report the real per-call charge in
+    # usage.cost_details.upstream_inference_cost alongside a constant "usage.cost" stub;
+    # prefer it over the rate table, which can only ever approximate what was billed (#108936).
+    actual_cost = _usage_decimal_field(usage.raw_usage, "cost_details", "upstream_inference_cost")
+    if actual_cost is not None and actual_cost >= _ZERO:
+        return CostResult(
+            amount_usd=actual_cost, status="actual", source="provider_cost_api",
+            label=format_cost_label(actual_cost),
+        )
+
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
     if route.billing_mode == "subscription_included":
         return CostResult(

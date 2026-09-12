@@ -283,6 +283,39 @@ def test_bedrock_versioned_inference_profile_resolves_to_bare_pricing():
 
 
 
+def test_estimate_usage_cost_prefers_provider_upstream_inference_cost():
+    """Nous portal BYOK routes (e.g. deepseek-v4-flash via Novita) report the real
+    per-call charge in usage.cost_details.upstream_inference_cost, while the
+    top-level usage.cost is a flat, unusable stub. Before this fix, estimate_usage_cost
+    never looked at cost_details and always fell back to Hermes' rate table, which
+    understated real billing by ~5x for this route (#108936)."""
+    usage = SimpleNamespace(
+        prompt_tokens=144043,
+        completion_tokens=200,
+        cost=5e-05,
+        cost_details=SimpleNamespace(upstream_inference_cost=0.06338552),
+    )
+    canonical = normalize_usage(usage, provider="nous", api_mode="chat_completions")
+
+    result = estimate_usage_cost("deepseek/deepseek-v4-flash-0731", canonical, provider="nous")
+
+    assert result.status == "actual"
+    assert result.source == "provider_cost_api"
+    assert result.amount_usd == Decimal("0.06338552")
+
+
+def test_estimate_usage_cost_falls_back_without_upstream_inference_cost():
+    """No cost_details on the response (most providers): behavior is unchanged —
+    the rate table still prices the call."""
+    usage = SimpleNamespace(prompt_tokens=1000, completion_tokens=200)
+    canonical = normalize_usage(usage, provider="deepseek", api_mode="chat_completions")
+
+    result = estimate_usage_cost("deepseek-flash", canonical, provider="deepseek")
+
+    assert result.status == "estimated"
+    assert result.source == "official_docs_snapshot"
+
+
 def test_bedrock_claude_cached_session_estimates_cost_not_unknown():
     """A Bedrock Claude session with cache hits must produce a dollar estimate,
     not ``unknown`` — the user-visible symptom in #50295.
