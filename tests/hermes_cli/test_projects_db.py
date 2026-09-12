@@ -55,6 +55,23 @@ def test_create_get_list(conn):
     assert len(pdb.list_projects(conn)) == 1
 
 
+def test_create_strips_invisible_characters_from_name(conn):
+    # Zero-width non-joiner hidden between "Sync" and "Bot" (#108982): looks identical to
+    # "AttendanceSyncBot" but would otherwise compare unequal to it everywhere names are matched.
+    pid = pdb.create_project(conn, name="AttendanceSync‌Bot", folders=["/tmp/attendance"])
+    proj = pdb.get_project(conn, pid)
+
+    assert proj.name == "AttendanceSyncBot"
+
+
+def test_update_strips_invisible_characters_from_name(conn):
+    pid = pdb.create_project(conn, name="Clean", folders=["/tmp/clean"])
+
+    pdb.update_project(conn, pid, name="Re​named﻿")
+
+    assert pdb.get_project(conn, pid).name == "Renamed"
+
+
 
 
 

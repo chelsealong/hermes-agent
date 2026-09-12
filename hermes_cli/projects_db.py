@@ -12,6 +12,7 @@ import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -79,6 +80,17 @@ _OPTIONAL_PROJECT_COLUMNS = ("board_slug", "primary_path", "icon", "color")
 _OPTIONAL_ROW_FIELDS = ("description", "icon", "color", "board_slug", "primary_path")
 _ACTIVE_META_KEY = "active_id"
 _DISCOVERY_POLICY_META_KEY = "repo_discovery_policy"
+
+
+# Categories invisible or non-printable at any position: control (Cc), format (Cf, e.g. zero-width
+# joiners/BOM), private-use (Co), surrogate (Cs). Two names that look identical to the user can
+# otherwise compare unequal (name lookups in tools/project_tools.py, #108982).
+_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs"})
+
+
+def _strip_invisible(text: str) -> str:
+    """Drop control/format/private-use/surrogate code points from a display name."""
+    return "".join(ch for ch in text if unicodedata.category(ch) not in _INVISIBLE_CATEGORIES)
 
 
 def _slugify(name: str) -> str:
@@ -231,7 +243,7 @@ def create_project(
 ) -> str:
     """Create a project and return its id. ``folders`` are normalized to absolute paths; ``primary_path``
     is added to the folder set (if absent) and marked primary, else the first folder becomes primary."""
-    name = str(name or "").strip()
+    name = _strip_invisible(str(name or "")).strip()
     if not name:
         raise ValueError("project name must not be empty")
     slug_candidate = normalize_slug(slug) if slug else _slugify(name)
@@ -284,7 +296,7 @@ def update_project(
     """Patch top-level project fields; only provided (non-None) fields change. ``icon``, ``color`` and
     ``board_slug`` take ``""`` to clear (store NULL) — ``None`` leaves the field untouched."""
     if name is not None:
-        name = str(name).strip()
+        name = _strip_invisible(str(name)).strip()
         if not name:
             raise ValueError("project name must not be empty")
     if board_slug is not None:
