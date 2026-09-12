@@ -42,7 +42,6 @@ import {
   MINIMIZED_TRACK,
   paneChrome,
   type PaneSizing,
-  resolveCssPx,
   shownPaneIds,
   subtreeGone,
   type TrackContext
@@ -527,21 +526,17 @@ export function TreeSplit({
     [axis, editMode, horizontal, node.children, node.id, node.weights, hiddenPanes, narrow, overrides, panes]
   )
 
-  // Double-click a sash: every neighbor returns to its DEFAULT size.
+  // Double-click a sash: distribute this split evenly.
   //  - fixed zones (sidebar stacks): clear the drag override -> the declared
-  //    width (237px etc.) comes back;
-  //  - flex zones fronted by a size-declaring pane (a sidebar in a mixed
-  //    stack): pin the weight so the zone lands EXACTLY on that size;
-  //  - everything else: the preset's weights for this split (rearranging
-  //    panes keeps the applied preset's split ids), else even distribution.
+  //    width (237px etc.) comes back and keeps sizing itself, untouched by
+  //    weights;
+  //  - flex zones: weight 1, so the leftover splits evenly between them —
+  //    a pane's own declared width/height is a preference, not a pin, so it
+  //    must not stop this seam (or any other in the split) from equalizing;
+  //  - unless a layout preset declares weights for this split (rearranging
+  //    panes keeps the applied preset's split ids), which wins instead.
   const resetBoundary = useCallback(
     (aIndex: number, bIndex: number) => {
-      const container = containerRef.current
-
-      if (!container) {
-        return
-      }
-
       const setOverride = horizontal ? setPaneWidthOverride : setPaneHeightOverride
 
       for (const [child, edge] of [
@@ -556,49 +551,8 @@ export function TreeSplit({
       }
 
       const preset = presetSplitWeights(node.id, node.weights.length)
-      const weights = preset ?? [...node.weights]
 
-      const rect = container.getBoundingClientRect()
-      const totalPx = horizontal ? rect.width : rect.height
-      let pinned = false
-
-      for (const i of [aIndex, bIndex]) {
-        const child = node.children[i]
-
-        // Fixed tracks size themselves from the declared width (override
-        // cleared above) — weights only matter for FLEX zones.
-        if (child.type !== 'group' || fixedTrackSize(child, axis, trackCtx) !== null) {
-          continue
-        }
-
-        // The zone's natural default = the largest size any of its panes
-        // declares along this axis (a sessions+terminal stack is still a
-        // 237px sidebar at heart, whichever chip is fronted).
-        let px: number | null = null
-
-        for (const paneId of shownPaneIds(child, trackCtx)) {
-          const sizing = (paneFor(paneId)?.data ?? {}) as PaneSizing
-          const css = horizontal ? sizing.width : sizing.height
-          const resolved = css ? resolveCssPx(container, css, horizontal) : null
-
-          if (resolved !== null) {
-            px = Math.max(px ?? 0, resolved)
-          }
-        }
-
-        if (px === null || px <= 0 || px >= totalPx) {
-          continue
-        }
-
-        const others = weights.reduce((sum, w, j) => (j === i ? sum : sum + w), 0)
-
-        if (others > 0) {
-          weights[i] = (px * others) / (totalPx - px)
-          pinned = true
-        }
-      }
-
-      setTreeSplitWeights(node.id, !preset && !pinned ? weights.map(() => 1) : weights)
+      setTreeSplitWeights(node.id, preset ?? node.weights.map(() => 1))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [axis, editMode, horizontal, node.children, node.id, node.weights, hiddenPanes, narrow, overrides, panes]
