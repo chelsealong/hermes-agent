@@ -369,6 +369,19 @@ def _check_cross_profile_path(filepath: str, task_id: str = "default") -> str | 
     return get_container_mirror_warning(resolved, mirror_prefix=_get_container_mirror_prefix_for_task(task_id))
 
 
+def _real_write_target(filepath: str, task_id: str) -> str | None:
+    """What a write to ``filepath`` actually touches, or ``None`` on resolution failure.
+
+    On the (non-container, non-Windows) host path ``_resolve_path_for_task`` already
+    returns ``Path.resolve()``, which follows symlinks — so a text-suffixed symlink to a
+    binary document resolves here to the real document path, not the alias name. Container
+    and Windows paths are normalized without dereferencing, same as every other guard here."""
+    try:
+        return str(_resolve_path_for_task(filepath, task_id))
+    except (OSError, ValueError):
+        return None
+
+
 def _check_binary_document_write(filepath: str, task_id: str = "default") -> str | None:
     """Reject text-tool writes that would corrupt a binary document (read_file showed
     EXTRACTED text, so the model may write it back). Opaque formats are always rejected;
@@ -378,17 +391,24 @@ def _check_binary_document_write(filepath: str, task_id: str = "default") -> str
     plausibly believes it holds the file's contents and tries to write the edited text back with
     write_file/patch. A plain-text write can never produce a valid OOXML/OLE/ODF container, so that write
     silently destroys the document (port of nearai/ironclaw#7109).
+
+    Checked by suffix alone, a text-suffixed symlink pointing AT a binary document would
+    slip past: the write lands on the resolved target, not the name passed in. So the
+    target's real path is checked too, whenever it differs from the given path.
     """
-    if has_opaque_document_extension(filepath):
-        ext = filepath[filepath.rfind("."):].lower()
+    real_target = _real_write_target(filepath, task_id)
+    if has_opaque_document_extension(filepath) or (real_target and has_opaque_document_extension(real_target)):
+        named = real_target if (real_target and has_opaque_document_extension(real_target)
+                                 and not has_opaque_document_extension(filepath)) else filepath
+        ext = named[named.rfind("."):].lower()
         return (
-            f"Refusing to write plain text to binary document '{filepath}' ({ext}). "
+            f"Refusing to write plain text to binary document '{named}' ({ext}). "
             "A text write cannot produce a valid document container and would "
             "corrupt the file (read_file showed you EXTRACTED text, not the real "
             "bytes). Use the docx/xlsx/powerpoint skills or a library like "
             "python-docx/openpyxl/python-pptx via the terminal to create or edit "
             "this document.")
-    if is_pdf_path(filepath):
+    if is_pdf_path(filepath) or (real_target and is_pdf_path(real_target)):
         try:
             resolved = Path(_resolve_path_for_task(filepath, task_id))
         except Exception:

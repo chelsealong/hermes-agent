@@ -7,8 +7,11 @@ allowing new-.pdf creation (raw PDF syntax is text-authorable).
 """
 
 import json
+import tempfile
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from tools.binary_extensions import (
     has_opaque_document_extension,
@@ -16,6 +19,17 @@ from tools.binary_extensions import (
 )
 from tools.file_tools import patch_tool, write_file_tool
 from tools.file_tools_write_guards import _check_binary_document_write
+
+
+def _can_symlink() -> bool:
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "src"
+            src.write_text("x")
+            (Path(d) / "lnk").symlink_to(src)
+            return True
+    except OSError:
+        return False
 
 
 def _make_minimal_docx(path: Path) -> None:
@@ -126,6 +140,35 @@ class TestWriteFileToolGuard:
         assert not result.get("error")
         assert target.read_text() == "hello world"
 
+    @pytest.mark.skipif(not _can_symlink(), reason="Symlinks need elevated privileges")
+    def test_write_file_rejects_docx_through_text_suffixed_symlink(self, tmp_path: Path):
+        # A .txt-named symlink pointing at a real .docx must be judged by what the
+        # write actually touches, not by the alias's own suffix (issue #108715).
+        docx = tmp_path / "document.docx"
+        _make_minimal_docx(docx)
+        original = docx.read_bytes()
+        alias = tmp_path / "alias.txt"
+        alias.symlink_to(docx)
+
+        result = json.loads(write_file_tool(str(alias), "edited text"))
+
+        assert result.get("error"), "text write through a symlink alias must be refused"
+        assert docx.read_bytes() == original, "aliased document bytes must be untouched"
+        assert zipfile.is_zipfile(docx), "document must remain a valid container"
+
+    @pytest.mark.skipif(not _can_symlink(), reason="Symlinks need elevated privileges")
+    def test_write_file_rejects_pdf_overwrite_through_text_suffixed_symlink(self, tmp_path: Path):
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n1 0 obj\nendobj\n%%EOF\n")
+        original = pdf.read_bytes()
+        alias = tmp_path / "alias.txt"
+        alias.symlink_to(pdf)
+
+        result = json.loads(write_file_tool(str(alias), "replacement text"))
+
+        assert result.get("error"), "overwrite of an aliased PDF must be refused"
+        assert pdf.read_bytes() == original
+
 
 class TestPatchToolGuard:
     def test_patch_replace_rejects_docx(self, tmp_path: Path):
@@ -183,3 +226,19 @@ class TestPatchToolGuard:
         )
         assert not result.get("error")
         assert target.read_text() == "hello there"
+
+    @pytest.mark.skipif(not _can_symlink(), reason="Symlinks need elevated privileges")
+    def test_patch_replace_rejects_docx_through_text_suffixed_symlink(self, tmp_path: Path):
+        docx = tmp_path / "document.docx"
+        _make_minimal_docx(docx)
+        original = docx.read_bytes()
+        alias = tmp_path / "alias.txt"
+        alias.symlink_to(docx)
+
+        result = json.loads(
+            patch_tool(mode="replace", path=str(alias),
+                       old_string="good", new_string="great")
+        )
+
+        assert result.get("error")
+        assert docx.read_bytes() == original
