@@ -223,9 +223,9 @@ describe('project-associated new-session drag sources', () => {
         {...baseProps()}
         groups={[
           group({
-            id: '/repo::main',
+            id: '/repo::develop',
             isMain: true,
-            label: 'main',
+            label: 'develop',
             path: '/repo',
             sessions: [{ id: 'main-session' } as SessionInfo]
           })
@@ -234,11 +234,11 @@ describe('project-associated new-session drag sources', () => {
       />
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'New session in main' }), { button: 0 })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'New session in develop' }), { button: 0 })
     commitLatestDrag()
 
     await waitFor(() => expect(onNewSessionSplit).toHaveBeenCalledOnce())
-    expect(switchBranchInRepo).toHaveBeenCalledWith('/repo', 'main')
+    expect(switchBranchInRepo).toHaveBeenCalledWith('/repo', 'develop')
     expect(vi.mocked(switchBranchInRepo).mock.invocationCallOrder[0]).toBeLessThan(
       onNewSessionSplit.mock.invocationCallOrder[0]
     )

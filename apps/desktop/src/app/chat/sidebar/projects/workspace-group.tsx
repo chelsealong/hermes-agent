@@ -20,7 +20,7 @@ import { SidebarGroupRow, SidebarRowLead, SidebarRowLink, SidebarRowStack } from
 import { rankSessions } from '../order'
 
 import { PROJECT_PREVIEW_COUNT, SIDEBAR_GROUP_PAGE, useWorkspaceNodeOpen } from './model'
-import type { SidebarSessionGroup } from './workspace-groups'
+import { DEFAULT_BRANCH_LABEL, type SidebarSessionGroup } from './workspace-groups'
 import {
   WorkspaceAddButton,
   WorkspaceContextMenu,
@@ -93,8 +93,13 @@ export function SidebarWorkspaceGroup({
 
     // Main-checkout lanes are branch-labeled views over the same repo root path.
     // Clicking "+" on `main` should open on `main`, not whatever branch the root
-    // currently sits on (`test0`, etc.), so explicitly switch first.
-    if (group.isMain && group.path && group.label) {
+    // currently sits on (`test0`, etc.), so explicitly switch first. But a label
+    // of exactly DEFAULT_BRANCH_LABEL can also mean the lane's session recorded
+    // no branch at all (`liveLaneForRepo` guesses "main" as a display fallback,
+    // never a real one) — switching to that guess fails hard on repos whose
+    // trunk isn't literally named `main`. Skip the switch in that case and open
+    // on whatever the checkout already sits on.
+    if (group.isMain && group.path && group.label && group.label !== DEFAULT_BRANCH_LABEL) {
       try {
         await switchBranchInRepo(group.path, group.label)
       } catch (err) {
