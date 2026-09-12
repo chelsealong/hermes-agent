@@ -147,6 +147,24 @@ class TestChildSystemPrompt(unittest.TestCase):
         self.assertIn("YOUR TASK", prompt)
         self.assertNotIn("CONTEXT", prompt)
 
+    def test_context_length_scales_the_context_file_cap(self):
+        """#108891: a child on a large-context model must not be capped at the
+        20,000-char floor the same as a child on an 8K model."""
+        import tempfile
+
+        content = "x" * 30_000
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "AGENTS.md"), "w") as f:
+                f.write(content)
+
+            floor_prompt = _build_child_system_prompt("goal", workspace_path=tmp)
+            self.assertIn("[...truncated", floor_prompt)
+            self.assertNotIn(content, floor_prompt)
+
+            scaled_prompt = _build_child_system_prompt("goal", workspace_path=tmp, context_length=1_000_000)
+            self.assertNotIn("[...truncated", scaled_prompt)
+            self.assertIn(content, scaled_prompt)
+
 class TestStripBlockedTools(unittest.TestCase):
     def test_removes_blocked_toolsets(self):
         result = _strip_blocked_tools(["terminal", "file", "delegation", "clarify", "memory", "code_execution"])
@@ -420,6 +438,38 @@ class TestDelegateTask(unittest.TestCase):
                 if child_db is not None:
                     child_db.close()
                 parent_db.close()
+
+    def test_child_context_files_use_childs_own_resolved_window(self):
+        """#108891: the child's project-context cap must scale with the CHILD's own
+        resolved context_length (its own model's window), not fall back to the
+        20,000-char floor regardless of how large that window is."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "AGENTS.md"), "w") as f:
+                f.write("x" * 30_000)
+
+            parent = _make_mock_parent(depth=0)
+            parent.terminal_cwd = tmp
+
+            with patch("run_agent.AIAgent") as MockAgent:
+                mock_child = MagicMock()
+                mock_child.context_compressor.context_length = 1_000_000
+                MockAgent.return_value = mock_child
+
+                child = _build_child_agent(
+                    task_index=0,
+                    goal="test",
+                    context=None,
+                    toolsets=None,
+                    model="test-model",
+                    max_iterations=5,
+                    parent_agent=parent,
+                    task_count=1,
+                )
+
+            self.assertNotIn("TRUNCATED", child.ephemeral_system_prompt)
+            self.assertIn("x" * 30_000, child.ephemeral_system_prompt)
 
     def test_nous_child_rederives_api_mode_from_model(self):
         """Portal is dual-wire — same provider + different model prefix must

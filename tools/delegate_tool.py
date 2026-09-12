@@ -253,6 +253,16 @@ def _build_child_agent(
             raise
     child._print_fn = getattr(parent_agent, "_print_fn", None)
     _apply_child_cache_ttl(child)
+    # The child's own resolved window, not the parent's: a child on a 1M-token model must get the
+    # same dynamic context-file cap the parent would get on that model, not the 20,000-char floor
+    # (#108891). Only known after AIAgent() resolves the child's model/provider, so the prompt is
+    # rebuilt here rather than passed at construction.
+    _child_ctx_len = getattr(getattr(child, "context_compressor", None), "context_length", None)
+    if isinstance(_child_ctx_len, int) and _child_ctx_len > 0:
+        child.ephemeral_system_prompt = _build_child_system_prompt(
+            goal, context, workspace_path=_resolve_workspace_hint(parent_agent), role=effective_role,
+            max_spawn_depth=max_spawn, child_depth=child_depth, context_length=_child_ctx_len,
+        )
     if child_session_db is not None:
         child._owns_session_db = True  # released by the child's close(), never by the parent
     # Ownership transfer for the dedicated handle: the child's close() must release it (nothing else holds a
