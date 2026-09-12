@@ -121,3 +121,29 @@ def test_ensure_dependency_uses_powershell_on_windows(tmp_path):
         assert cmd[cmd.index("-Ensure") + 1] == "node"
         assert "-HermesHome" in cmd
         assert str(tmp_path / "fakehome") in cmd
+
+
+def test_ensure_dependency_powershell_argv_has_noprofile(tmp_path):
+    """#108735: the install.ps1 shell-out must carry -NoProfile so a user
+    $PROFILE that forwards Windows PowerShell 5.1 to pwsh 7 can't wedge this
+    child on interactive stdin. This asserts argv construction only (the
+    branch is already selected via the mocked _find_install_script return),
+    not real PowerShell behaviour, so it runs on any host."""
+    from hermes_cli.dep_ensure import ensure_dependency
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "install.ps1").write_text("# fake")
+    with patch("hermes_cli.dep_ensure._DEP_CHECKS", {"node": lambda: False}), \
+         patch("hermes_cli.dep_ensure._find_install_script", return_value=(scripts_dir / "install.ps1", "powershell")), \
+         patch("hermes_cli.dep_ensure.shutil") as mock_shutil, \
+         patch("hermes_constants.get_hermes_home", return_value=tmp_path / "fakehome"), \
+         patch("subprocess.run") as mock_run, \
+         patch("sys.stdin") as mock_stdin:
+        mock_shutil.which.side_effect = lambda name: "powershell" if name == "powershell" else None
+        mock_stdin.isatty.return_value = False
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        ensure_dependency("node", interactive=False)
+        cmd = mock_run.call_args[0][0]
+        assert "-NoProfile" in cmd
+        assert "-NonInteractive" in cmd
+        assert cmd.index("-NoProfile") < cmd.index("-File")

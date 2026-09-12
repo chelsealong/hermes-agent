@@ -720,6 +720,22 @@ class TestInstallUvInternals:
         if sys.platform != "win32":
             assert call_env["UV_UNMANAGED_INSTALL"] == str(tmp_path / "bin")
 
+    def test_windows_installer_cannot_be_wedged_by_a_user_profile(self):
+        """#108735: without -NoProfile, a user $PROFILE that forwards Windows
+        PowerShell 5.1 to pwsh 7 (a common pattern) makes this child block on
+        interactive stdin forever, since the caller captures output with no
+        timeout. Assert the argv can't reach a profile and the call is bounded."""
+        import hermes_cli.managed_uv as managed_uv
+
+        with patch("subprocess.run") as mock_run:
+            managed_uv._install_uv_windows({"FOO": "bar"})
+
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert "-NoProfile" in cmd
+        assert "-NonInteractive" in cmd
+        assert kwargs.get("timeout") is not None
+
 
 class TestRuntimeRequestMinorLine:
     """The repair must request the CPython minor line, not the exact patch.
