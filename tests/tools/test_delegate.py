@@ -442,8 +442,14 @@ class TestDelegateTask(unittest.TestCase):
     def test_child_context_files_use_childs_own_resolved_window(self):
         """#108891: the child's project-context cap must scale with the CHILD's own
         resolved context_length (its own model's window), not fall back to the
-        20,000-char floor regardless of how large that window is."""
+        20,000-char floor regardless of how large that window is.
+
+        The scaling is applied by ``_apply_child_context_file_cap`` on the child's own
+        worker thread (called from ``_run_single_child``), not inside ``_build_child_agent``
+        itself — see ``test_build_child_agent_does_not_force_context_length_resolution``
+        for why that split matters."""
         import tempfile
+        from tools.delegate_tool import _apply_child_context_file_cap
 
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "AGENTS.md"), "w") as f:
@@ -455,6 +461,53 @@ class TestDelegateTask(unittest.TestCase):
             with patch("run_agent.AIAgent") as MockAgent:
                 mock_child = MagicMock()
                 mock_child.context_compressor.context_length = 1_000_000
+
+                def _make_child(*args, **kwargs):
+                    mock_child.ephemeral_system_prompt = kwargs.get("ephemeral_system_prompt")
+                    return mock_child
+                MockAgent.side_effect = _make_child
+
+                child = _build_child_agent(
+                    task_index=0,
+                    goal="test",
+                    context=None,
+                    toolsets=None,
+                    model="test-model",
+                    max_iterations=5,
+                    parent_agent=parent,
+                    task_count=1,
+                )
+
+            # Still floored right after construction: the cap isn't applied yet.
+            self.assertIn("[...truncated", child.ephemeral_system_prompt)
+
+            _apply_child_context_file_cap(child)
+
+            self.assertNotIn("[...truncated", child.ephemeral_system_prompt)
+            self.assertIn("x" * 30_000, child.ephemeral_system_prompt)
+
+    def test_build_child_agent_does_not_force_context_length_resolution(self):
+        """#108891 follow-up: ``_build_child_agent`` runs under ``_CHILD_CONSTRUCTION_LOCK``,
+        serializing every child in a batch, so it must NOT force resolution of the child's
+        lazy ``context_compressor.context_length`` — that property can issue a synchronous
+        network probe (#32221) when the (model, base_url) pair isn't already cached. Uses a
+        REAL ContextCompressor (not a MagicMock) so the lazy property is actually exercised."""
+        import tempfile
+        from agent.context_compressor import ContextCompressor
+        from tools.delegate_tool import _apply_child_context_file_cap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "AGENTS.md"), "w") as f:
+                f.write("x" * 30_000)
+
+            parent = _make_mock_parent(depth=0)
+            parent.terminal_cwd = tmp
+
+            with patch(
+                "agent.context_compressor.get_model_context_length", return_value=1_000_000,
+            ) as mock_get, patch("run_agent.AIAgent") as MockAgent:
+                mock_child = MagicMock()
+                mock_child.context_compressor = ContextCompressor(model="test-model")
                 MockAgent.return_value = mock_child
 
                 child = _build_child_agent(
@@ -468,7 +521,15 @@ class TestDelegateTask(unittest.TestCase):
                     task_count=1,
                 )
 
-            self.assertNotIn("TRUNCATED", child.ephemeral_system_prompt)
+                # Construction (under the shared lock) must not have probed.
+                mock_get.assert_not_called()
+
+                # The deferred, per-child application (unlocked, on the child's own
+                # thread in production) is where resolution is allowed to happen.
+                _apply_child_context_file_cap(child)
+                mock_get.assert_called_once()
+
+            self.assertNotIn("[...truncated", child.ephemeral_system_prompt)
             self.assertIn("x" * 30_000, child.ephemeral_system_prompt)
 
     def test_nous_child_rederives_api_mode_from_model(self):

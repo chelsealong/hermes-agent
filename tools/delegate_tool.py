@@ -255,14 +255,16 @@ def _build_child_agent(
     _apply_child_cache_ttl(child)
     # The child's own resolved window, not the parent's: a child on a 1M-token model must get the
     # same dynamic context-file cap the parent would get on that model, not the 20,000-char floor
-    # (#108891). Only known after AIAgent() resolves the child's model/provider, so the prompt is
-    # rebuilt here rather than passed at construction.
-    _child_ctx_len = getattr(getattr(child, "context_compressor", None), "context_length", None)
-    if isinstance(_child_ctx_len, int) and _child_ctx_len > 0:
-        child.ephemeral_system_prompt = _build_child_system_prompt(
-            goal, context, workspace_path=_resolve_workspace_hint(parent_agent), role=effective_role,
-            max_spawn_depth=max_spawn, child_depth=child_depth, context_length=_child_ctx_len,
-        )
+    # (#108891). Only known after AIAgent() resolves the child's model/provider — but resolving it
+    # forces context_compressor's lazy context_length property, which can hit a live model-metadata
+    # endpoint (#32221). _build_child_agent runs under _CHILD_CONSTRUCTION_LOCK, serializing every
+    # child in the batch, so that resolution must NOT happen here: stash the rebuild inputs and let
+    # _run_single_child force it on the child's own (unlocked) worker thread instead, the same place
+    # this resolution already happens today via agent/system_prompt.py's own context_length read.
+    child._delegate_context_prompt_kwargs = {
+        "goal": goal, "context": context, "workspace_path": _resolve_workspace_hint(parent_agent),
+        "role": effective_role, "max_spawn_depth": max_spawn, "child_depth": child_depth,
+    }
     if child_session_db is not None:
         child._owns_session_db = True  # released by the child's close(), never by the parent
     # Ownership transfer for the dedicated handle: the child's close() must release it (nothing else holds a
@@ -301,6 +303,21 @@ def _build_child_agent(
         )
     return child
 
+def _apply_child_context_file_cap(child) -> None:
+    """Scale the child's project-context-file cap to its OWN resolved window (#108891), not the
+    20,000-char floor every child got regardless of model. Deferred from ``_build_child_agent`` to
+    here — called on the child's own worker thread, unlocked — because resolving ``context_length``
+    forces context_compressor's lazy property, which can hit a live model-metadata endpoint
+    (#32221); forcing it inside ``_build_child_agent`` would do so under ``_CHILD_CONSTRUCTION_LOCK``,
+    serializing that probe across every child in the batch."""
+    _kwargs = getattr(child, "_delegate_context_prompt_kwargs", None)
+    if _kwargs is None:
+        return
+    _ctx_len = getattr(getattr(child, "context_compressor", None), "context_length", None)
+    if isinstance(_ctx_len, int) and _ctx_len > 0:
+        child.ephemeral_system_prompt = _build_child_system_prompt(**_kwargs, context_length=_ctx_len)
+
+
 def _run_single_child(
     task_index: int, goal: str, child=None, parent_agent=None, *, owner_session_id: Optional[str] = None,
     owner_transport: Any = None, owner_session_record: Any = None, **_kwargs,
@@ -318,6 +335,7 @@ def _run_single_child(
 
     * ``"completed"``       — normal finish. See #97655.
     """
+    _apply_child_context_file_cap(child)
     child_progress_cb = getattr(child, "tool_progress_callback", None)
     child_pool, leased_cred_id = _lease_child_credential(child)
     # Heartbeat keeps the parent's _last_activity_ts moving so the gateway inactivity timeout doesn't fire while the
