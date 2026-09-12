@@ -103,6 +103,36 @@ def _import_refresh_provider_credentials():
     return _refresh_provider_credentials
 
 
+# ── _auth_refresh_provider_for_route ────────────────────────────────────────
+
+def _import_auth_refresh_provider_for_route():
+    from agent.auxiliary_client import _auth_refresh_provider_for_route
+    return _auth_refresh_provider_for_route
+
+
+class TestAuthRefreshProviderForRouteXaiOAuth:
+    """Verify auto-routed xAI calls resolve to the xai-oauth refresher.
+
+    goal_judge and other auxiliary tasks that inherit the main model keep
+    resolved_provider == "auto"; the refresh table must map api.x.ai to
+    xai-oauth the same way _POOL_PROVIDER_BY_HOST already does, or the
+    refresher never runs and the request falls through to OpenRouter/Nous.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        self.route = _import_auth_refresh_provider_for_route()
+
+    def test_auto_api_x_ai_resolves_to_xai_oauth(self):
+        assert self.route("auto", "https://api.x.ai/v1/") == "xai-oauth"
+
+    def test_explicit_xai_oauth_provider_passes_through(self):
+        assert self.route("xai-oauth", "https://api.x.ai/v1/") == "xai-oauth"
+
+    def test_auto_unknown_host_stays_auto(self):
+        assert self.route("auto", "https://unknown.example.com/v1/") == "auto"
+
+
 class TestRefreshProviderCredentialsXaiOAuth:
     """Verify _refresh_provider_credentials has xai-oauth branch.
 
