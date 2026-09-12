@@ -240,3 +240,37 @@ def test_distinct_kimi_china_credential_still_listed(monkeypatch):
     assert slugs.count("kimi-coding") == 1
     assert "kimi" not in slugs          # alias collapsed into the canonical row
     assert "kimi-coding-cn" in slugs    # distinct China endpoint preserved
+
+
+# ---------------------------------------------------------------------------
+# _lap_canonical_rows: _UNCAPPED_PICKER_PROVIDERS must be reachable (#108771)
+# ---------------------------------------------------------------------------
+#
+# A provider that only reaches the picker through section 2b (CANONICAL_PROVIDERS
+# missed by sections 1/2 — the case for every plugin-registered provider under
+# plugins/model-providers/<name>/) used to always pass slug="" into _cap_models,
+# so _UNCAPPED_PICKER_PROVIDERS could never match it regardless of membership.
+
+
+def test_canonical_lap_honors_uncapped_picker_providers(monkeypatch):
+    """A slug in _UNCAPPED_PICKER_PROVIDERS must show its full catalog even when it is
+    only reachable through the section-2b canonical lap, not just sections 1/2."""
+    import hermes_cli.models as hm
+    from hermes_cli import models_catalog_static
+    from hermes_cli import model_switch_providers as picker
+
+    model_ids = [f"model-{i}" for i in range(70)]
+    fake_entry = models_catalog_static.ProviderEntry("fakeprovider", "Fake Provider", "desc")
+    monkeypatch.setattr(hm, "CANONICAL_PROVIDERS", [fake_entry])
+    monkeypatch.setattr(hm, "cached_provider_model_ids", lambda *a, **k: list(model_ids))
+    monkeypatch.setattr(picker, "_pool_usable", lambda slug: slug == "fakeprovider")
+    monkeypatch.setattr(picker, "_UNCAPPED_PICKER_PROVIDERS", frozenset({"fakeprovider"}))
+
+    b = picker._PickerBuild("", "", "", 50, False, False, False, False, False, set(), {})
+    picker._lap_canonical_rows(b)
+
+    assert len(b.results) == 1
+    row = b.results[0]
+    assert row["slug"] == "fakeprovider"
+    assert row["total_models"] == 70
+    assert len(row["models"]) == 70
