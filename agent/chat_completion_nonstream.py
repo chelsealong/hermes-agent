@@ -1,6 +1,9 @@
 """Request-local worker lifecycle, watchdog polling, and wait status."""
 
+from typing import Any
+
 from agent import chat_completion_helpers as h
+from agent.local_endpoint_queue import local_endpoint_lock
 
 
 class _NonStreamRequest:
@@ -13,7 +16,8 @@ class _NonStreamRequest:
     def __init__(self, agent, api_kwargs: dict):
         self.agent = agent
         self.api_kwargs = api_kwargs
-        self.result = {"response": None, "error": None}
+        self.result: dict[str, Any] = {"response": None, "error": None}
+        self._request_started = h.threading.Event()
         self.clients = h._RequestClientRegistry(agent)
         # Request-local cancel flag: agent._interrupt_requested is cleared at turn
         # boundaries but this daemon worker can outlive the turn, so it must know THIS
@@ -61,6 +65,16 @@ class _NonStreamRequest:
         else:
             client = self.agent._create_request_openai_client(reason=reason, api_kwargs=self.api_kwargs)
         return self.clients.set_client(client, kind=kind)
+
+    def _run_call(self):
+        try:
+            with local_endpoint_lock(self.agent, getattr(self.agent, "base_url", None),
+                    cancelled=lambda: self.cancelled):
+                self.call_start = h.time.time()
+                self._request_started.set()
+                self._call()
+        except Exception as exc:
+            self.result["error"] = exc
 
     def _call(self):
         watchdog_state_var = watchdog_context_token = None
@@ -246,12 +260,16 @@ class _NonStreamRequest:
                 self.codex_watchdog_state.retry_started_ts = None
         agent._touch_activity("waiting for non-streaming API response")
 
-        self.thread = t = h.threading.Thread(target=h._context_thread_target(self._call), daemon=True)
+        self.thread = t = h.threading.Thread(target=h._context_thread_target(self._run_call), daemon=True)
         t.start()
         poll_count = 0
         while t.is_alive():
             t.join(timeout=0.3)
             poll_count += 1
+            if not self._request_started.is_set():
+                if agent._interrupt_requested:
+                    self.cancelled = True
+                continue
             # Keep the quiet gateway heartbeat; only silence warrants a notice.
             # Resumed events clear our notice on the next poll, not 30s later.
             now = h.time.time()
