@@ -34,7 +34,8 @@ from agent.gemini_native_adapter import is_native_gemini_base_url
 # Remote endpoints must never be fingerprinted: the probe waterfall is only valid for local/LM-Studio/Ollama
 # boxes. Non-Ollama remotes (sglang, vLLM, OpenAI-compat) expose Ollama-compat endpoints that can
 # misidentify and, without an api_key, return 401 on every leg (issue #89863).
-from agent.model_metadata import is_local_endpoint, local_endpoint_lock
+from agent.model_metadata import is_local_endpoint
+from agent.local_endpoint_queue import local_endpoint_lock
 from agent.message_content import flatten_message_text
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.message_sanitization import (_sanitize_surrogates, _repair_tool_call_arguments)
@@ -1148,15 +1149,15 @@ def interruptible_api_call(agent, api_kwargs: dict):
     per-request client (interrupts close only that one); a stale-call detector
     kills the connection and raises so the main retry loop can back off / rotate
     credentials / fall back."""
-    with local_endpoint_lock(agent, getattr(agent, "base_url", None)):
-        # Nested-pool contexts (cron, delegated children) wedge on a worker thread
-        # (#62151): run inline. See should_use_direct_api_call.
-        if should_use_direct_api_call(agent):
+    # Inline requests own their slot on the caller; threaded requests acquire on
+    # the worker so an interrupt cannot release a still-running provider call.
+    if should_use_direct_api_call(agent):
+        with local_endpoint_lock(agent, getattr(agent, "base_url", None)):
             return direct_api_call(agent, api_kwargs)
-        _check_stale_giveup(agent)  # cross-turn stale breaker (#58962), non-streaming sibling
-        from agent.chat_completion_nonstream import _NonStreamRequest
+    _check_stale_giveup(agent)
+    from agent.chat_completion_nonstream import _NonStreamRequest
 
-        return _NonStreamRequest(agent, api_kwargs).run()
+    return _NonStreamRequest(agent, api_kwargs).run()
 
 
 def _consume_ephemeral_reasoning_off(agent) -> bool:
@@ -2523,7 +2524,8 @@ class _StreamingCall(StreamingWaitMonitor):
         self.api_kwargs = api_kwargs
         self.on_first_delta = on_first_delta
         self.worker = None  # request thread; None in inline mode
-        self.result = {"response": None, "error": None, "partial_tool_names": []}
+        self._request_started = threading.Event()
+        self.result: dict[str, Any] = {"response": None, "error": None, "partial_tool_names": []}
         self.clients = _RequestClientRegistry(agent)
         # Request-local cancel flag: the worker recognizes its own interrupt
         # force-close (RemoteProtocolError) and exits instead of retrying (#6600).
@@ -3185,7 +3187,13 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _run_call(self):
         try:
-            self._call()
+            with local_endpoint_lock(self.agent, self.agent.base_url,
+                    cancelled=lambda: self._request_cancelled["value"]):
+                self.last_chunk_time["t"] = time.time()
+                self._request_started.set()
+                self._call()
+        except Exception as exc:
+            self.result["error"] = exc
         finally:
             self._call_done.set()
 
@@ -3355,16 +3363,12 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     streaming codex runner; cron turns and delegated children run inline."""
     if agent._interrupt_requested:
         raise InterruptedError("Agent interrupted before streaming API call")
-    with local_endpoint_lock(agent, getattr(agent, "base_url", None)):
-        if agent.api_mode == "codex_responses":
-            # Streams via _run_codex_stream, reached through agent._interruptible_api_call
-            # on THIS thread — local_endpoint_lock is an RLock so that reentry doesn't deadlock.
-            return _stream_codex_passthrough(agent, api_kwargs, on_first_delta)
-        if agent.api_mode == "bedrock_converse":
-            return _BedrockStream(agent, api_kwargs, on_first_delta).run()
-        # Cross-turn stale-stream circuit breaker (see ``_stale_streak()``).
-        _check_stale_giveup(agent)
-        return _StreamingCall(agent, api_kwargs, on_first_delta).run()
+    if agent.api_mode == "codex_responses":
+        return _stream_codex_passthrough(agent, api_kwargs, on_first_delta)
+    if agent.api_mode == "bedrock_converse":
+        return _BedrockStream(agent, api_kwargs, on_first_delta).run()
+    _check_stale_giveup(agent)
+    return _StreamingCall(agent, api_kwargs, on_first_delta).run()
 
 
 __all__ = ["interruptible_api_call", "build_api_kwargs", "build_assistant_message", "try_activate_fallback",

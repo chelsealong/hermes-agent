@@ -441,6 +441,8 @@ def test_moa_heartbeat_survives_infinite_stale_timeout(monkeypatch):
         _emit_wait_notice=notices.append,
     )
 
+    entered, release = h.threading.Event(), h.threading.Event()
+    real_thread = h.threading.Thread
     now = [1000.0]
     monkeypatch.setattr(h.time, "time", lambda: now[0])
 
@@ -449,10 +451,11 @@ def test_moa_heartbeat_survives_infinite_stale_timeout(monkeypatch):
 
         def __init__(self, *, target, daemon):
             self._polls = 0
-            self._target = target
+            self._worker = real_thread(target=target, daemon=daemon)
 
         def start(self):
-            pass
+            self._worker.start()
+            assert entered.wait(timeout=5)
 
         def join(self, timeout=None):
             now[0] = round(now[0] + timeout, 1)
@@ -460,18 +463,28 @@ def test_moa_heartbeat_survives_infinite_stale_timeout(monkeypatch):
         def is_alive(self):
             self._polls += 1
             if self._polls == 201:
-                self._target()
+                release.set()
+                self._worker.join(timeout=5)
+                assert not self._worker.is_alive()
                 return False
             return True
+
+    def provider_response(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return response
 
     monkeypatch.setattr(h.threading, "Thread", HeartbeatThread)
     monkeypatch.setattr(
         h,
         "_dispatch_nonstreaming_api_request",
-        lambda *_args, **_kwargs: response,
+        provider_response,
     )
 
-    result = h.interruptible_api_call(agent, {"model": "openai-xai-wide"})
+    try:
+        result = h.interruptible_api_call(agent, {"model": "openai-xai-wide"})
+    finally:
+        release.set()
 
     assert result is response
     assert len(notices) == 1

@@ -1,5 +1,6 @@
 """Resumed chunks clear only the stream monitor's own silence notice."""
 from types import SimpleNamespace
+import threading
 
 import pytest
 
@@ -18,6 +19,8 @@ def test_resumed_chunks_clear_wait_without_erasing_local_load(monkeypatch, local
         _touch_activity=lambda text: touches.append((now[0], text)),
     )
     call.api_kwargs = {"model": "test-model"}
+    call._request_started = threading.Event()
+    call._request_started.set()
     call.last_chunk_time = {"t": now[0]}
     call._stream_stale_timeout = 180.0
     loading = "Loading local model weights"

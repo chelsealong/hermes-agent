@@ -30,6 +30,7 @@ def _request():
     )
     request.wait_notice_started_ts = None
     request.result = {"error": None, "response": None}
+    request._request_started = threading.Event()
     return request, notices, touches
 
 
@@ -79,7 +80,7 @@ def test_resumed_events_clear_only_this_requests_wait_notice(monkeypatch):
             pass
 
         def start(self):
-            pass
+            request._request_started.set()
 
         def is_alive(self):
             return ticks[0] < 204

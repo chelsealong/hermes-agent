@@ -1,12 +1,18 @@
 """Display and heartbeat phase of the request-local streaming monitor."""
 
+import threading
 import time
 from types import SimpleNamespace
+from typing import Any
 
 from agent.model_metadata import is_local_endpoint
 
 
 class StreamingWaitMonitor:
+    agent: Any
+    _request_started: threading.Event
+    _request_cancelled: dict[str, bool]
+
     def _poll_local_load_notice(self, now: float) -> bool:
         """Managed local server: surface a cold model's weight-load progress
         instead of the 60s "provider may be slow" copy. Polled ~1s only while no
@@ -58,6 +64,10 @@ class StreamingWaitMonitor:
         _is_local_base = bool(self.agent.base_url) and is_local_endpoint(self.agent.base_url)
         while not self._call_done.is_set():
             self._call_done.wait(timeout=0.3)
+            if not self._request_started.is_set():
+                if self.agent._interrupt_requested:
+                    self._request_cancelled["value"] = True
+                continue
             _hb_now = time.time()
             if _is_local_base and self._poll_local_load_notice(_hb_now):
                 continue
