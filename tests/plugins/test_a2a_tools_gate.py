@@ -35,6 +35,12 @@ class TestA2AToolsGate(unittest.TestCase):
     def test_inbound_platform_enabled_serves(self):
         self.assertTrue(self._avail({"platforms": {"a2a": {"enabled": True}}}))
 
+    def test_documented_gateway_platforms_location_serves(self):
+        """gateway.platforms.a2a.enabled is the documented (and CLI-written) location
+        for the inbound platform (#109011); the gate must not require operators to
+        duplicate it under top-level platforms.a2a."""
+        self.assertTrue(self._avail({"gateway": {"platforms": {"a2a": {"enabled": True}}}}))
+
     def test_a2a_port_env_serves(self):
         os.environ["A2A_PORT"] = "9999"
         try:

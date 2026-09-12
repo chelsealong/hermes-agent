@@ -347,6 +347,10 @@ def _a2a_tools_available() -> bool:
         if os.getenv("A2A_PORT"):
             return True
         a2a_cfg = (cfg.get("platforms") or {}).get("a2a") or {}
+        if isinstance(a2a_cfg, dict) and a2a_cfg.get("enabled"):
+            return True
+        # Documented (and CLI-written) location: gateway.platforms.a2a.enabled (#109011).
+        a2a_cfg = ((cfg.get("gateway") or {}).get("platforms") or {}).get("a2a") or {}
         return bool(isinstance(a2a_cfg, dict) and a2a_cfg.get("enabled"))
     except Exception:  # noqa: BLE001
         return False
