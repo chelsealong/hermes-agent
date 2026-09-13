@@ -739,13 +739,13 @@ def _windows_cold_start_plan() -> dict | None:
 
     An installed autostart entry is an explicit "I want a gateway" signal; a gateway that died between
     updates would otherwise stay down until next login (resume only relaunches what was running).
-    Desktop-owned lifecycle -> ``None`` (spawning ``gateway run`` beside Desktop races ports/state);
-    the skip is ownership, not liveness."""
-    from hermes_cli.update_cmd import _desktop_owns_gateway_lifecycle
-    with _best_effort('Could not check Desktop gateway-lifecycle ownership before update: %s'):
-        if _desktop_owns_gateway_lifecycle():
-            logger.debug("Skipping Windows gateway cold-start plan: Desktop owns gateway lifecycle")
-            return None
+
+    Desktop ownership is deliberately NOT re-checked here (#109538). This runs moments after a Desktop
+    hand-off may have just killed the gateway, when Desktop's own teardown can still be racing
+    ``_desktop_owns_gateway_lifecycle()`` — and Desktop never restarts the messaging gateway itself, so a
+    stale/racy "Desktop owns it" read here left the gateway down for good. Planning the cold-start is safe:
+    ``_cold_start_windows_gateway_after_update()`` re-checks both liveness and ownership right before
+    actually spawning, minutes later once any hand-off teardown has settled."""
     with _best_effort('Could not check Windows gateway autostart state before update: %s'):
         from hermes_cli import gateway_windows
         if gateway_windows.is_installed():

@@ -86,7 +86,12 @@ def test_orphaned_control_plane_does_not_own_lifecycle(monkeypatch):
     assert update_cmd._desktop_owns_gateway_lifecycle() is False
 
 
-def test_pause_skips_cold_start_plan_when_desktop_owns_lifecycle(monkeypatch):
+def test_pause_still_plans_cold_start_during_desktop_handoff_race(monkeypatch):
+    """#109538: the pause step runs moments after a Desktop hand-off may have just killed the gateway,
+    while Desktop's own teardown can still be racing ``_desktop_owns_gateway_lifecycle()``. Desktop never
+    restarts the messaging gateway itself, so the plan must still be made here even when that check reads
+    True — ``_cold_start_windows_gateway_after_update()`` is the safety net that re-checks ownership once
+    teardown has settled, right before actually spawning anything."""
     monkeypatch.setattr(cli_main, "_is_windows", lambda: True)
     monkeypatch.setattr(main_install_repair, "_is_windows", lambda: True)
     monkeypatch.setattr(hermes_gateway, "find_gateway_pids", lambda **_k: [])
@@ -97,7 +102,15 @@ def test_pause_skips_cold_start_plan_when_desktop_owns_lifecycle(monkeypatch):
     monkeypatch.setattr(update_cmd, "_desktop_owns_gateway_lifecycle", lambda: True)
     monkeypatch.setattr(update_cmd_windows, "_desktop_owns_gateway_lifecycle", lambda: True)
 
-    assert update_cmd._pause_windows_gateways_for_update() is None
+    token = update_cmd._pause_windows_gateways_for_update()
+
+    assert token == {
+        "resume_needed": True,
+        "profiles": {},
+        "unmapped_pids": [],
+        "unmapped": [],
+        "cold_start_if_installed": True,
+    }
 
 
 def test_pause_still_cold_starts_when_autostart_and_no_desktop_owner(monkeypatch):
