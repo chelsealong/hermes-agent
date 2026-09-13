@@ -43,7 +43,7 @@ def _run(current: int, latest: int):
     ), patch.object(
         update_cmd, "_run_migrate_config_fresh", side_effect=_fake_migrate
     ), patch.object(
-        update_cmd, "_migrate_sibling_profile_configs", return_value=[]
+        update_cmd, "_migrate_sibling_profile_configs", return_value=([], [])
     ):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -73,6 +73,30 @@ def test_noop_when_config_ahead():
     assert calls == []
 
 
+def test_surfaces_failed_sibling_migration():
+    """A sibling whose migration raised must be reported, not silently dropped (#109482)."""
+    with patch.object(update_cmd, "_reload_config_modules"), patch(
+        "hermes_cli.config.get_missing_env_vars", return_value=[]
+    ), patch(
+        "hermes_cli.config.get_missing_config_fields", return_value=[]
+    ), patch.object(
+        update_cmd, "_run_config_check_fresh", return_value=(38, 38)
+    ), patch.object(
+        update_cmd, "_run_migrate_config_fresh", return_value={}
+    ), patch.object(
+        update_cmd, "_migrate_sibling_profile_configs",
+        return_value=([], [("argus", "boom")]),
+    ):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            update_cmd._check_and_apply_config_migration()
+        out = buf.getvalue()
+
+    assert "argus" in out
+    assert "boom" in out
+    assert "config migration failed" in out
+
+
 def test_surfaces_migration_warnings():
     """Warnings from a quiet migration must be re-surfaced (#86656)."""
 
@@ -92,7 +116,7 @@ def test_surfaces_migration_warnings():
     ), patch.object(
         update_cmd, "_run_migrate_config_fresh", side_effect=_fake_migrate
     ), patch.object(
-        update_cmd, "_migrate_sibling_profile_configs", return_value=[]
+        update_cmd, "_migrate_sibling_profile_configs", return_value=([], [])
     ):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):

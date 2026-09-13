@@ -35,8 +35,9 @@ def test_fleet_config_migration_live_windows(tmp_path, monkeypatch):
     from hermes_cli.config import DEFAULT_CONFIG
 
     latest = int(DEFAULT_CONFIG["_config_version"])
-    migrated = update_cmd._migrate_sibling_profile_configs()
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
 
+    assert failed == []
     by_name = {m[0]: m for m in migrated}
     assert set(by_name) == {"research", "work"}, migrated
     assert by_name["research"][1] == 12 and by_name["research"][2] == latest
@@ -48,4 +49,4 @@ def test_fleet_config_migration_live_windows(tmp_path, monkeypatch):
 
     # active untouched; idempotent second run
     assert yaml.safe_load((active / "config.yaml").read_text())["_config_version"] == 12
-    assert update_cmd._migrate_sibling_profile_configs() == []
+    assert update_cmd._migrate_sibling_profile_configs() == ([], [])

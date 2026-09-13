@@ -55,8 +55,9 @@ def test_sibling_behind_is_migrated_on_disk(monkeypatch, tmp_path):
     sibling = _write_profile(tmp_path / "profiles", "research", 12)
     _setup(monkeypatch, tmp_path, active)
 
-    migrated = update_cmd._migrate_sibling_profile_configs()
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
 
+    assert failed == []
     names = [m[0] for m in migrated]
     assert "research" in names
     entry = next(m for m in migrated if m[0] == "research")
@@ -72,8 +73,9 @@ def test_active_profile_is_skipped(monkeypatch, tmp_path):
     active = _write_profile(tmp_path / "profiles", "active", 12)
     _setup(monkeypatch, tmp_path, active)
 
-    migrated = update_cmd._migrate_sibling_profile_configs()
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
 
+    assert failed == []
     assert "active" not in [m[0] for m in migrated]
     # active home untouched (the caller's own migration handles it)
     on_disk = yaml.safe_load((active / "config.yaml").read_text())
@@ -86,9 +88,10 @@ def test_current_sibling_untouched(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path, active)
     before = (sibling / "config.yaml").read_bytes()
 
-    migrated = update_cmd._migrate_sibling_profile_configs()
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
 
     assert migrated == []
+    assert failed == []
     assert (sibling / "config.yaml").read_bytes() == before
 
 
@@ -98,7 +101,9 @@ def test_unconfigured_profile_skipped(monkeypatch, tmp_path):
     bare.mkdir()
     _setup(monkeypatch, tmp_path, active)
 
-    assert update_cmd._migrate_sibling_profile_configs() == []
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
+    assert migrated == []
+    assert failed == []
     assert not (bare / "config.yaml").exists()
 
 
@@ -110,9 +115,11 @@ def test_one_broken_profile_does_not_block_others(monkeypatch, tmp_path):
     _write_profile(tmp_path / "profiles", "healthy", 12)
     _setup(monkeypatch, tmp_path, active)
 
-    migrated = update_cmd._migrate_sibling_profile_configs()
+    migrated, failed = update_cmd._migrate_sibling_profile_configs()
 
     assert [m[0] for m in migrated] == ["healthy"]
+    assert [f[0] for f in failed] == ["broken"]
+    assert failed[0][1]  # a non-empty error message is captured
 
 
 def test_override_is_reset_after_run(monkeypatch, tmp_path):
@@ -124,5 +131,5 @@ def test_override_is_reset_after_run(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path, active)
 
     before = get_hermes_home_override()
-    update_cmd._migrate_sibling_profile_configs()
+    update_cmd._migrate_sibling_profile_configs()  # returns (migrated, failed); unused here
     assert get_hermes_home_override() == before

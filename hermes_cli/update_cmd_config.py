@@ -46,18 +46,21 @@ def _run_migrate_config_fresh(*, interactive: bool = False, quiet: bool = False)
     return migrate_config(interactive=interactive, quiet=quiet)
 
 
-def _migrate_sibling_profile_configs() -> list[tuple[str, int, int]]:
+def _migrate_sibling_profile_configs() -> tuple[list[tuple[str, int, int]], list[tuple[str, str]]]:
     """Migrate every SIBLING profile's config.yaml (the shared checkout serves all profiles). Per
     sibling (active skipped): scope via the context-local HERMES_HOME override (never ``os.environ``)
     and run the NON-INTERACTIVE quiet migration — prompt-requiring settings wait for that profile's
-    own session. Returns ``[(name, from_version, to_version), ...]``; never raises.
+    own session. Returns ``(migrated, failed)``: ``migrated`` is
+    ``[(name, from_version, to_version), ...]``, ``failed`` is ``[(name, error), ...]``; never raises.
 
     91277 Phase 2 (fleet-wide config migration; #20438/#54926/#79048): the shared checkout serves every
     profile, but ``hermes update`` historically migrated only the active profile's config — siblings drifted
-    versions until their gateway hit a config the new code couldn't read.
+    versions until their gateway hit a config the new code couldn't read. A sibling whose migration
+    raises must be reported too (#109482), not just dropped from the successful list.
     """
     from hermes_cli.update_cmd import _run_config_check_fresh, _run_migrate_config_fresh
     migrated: list[tuple[str, int, int]] = []
+    failed: list[tuple[str, str]] = []
     with _best_effort('Sibling profile enumeration failed: %s'):
         from hermes_constants import (
             get_process_hermes_home, reset_hermes_home_override, set_hermes_home_override)
@@ -65,7 +68,7 @@ def _migrate_sibling_profile_configs() -> list[tuple[str, int, int]]:
         active_home = get_process_hermes_home()
         root = _get_profiles_root()
         if not root.is_dir():
-            return migrated
+            return migrated, failed
         for entry in sorted(root.iterdir()):
             if not entry.is_dir() or not _PROFILE_ID_RE.match(entry.name):
                 continue
@@ -87,9 +90,10 @@ def _migrate_sibling_profile_configs() -> list[tuple[str, int, int]]:
                     migrated.append((entry.name, current_ver, after_ver))
             except Exception as exc:
                 logger.debug("Config migration for profile %s failed: %s", entry.name, exc)
+                failed.append((entry.name, str(exc)))
             finally:
                 reset_hermes_home_override(token)
-    return migrated
+    return migrated, failed
 
 
 def _restore_snapshot_safety_nets(pre_update_snapshot_id) -> None:
@@ -243,8 +247,11 @@ def _check_and_apply_config_migration(
     # The migration above touched only the active profile; run the same NON-INTERACTIVE
     # migration per sibling home via the context-local HERMES_HOME override (never os.environ).
     with _best_effort('Sibling config migration failed: %s'):
-        for _name, _from_ver, _to_ver in _migrate_sibling_profile_configs():
+        _sibling_migrated, _sibling_failed = _migrate_sibling_profile_configs()
+        for _name, _from_ver, _to_ver in _sibling_migrated:
             print(f"  ✓ Profile '{_name}': config format updated (v{_from_ver} → v{_to_ver})")
+        for _name, _err in _sibling_failed:
+            print(f"  ⚠️  Profile '{_name}': config migration failed: {_err}")
 
     _restore_snapshot_safety_nets(pre_update_snapshot_id)
 
