@@ -643,6 +643,51 @@ describe('assistant-ui streaming renderer', () => {
     expect(settled).not.toMatch(/\boverflow-hidden\b/)
   })
 
+  it('does not yank the live thinking preview back to bottom once the user scrolls up', () => {
+    const { container } = render(<RunningReasoningHarness />)
+
+    const body = container.querySelector('[data-slot="aui_thinking-body"]') as HTMLDivElement
+    expect(body).toBeTruthy()
+
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
+
+    let scrollHeight = 200
+
+    Object.defineProperty(body, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight
+    })
+
+    const found = [...resizeObservers].find(
+      candidate => (candidate as unknown as { target: Element | null }).target?.parentElement === body
+    )
+
+    expect(found).toBeTruthy()
+
+    const observer = found as TestResizeObserver
+
+    // Nothing scrolled yet, so the initial growth pins to the bottom.
+    observer.trigger(100)
+    expect(body.scrollTop).toBe(200)
+
+    // The user scrolls up to read while more tokens stream in.
+    body.scrollTop = 20
+    scrollHeight = 260
+    observer.trigger(140)
+
+    // The pin must leave the user's scroll position alone.
+    expect(body.scrollTop).toBe(20)
+
+    // The user scrolls back down to the bottom of the content as it stood
+    // before the next growth.
+    body.scrollTop = 160
+    scrollHeight = 300
+    observer.trigger(160)
+
+    // Returning to the bottom re-arms the pin.
+    expect(body.scrollTop).toBe(300)
+  })
+
   it('does not collapse a live thinking preview when the turn settles', async () => {
     const { container, settle } = renderSettlingReasoning()
     const toggle = within(container).getByRole('button', { name: /thinking/i })

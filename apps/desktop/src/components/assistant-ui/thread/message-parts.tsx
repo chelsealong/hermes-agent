@@ -132,6 +132,10 @@ const TimelineMarkdownText: FC<TimelineTextPartProps> = ({ completedAt, timestam
   </>
 )
 
+// A user's scroll position within this many pixels of the bottom still
+// counts as "at the bottom" for the live-preview pin below.
+const PIN_BOTTOM_EPSILON_PX = 4
+
 const ThinkingDisclosure: FC<{
   children: ReactNode
   completedAt?: number
@@ -204,13 +208,26 @@ const ThinkingDisclosure: FC<{
     // scrollHeight read+write per preview per frame. Only actual content
     // growth needs the pin; the height rides the RO entry, reflow-free.
     let lastHeight = -1
+    // The body's scrollHeight as of the last pin decision, so a growth can be
+    // judged against where the user was sitting beforehand.
+    let lastScrollHeight = 0
 
     const pin = (entries: readonly ResizeObserverEntry[]) => {
       const height = entries[entries.length - 1]?.borderBoxSize?.[0]?.blockSize ?? -1
       const grew = height < 0 || height > lastHeight
       lastHeight = height
 
-      if (grew) {
+      if (!grew) {
+        return
+      }
+
+      // Only follow the bottom if the user was already there before this
+      // growth. A manual scroll up leaves scrollTop short of lastScrollHeight,
+      // so the pin skips until they scroll back down themselves.
+      const wasAtBottom = el.scrollTop + el.clientHeight >= lastScrollHeight - PIN_BOTTOM_EPSILON_PX
+      lastScrollHeight = el.scrollHeight
+
+      if (wasAtBottom) {
         el.scrollTop = el.scrollHeight
       }
     }
