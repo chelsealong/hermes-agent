@@ -1660,6 +1660,48 @@ class TestDispatchDelegateTask(unittest.TestCase):
         self.assertNotIn("acp_command", captured["tasks"][0])
         self.assertNotIn("acp_args", captured["tasks"][0])
 
+    def test_blocked_when_delegation_excluded_from_enabled_toolsets(self):
+        """A cron/session agent whose enabled_toolsets excludes 'delegation' (so 'delegate_task'
+        never made it into valid_tool_names) must not be able to spawn a subagent even if a
+        delegate_task tool call still reaches dispatch (#109518)."""
+        import run_agent
+
+        called = {}
+
+        def fake_delegate_task(**kwargs):
+            called["ran"] = True
+            return "{}"
+
+        parent = _make_mock_parent(depth=0)
+        parent.enabled_toolsets = ["terminal", "file", "web"]
+        parent.valid_tool_names = {"terminal_execute", "read_file", "web_search"}
+
+        with patch("tools.delegate_tool.delegate_task", fake_delegate_task):
+            result = run_agent.AIAgent._dispatch_delegate_task(parent, {"goal": "do work"})
+
+        self.assertNotIn("ran", called)
+        self.assertIn("delegat", result.lower())
+        self.assertIn("not available", result.lower())
+
+    def test_allowed_when_delegation_in_enabled_toolsets(self):
+        """Baseline: delegate_task still dispatches when 'delegate_task' is a valid tool name."""
+        import run_agent
+
+        called = {}
+
+        def fake_delegate_task(**kwargs):
+            called["ran"] = True
+            return "{}"
+
+        parent = _make_mock_parent(depth=0)
+        parent.enabled_toolsets = ["terminal", "file", "web", "delegation"]
+        parent.valid_tool_names = {"terminal_execute", "read_file", "web_search", "delegate_task"}
+
+        with patch("tools.delegate_tool.delegate_task", fake_delegate_task):
+            run_agent.AIAgent._dispatch_delegate_task(parent, {"goal": "do work"})
+
+        self.assertIn("ran", called)
+
 class TestDelegateEventEnum(unittest.TestCase):
     """Tests for DelegateEvent enum and back-compat aliases."""
 

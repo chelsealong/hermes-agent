@@ -1298,6 +1298,14 @@ class AIAgent(
     def _dispatch_delegate_task(self, function_args: dict) -> str:
         """Single call site for delegate_task dispatch; new DELEGATE_TASK_SCHEMA fields are added only here."""
         from tools.delegate_tool import _strip_model_hidden_task_fields, delegate_task as _delegate_task
+        # delegate_task is special-cased in _resolve_sequential_dispatch/INLINE_TOOL_EXECUTORS and
+        # never passes through model_tools.handle_function_call's registry dispatch, so it never hit
+        # the enabled_toolsets membership check every other tool gets there (#109518). valid_tool_names
+        # is the exact set already filtered by enabled_toolsets (agent_init._load_tools).
+        valid_names = getattr(self, "valid_tool_names", None)
+        if isinstance(valid_names, (set, frozenset, list, tuple)) and "delegate_task" not in valid_names:
+            from tools.registry import tool_error
+            return tool_error("delegate_task is not available: 'delegation' is excluded from this session's enabled toolsets.")
         # Top-level MODEL delegations always run in the background (handle returned, results re-enter as
         # messages). An ORCHESTRATOR SUBAGENT (depth > 0) stays synchronous — it needs results in-turn and
         # owns no gateway session. The schema-level `background` param is intentionally ignored.
