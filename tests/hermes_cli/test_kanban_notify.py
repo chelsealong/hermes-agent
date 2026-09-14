@@ -1275,3 +1275,69 @@ def test_gc_archived_rows_already_removed_by_unsub(kanban_home):
         assert kbn.list_notify_subs(conn, tid) == []
     finally:
         conn.close()
+
+
+def test_notify_subscribe_parent_chat_id_flag_unblocks_multiplex_thread_route(kanban_home, monkeypatch):
+    """A thread subscription created via the CLI (#110919) must carry the parent
+    channel/guild anchors the multiplex notifier needs to resolve a channel-scoped
+    ``profile_routes`` route against a thread's ``chat_id``. Before this fix,
+    ``notify-subscribe`` had no flag to stamp ``delivery_metadata``, so a thread
+    sub could never satisfy ``ProfileRoute.matches``'s strict pass and the
+    notifier's route loop fell through to its fail-closed loose-match branch."""
+    from types import SimpleNamespace
+
+    import gateway.run as gateway_run
+    from gateway.config import Platform
+    from gateway.kanban_watchers_notifier import _adapter_for_subscription
+    from gateway.profile_routing import ProfileRoute
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db_notify as kbn
+    from hermes_cli.kanban import run_slash
+
+    conn = kbc.connect()
+    try:
+        tid = kb.create_task(conn, title="thread sub task", assignee="worker1")
+    finally:
+        conn.close()
+
+    out = run_slash(
+        f"notify-subscribe {tid} --platform discord --chat-id thread1 --thread-id thread1 "
+        "--chat-type thread --delivery-mode notify+wake "
+        "--parent-chat-id channel1 --guild-id guild1"
+    )
+    assert "Subscribed" in out
+
+    conn = kbc.connect()
+    try:
+        subs = kbn.list_notify_subs(conn, tid)
+    finally:
+        conn.close()
+    assert len(subs) == 1
+    sub = subs[0]
+    assert sub["delivery_metadata"] == {"parent_chat_id": "channel1", "guild_id": "guild1"}
+
+    # A channel-level route (no thread_id of its own) can only match a
+    # thread-shaped sub by consulting delivery_metadata['parent_chat_id'].
+    route = ProfileRoute(name="seat-orchestrator", platform="discord", profile="orchestrator", chat_id="channel1")
+    primary_adapter = object()
+    runner = SimpleNamespace(
+        adapters={Platform.DISCORD: primary_adapter},
+        config=SimpleNamespace(multiplex_profiles=True, profile_routes=[route]),
+        _profile_adapters={},
+        _kanban_notifier_profile="orchestrator",
+        _primary_profile_name="orchestrator",
+        _authorization_adapter=lambda platform, profile: primary_adapter,
+        _active_profile_name=lambda: "orchestrator",
+    )
+    monkeypatch.setattr(gateway_run, "_multiplex_profile_homes", lambda config: [("orchestrator", None)])
+
+    resolved = _adapter_for_subscription(runner, Platform.DISCORD, sub, "orchestrator")
+    assert resolved is primary_adapter
+
+    # Without the anchors (the pre-fix CLI path), the same route can never
+    # resolve: the strict pass fails (route.chat_id is the channel, sub.chat_id
+    # is the thread, parent_chat_id is unset) and the loose fallback pass is
+    # fail-closed by design.
+    unanchored_sub = dict(sub, delivery_metadata={})
+    assert _adapter_for_subscription(runner, Platform.DISCORD, unanchored_sub, "orchestrator") is None

@@ -375,6 +375,15 @@ _SPECS = [
                   "existing sub unchanged (new subs default to 'dm')."),
         _arg("--notifier-profile",
              help="Profile gateway that owns/delivers this subscription (default: active profile)"),
+        _arg("--parent-chat-id",
+             help="Parent channel/group id of a thread or forum-post chat (e.g. a Discord "
+                  "thread's parent channel). Stamped into delivery_metadata so a "
+                  "multiplex gateway.profile_routes route anchored on the parent channel "
+                  "can resolve a thread-shaped subscription; without it, a thread sub "
+                  "under multiplex routing can be undeliverable (#110919)."),
+        _arg("--guild-id",
+             help="Guild/workspace/team scope id (Discord guild, Slack team, ...). "
+                  "Stamped into delivery_metadata alongside --parent-chat-id."),
         # choices: single source of truth shared with the DB/watcher enum.
         _arg("--delivery-mode", choices=kbn._NOTIFY_DELIVERY_MODES,
              help="How the kanban-notifier reacts to terminal events for this "
