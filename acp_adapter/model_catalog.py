@@ -186,7 +186,9 @@ class _ModelCatalog:
         self.seen_ids.add(choice_id)
         self.seen_semantic_ids.add(semantic_id)
 
-    def add_inventory_rows(self, rows: list, provider_label: Callable[[str], str]) -> None:
+    def add_inventory_rows(
+        self, rows: list, provider_label: Callable[[str], str], named_slugs: frozenset[str] = frozenset()
+    ) -> None:
         for row in rows:
             raw_row_provider = str(row.get("slug") or "").strip().lower()
             row_provider = self.normalize_provider(raw_row_provider)
@@ -198,6 +200,8 @@ class _ModelCatalog:
             ):
                 self.current_choice_provider = "custom:ollama"
                 self._identity_resolved = True
+            if f"custom:{raw_row_provider}" in named_slugs:
+                continue  # the named-catalog pass owns this endpoint's round-tripping rows
             row_models = row.get("models")
             if not row_provider or not isinstance(row_models, (list, tuple)):
                 continue
@@ -251,13 +255,23 @@ def build_model_state(model: str, provider: str, base_url: str) -> SessionModelS
         probe_custom_providers=False, probe_current_custom_provider=False, max_models=ACP_MAX_MODELS_PER_PROVIDER,
     )
 
+    named_catalogs = _named_custom_provider_catalogs()
+    named_slugs = {slug for slug, _, _ in named_catalogs}
+    raw_current_provider = str(provider or "").strip().lower()
+    current_choice_provider = (
+        f"custom:{raw_current_provider}"
+        if raw_current_provider and not raw_current_provider.startswith("custom:")
+        and f"custom:{raw_current_provider}" in named_slugs
+        else raw_current_provider
+    )
+
     cat = _ModelCatalog(
         normalize_provider=normalize_provider, current_model=model,
-        current_choice_provider=str(provider or "").strip().lower(),
+        current_choice_provider=current_choice_provider,
         current_base_url=base_url.strip().rstrip("/").lower(),
     )
-    cat.add_inventory_rows(payload.get("providers") or [], provider_label)
-    cat.add_named_catalogs(_named_custom_provider_catalogs(), normalized_provider)
+    cat.add_inventory_rows(payload.get("providers") or [], provider_label, named_slugs)
+    cat.add_named_catalogs(named_catalogs, current_choice_provider)
     available_models = cat.models
 
     def empty_applies(provider_id: str) -> bool:

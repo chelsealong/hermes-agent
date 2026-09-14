@@ -257,6 +257,55 @@ class TestModelStateIncludesNamedProviders:
         assert provider == "custom:bedrock-mantle"
         assert model == "openai.gpt-5.5"
 
+    def test_providers_entry_is_offered_once_under_a_round_tripping_id(self):
+        """#110891: a `providers:` endpoint appears in both the canonical inventory
+        (raw config-key slug, which does not round-trip through parse_model_input)
+        and the named-catalog pass (`custom:<key>` slug, which does). The raw-key
+        row must not survive dedup."""
+        from acp_adapter.model_catalog import build_model_state
+        from hermes_cli.models import parse_model_input
+
+        inventory_row = {
+            "slug": "relay", "name": "Relay", "is_current": False, "is_user_defined": True,
+            "models": ["model-a"], "total_models": 1, "source": "user-config",
+            "api_url": "https://relay.example/v1", "native_catalog_empty": False,
+        }
+        with patch("hermes_cli.inventory.load_picker_context") as load_ctx, patch(
+            "hermes_cli.inventory.build_models_payload",
+            return_value={"providers": [inventory_row]},
+        ), patch(
+            "acp_adapter.model_catalog._named_custom_provider_catalogs",
+            return_value=[("custom:relay", "Relay", [("model-a", "")])],
+        ):
+            load_ctx.return_value.with_overrides.return_value = SimpleNamespace()
+            state = build_model_state(model="model-a", provider="custom", base_url="")
+
+        ids = [m.model_id for m in state.available_models]
+        assert ids.count("relay:model-a") == 0
+        assert ids.count("custom:relay:model-a") == 1
+
+        cfg = {"providers": {"relay": {"name": "Relay", "base_url": "https://relay.example/v1"}}}
+        with patch("hermes_cli.config.load_config", return_value=cfg):
+            provider, model = parse_model_input("custom:relay:model-a", "custom")
+        assert (provider, model) == ("custom:relay", "model-a")
+
+    def test_current_provider_reported_as_raw_key_normalizes_to_named_slug(self):
+        """#110891 secondary manifestation: a session whose provider field is the
+        raw config key (not the `custom:<key>` identity) must still get a
+        round-tripping current_model_id."""
+        from acp_adapter.model_catalog import build_model_state
+
+        with patch("hermes_cli.inventory.load_picker_context") as load_ctx, patch(
+            "hermes_cli.inventory.build_models_payload", return_value={"providers": []},
+        ), patch(
+            "acp_adapter.model_catalog._named_custom_provider_catalogs",
+            return_value=[("custom:relay", "Relay", [("model-a", "")])],
+        ):
+            load_ctx.return_value.with_overrides.return_value = SimpleNamespace()
+            state = build_model_state(model="model-a", provider="relay", base_url="")
+
+        assert state.current_model_id == "custom:relay:model-a"
+
     def test_selector_choice_id_round_trips_colon_bearing_custom_identity(self):
         """Configured provider and model IDs may both contain colons."""
         from hermes_cli.models import parse_model_input
