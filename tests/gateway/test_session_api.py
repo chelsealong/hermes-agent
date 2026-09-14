@@ -549,6 +549,27 @@ async def test_create_session_respects_browser_source_and_model_lock(adapter, se
 
 
 @pytest.mark.asyncio
+async def test_create_session_frees_an_archived_rows_title_on_conflict(adapter, session_db):
+    # #110871: the REST create path used its own inline UNIQUE(title) check, so an archived
+    # canonical Bot Chat still permanently locked its title out from under `hermes peer dm`
+    # even after the title-mixin carve-out. It must free the archived row's title too.
+    session_db.create_session("old-bot-chat", source="desktop")
+    assert session_db.set_session_title("old-bot-chat", "Bot Chat")
+    assert session_db.set_session_archived("old-bot-chat", True)
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.post(
+            "/api/sessions",
+            json={"id": "new-bot-chat", "source": "desktop", "title": "Bot Chat"},
+        )
+        assert resp.status == 201, await resp.text()
+
+    row = session_db.get_session_by_title("Bot Chat")
+    assert row and row["id"] == "new-bot-chat"
+
+
+@pytest.mark.asyncio
 async def test_session_model_lock_endpoint_then_chat_reuses_persisted_lock_and_provider_credentials(
     adapter,
     session_db,

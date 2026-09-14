@@ -65,6 +65,24 @@ class SessionTitlesMixin:
             SELECT 1 FROM ancestors WHERE id = ? AND id != ? LIMIT 1
             """, (descendant_id, ancestor_id, descendant_id)).fetchone() is not None
 
+    def _free_conflicting_title(self, conn, title: str, session_id: str) -> Optional[str]:
+        """Resolve a UNIQUE(title) conflict for *title* against any row but *session_id*.
+        A conflicting row that is retired identity -- archived, or a compression ancestor
+        of *session_id* -- can never be a live canonical chat again, so its title is freed
+        (returns None). Otherwise the blocking session's id is returned so the caller can
+        report the conflict."""
+        conflict = conn.execute(
+            "SELECT id, archived FROM sessions WHERE title = ? AND id != ?", (title, session_id),
+        ).fetchone()
+        if not conflict:
+            return None
+        conflict_id = conflict["id"]
+        if (conflict["archived"]
+                or self._is_compression_ancestor(conn, ancestor_id=conflict_id, descendant_id=session_id)):
+            conn.execute("UPDATE sessions SET title = NULL WHERE id = ?", (conflict_id,))
+            return None
+        return conflict_id
+
     def _set_session_title(self, session_id: str, title: str, *, source: str) -> bool:
         """Write a title, enforcing provenance precedence. A ``user`` write always lands;
         ``derived``/``llm`` land only when the row is untitled or holds strictly lower
@@ -96,20 +114,9 @@ class SessionTitlesMixin:
             if not is_user and current["title"] is not None and self._title_rank(current["title_source"]) >= new_rank:
                 return 0
             if title:
-                conflict = conn.execute(
-                    "SELECT id, archived FROM sessions WHERE title = ? AND id != ?", (title, session_id),
-                ).fetchone()
-                if conflict:
-                    conflict_id = conflict["id"]
-                    # A hidden compressed ancestor holding the title cannot be freed by the
-                    # user, so transfer it onto the tip (uniqueness + lineage kept). An
-                    # archived row is retired identity too — it can never be a live
-                    # canonical chat again — so free its title the same way.
-                    if (conflict["archived"]
-                            or self._is_compression_ancestor(conn, ancestor_id=conflict_id, descendant_id=session_id)):
-                        conn.execute("UPDATE sessions SET title = NULL WHERE id = ?", (conflict_id,))
-                    else:
-                        raise ValueError(f"Title '{title}' is already in use by session {conflict_id}")
+                conflict_id = self._free_conflicting_title(conn, title, session_id)
+                if conflict_id:
+                    raise ValueError(f"Title '{title}' is already in use by session {conflict_id}")
             # CAS on the values just read (``IS`` is NULL-safe): a concurrent write between
             # the SELECT and here loses instead of being overwritten.
             return conn.execute(

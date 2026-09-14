@@ -2855,11 +2855,14 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             if title is not None:
                 clean_title = db.sanitize_title(str(title))
                 if clean_title:
-                    conflict = conn.execute(
-                        "SELECT id FROM sessions WHERE title = ? AND id != ?", (clean_title, session_id)).fetchone()
-                    if conflict:
+                    # Same retired-identity carve-out as _set_session_title: an archived
+                    # (or compression-ancestor) row holding this title is freed rather than
+                    # blocking the create, so an archived canonical Bot Chat can't lock its
+                    # name away from a `hermes peer dm`-minted successor (#110871).
+                    conflict_id = db._free_conflicting_title(conn, clean_title, session_id)
+                    if conflict_id:
                         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-                        return None, f"title:Title already in use by session {conflict['id']}"
+                        return None, f"title:Title already in use by session {conflict_id}"
                 conn.execute("UPDATE sessions SET title = ? WHERE id = ?", (clean_title, session_id))
             session_row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return (dict(session_row) if session_row else {
