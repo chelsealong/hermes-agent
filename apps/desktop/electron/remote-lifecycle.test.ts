@@ -26,10 +26,12 @@ import {
   openForward,
   ownershipDirectory,
   pidIsOurDashboard,
+  probeHermesVersion,
   probeRemotePlatform,
   PROTOCOL_VERSION,
   readLockfile,
   READY_RE,
+  REMOTE_PROBE_TIMEOUT_SECONDS,
   remotePidAlive,
   remoteSupportsSshOwnership,
   scrapeReadyPort,
@@ -38,6 +40,7 @@ import {
   spawnTokenPath,
   terminateOwnedDashboardForUpdate,
   validateRemotePath,
+  withRemoteTimeout,
   writeLockfile
 } from './remote-lifecycle'
 
@@ -1808,6 +1811,59 @@ test('remote SSH ownership capability requires both secure bootstrap flags', asy
 
   const unsupported = fakeSsh([[/serve --help/, 'NO\n']])
   assert.equal(await remoteSupportsSshOwnership(unsupported, '/x/hermes'), false)
+})
+
+test('withRemoteTimeout bounds a remote command with an independent background watchdog (#110478)', () => {
+  const wrapped = withRemoteTimeout('do-the-thing --flag', 15)
+
+  // Runs the real command in the background, waits on its pid, and forwards
+  // its exit code -- so normal callers see the same output/exit behavior.
+  assert.match(wrapped, /^sh -c 'do-the-thing --flag' & __hermes_probe_pid=\$!;/)
+  assert.match(wrapped, /wait \$__hermes_probe_pid/)
+  // The watchdog kills the probe by pid on its own clock, so a self-exec'ing
+  // remote wrapper that ignores SIGHUP cannot outlive the SSH session (it
+  // keeps the same pid across exec, unlike a fork).
+  assert.match(wrapped, /sleep 15; kill -TERM \$__hermes_probe_pid .*kill -KILL \$__hermes_probe_pid/)
+})
+
+test('remote version probe is bounded by the remote-side watchdog, not just the local ssh timeout (#110478)', async () => {
+  let sentCommand = ''
+
+  const ssh = fakeSsh([
+    [
+      /--version/,
+      command => {
+        sentCommand = command
+
+        return 'Hermes Agent v0.18.2\n'
+      }
+    ]
+  ])
+
+  const version = await probeHermesVersion(ssh, '/opt/hermes/hermes')
+
+  assert.equal(version, 'Hermes Agent v0.18.2')
+  assert.match(sentCommand, /__hermes_probe_pid=\$!/)
+  assert.match(sentCommand, new RegExp(`sleep ${REMOTE_PROBE_TIMEOUT_SECONDS}; kill -TERM`))
+})
+
+test('SSH ownership capability probe is bounded by the remote-side watchdog (#110478)', async () => {
+  let sentCommand = ''
+
+  const ssh = fakeSsh([
+    [
+      /serve --help/,
+      command => {
+        sentCommand = command
+
+        return 'YES\n'
+      }
+    ]
+  ])
+
+  assert.equal(await remoteSupportsSshOwnership(ssh, '/x/hermes'), true)
+  assert.match(sentCommand, /__hermes_probe_pid=\$!/)
+  assert.match(sentCommand, new RegExp(`sleep ${REMOTE_PROBE_TIMEOUT_SECONDS}; kill -TERM`))
 })
 
 test('cleanupStale escalates to SIGKILL when the backend survives the graceful wait (#91668 quit-during-active-turn)', async () => {

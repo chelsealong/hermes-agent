@@ -131,6 +131,24 @@ function shq(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`
 }
 
+// Seconds a bootstrap capability probe (version/help) may run before the
+// REMOTE side kills it itself (#110478). These probes run before a tunnel or
+// dashboard exists, so nothing local is watching the remote process: if ssh
+// drops (network blip, local exec timeout) the remote command is orphaned
+// under init and keeps running/spinning instead of dying with the session
+// that spawned it. A background watchdog enforces the bound independently of
+// the ssh connection's own lifetime. Not GNU coreutils `timeout` — macOS does
+// not ship it by default and these probes must run on both.
+const REMOTE_PROBE_TIMEOUT_SECONDS = 15
+
+function withRemoteTimeout(remoteCommand, seconds) {
+  return (
+    `sh -c ${shq(remoteCommand)} & __hermes_probe_pid=$!; ` +
+    `(sleep ${seconds}; kill -TERM $__hermes_probe_pid 2>/dev/null; sleep 1; kill -KILL $__hermes_probe_pid 2>/dev/null) & __hermes_probe_watchdog=$!; ` +
+    `wait $__hermes_probe_pid 2>/dev/null; __hermes_probe_ec=$?; kill $__hermes_probe_watchdog 2>/dev/null; exit $__hermes_probe_ec`
+  )
+}
+
 function validateRemotePath(p) {
   const s = String(p || '')
 
@@ -250,7 +268,9 @@ async function locateHermes(ssh, remoteHermesPath) {
 // connection uses, so a stale/unexpected install is visible.
 async function probeHermesVersion(ssh, hermesPath) {
   try {
-    const out = (await ssh.exec(`${expandRemotePath(hermesPath)} --version 2>&1`)).trim()
+    const out = (
+      await ssh.exec(withRemoteTimeout(`${expandRemotePath(hermesPath)} --version 2>&1`, REMOTE_PROBE_TIMEOUT_SECONDS))
+    ).trim()
 
     return (out.split('\n')[0] || '').trim()
   } catch {
@@ -1124,9 +1144,12 @@ async function remoteSupportsSshOwnership(ssh, hermesPath) {
   const hermes = expandRemotePath(hermesPath)
 
   const out = await ssh.exec(
-    `help="$(${hermes} serve --help 2>&1)"; ` +
-      `printf '%s' "$help" | grep -q ssh-session-token-file && ` +
-      `printf '%s' "$help" | grep -q ssh-owner-nonce && echo YES || echo NO`
+    withRemoteTimeout(
+      `help="$(${hermes} serve --help 2>&1)"; ` +
+        `printf '%s' "$help" | grep -q ssh-session-token-file && ` +
+        `printf '%s' "$help" | grep -q ssh-owner-nonce && echo YES || echo NO`,
+      REMOTE_PROBE_TIMEOUT_SECONDS
+    )
   )
 
   return String(out || '')
@@ -1689,6 +1712,7 @@ export {
   readLockfile,
   READY_RE,
   REMOTE_LOCK_DIR,
+  REMOTE_PROBE_TIMEOUT_SECONDS,
   remotePidAlive,
   remoteProcessCreationTime,
   remoteSupportsSshOwnership,
@@ -1701,5 +1725,6 @@ export {
   SUPPORTED_REMOTE_OS,
   terminateOwnedDashboardForUpdate,
   validateRemotePath,
+  withRemoteTimeout,
   writeLockfile
 }
