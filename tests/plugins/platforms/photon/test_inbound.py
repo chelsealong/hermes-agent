@@ -158,6 +158,115 @@ def test_is_duplicate_window(monkeypatch: pytest.MonkeyPatch) -> None:
     assert adapter._dedup.is_duplicate("id-1") is True  # still dup
 
 
+class _FakeTextStreamResponse:
+    """Minimal stand-in for httpx.Response exposing only ``aiter_text()``."""
+
+    def __init__(self, chunks: List[str]) -> None:
+        self._chunks = chunks
+
+    async def aiter_text(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_iter_ndjson_lines_keeps_unicode_line_separator_whole() -> None:
+    """A multi-line iMessage embeds a raw U+2028 inside the JSON string (valid
+    JSON, but not a line terminator we should split on). Splitting on U+2028 -
+    the way httpx's aiter_lines()/str.splitlines() does - would fragment the
+    NDJSON record into two halves that both fail json.loads."""
+    text = "line one" + chr(0x2028) + "line two"  # iOS Enter -> raw U+2028, unescaped by JSON.stringify
+    event = {"messageId": "m1", "content": {"type": "text", "text": text}}
+    record = json.dumps(event, ensure_ascii=False)  # match JS JSON.stringify: raw U+2028, not \u2028
+    resp = _FakeTextStreamResponse([record + "\n"])
+
+    lines = [line async for line in PhotonAdapter._iter_ndjson_lines(resp)]
+
+    assert lines == [record]
+    assert json.loads(lines[0]) == event
+
+
+@pytest.mark.asyncio
+async def test_iter_ndjson_lines_splits_only_on_newline_across_chunks() -> None:
+    resp = _FakeTextStreamResponse(['{"a":', '1}\n{"b":2}\n'])
+
+    lines = [line async for line in PhotonAdapter._iter_ndjson_lines(resp)]
+
+    assert lines == ['{"a":1}', '{"b":2}']
+
+
+class _FakeStreamCtx:
+    def __init__(self, resp: Any) -> None:
+        self._resp = resp
+
+    async def __aenter__(self) -> Any:
+        return self._resp
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+
+class _FakeInboundResponse:
+    """Mimics httpx.Response for the /inbound stream, implementing both read
+    paths: ``aiter_lines()`` reproduces httpx's real ``str.splitlines()``-based
+    splitting (which also breaks on U+2028/U+2029/U+0085), and ``aiter_text()``
+    yields raw chunks. The same fake drives both the pre-fix and post-fix code."""
+
+    status_code = 200
+
+    def __init__(self, chunks: List[str]) -> None:
+        self._chunks = chunks
+
+    async def aiter_text(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aiter_lines(self):
+        for line in "".join(self._chunks).splitlines():
+            yield line
+
+
+class _FakeInboundClient:
+    def __init__(self, resp: Any) -> None:
+        self._resp = resp
+
+    def stream(self, method: str, url: str, headers: Any = None, timeout: Any = None) -> _FakeStreamCtx:
+        return _FakeStreamCtx(self._resp)
+
+
+@pytest.mark.asyncio
+async def test_inbound_loop_delivers_message_with_embedded_line_separator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end regression for the dropped-iMessage bug: the sidecar's NDJSON
+    line for a multi-line iMessage contains a raw U+2028 (``JSON.stringify``
+    does not escape it). Reading the stream with httpx's ``aiter_lines()``
+    also splits on U+2028 and fragments one record into two invalid-JSON
+    halves that ``_on_inbound_line`` silently drops - the message never
+    reaches ``handle_message``."""
+    adapter = _make_adapter(monkeypatch)
+    captured = _capture(adapter, monkeypatch)
+
+    text = "line one" + chr(0x2028) + "line two"
+    event = _dm_event(text, msg_id="spc-msg-u2028")
+    record = json.dumps(event, ensure_ascii=False)  # match JS JSON.stringify: raw U+2028, not \u2028
+    adapter._http_client = _FakeInboundClient(_FakeInboundResponse([record + "\n"]))
+
+    orig_on_line = adapter._on_inbound_line
+
+    async def _on_line_then_stop(line: str) -> None:
+        await orig_on_line(line)
+        adapter._inbound_running = False
+
+    monkeypatch.setattr(adapter, "_on_inbound_line", _on_line_then_stop)
+
+    adapter._inbound_running = True
+    await asyncio.wait_for(adapter._inbound_loop(), timeout=2.0)
+
+    assert len(captured) == 1
+    assert captured[0].text == text
+
+
 def test_check_requirements_without_node(monkeypatch: pytest.MonkeyPatch) -> None:
     # If no node binary on PATH the adapter should refuse to start.
     from plugins.platforms.photon import adapter as adapter_mod

@@ -606,6 +606,26 @@ class PhotonAdapter(BasePlatformAdapter):
 
     # -- Inbound stream consumer ---------------------------------------------------
 
+    @staticmethod
+    async def _iter_ndjson_lines(resp: "httpx.Response"):
+        """Split the sidecar's ``/inbound`` stream on ``\\n`` only.
+
+        ``httpx``'s ``aiter_lines()`` follows ``str.splitlines()`` semantics and
+        also splits on U+2028, U+2029 and U+0085. iMessage embeds U+2028 raw
+        (unescaped, but JSON-legal) for multi-line messages, so ``aiter_lines()``
+        fragments one NDJSON record into two half-JSON pieces that both fail to
+        parse and get silently dropped. Splitting on ``\\n`` alone keeps the
+        record whole.
+        """
+        buffer = ""
+        async for chunk in resp.aiter_text():
+            buffer += chunk
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                yield line
+        if buffer:
+            yield buffer
+
     async def _inbound_loop(self) -> None:
         """Consume the sidecar's ``/inbound`` NDJSON stream, re-opening it if it drops
         (the sidecar owns the gRPC reconnect to Photon)."""
@@ -621,7 +641,7 @@ class PhotonAdapter(BasePlatformAdapter):
                     if resp.status_code != 200:
                         raise RuntimeError(f"/inbound returned {resp.status_code}")
                     backoff = 1.0
-                    async for line in resp.aiter_lines():
+                    async for line in self._iter_ndjson_lines(resp):
                         if not self._inbound_running:
                             break
                         line = line.strip()
