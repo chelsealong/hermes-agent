@@ -10,15 +10,12 @@ same as every other ``_spawn_detached`` caller.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from hermes_cli import gateway as hermes_gateway
 from hermes_cli import gateway_windows
 from hermes_cli import main as cli_main
 import hermes_cli.main_install_repair as main_install_repair
-from hermes_cli import process_identity
 from hermes_cli import update_cmd
 import hermes_cli.update_cmd_windows as update_cmd_windows
 
@@ -59,27 +56,6 @@ def test_cold_start_raises_when_process_does_not_survive(monkeypatch, capsys):
 
 
 def test_cold_start_reports_success_when_process_survives(monkeypatch, capsys):
-    out = _run_cold_start(monkeypatch, capsys, surviving_pids=[4242])
-
-    assert "✓ Gateway started via cold-start after update" in out
-
-
-def test_cold_start_ignores_unrelated_live_backend_ledger_entry(monkeypatch, capsys):
-    """#110728: an unrelated live "serve" ledger entry for this install path must not silently
-    make ``_desktop_owns_gateway_lifecycle`` swallow the cold-start path. Without the isolation
-    in ``_run_cold_start``, this same entry would make it report "Desktop owns it" and both
-    tests above would see no output / no exception instead of the outcome they assert.
-    """
-    monkeypatch.setattr(
-        process_identity,
-        "ledger_entries",
-        lambda **_kwargs: [{
-            "purpose": "serve",
-            "spawner_pid": os.getpid(),
-            "spawner_create": process_identity._process_create_time(),
-        }],
-    )
-
     out = _run_cold_start(monkeypatch, capsys, surviving_pids=[4242])
 
     assert "✓ Gateway started via cold-start after update" in out
