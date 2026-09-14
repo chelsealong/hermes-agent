@@ -97,13 +97,16 @@ class SessionTitlesMixin:
                 return 0
             if title:
                 conflict = conn.execute(
-                    "SELECT id FROM sessions WHERE title = ? AND id != ?", (title, session_id),
+                    "SELECT id, archived FROM sessions WHERE title = ? AND id != ?", (title, session_id),
                 ).fetchone()
                 if conflict:
                     conflict_id = conflict["id"]
                     # A hidden compressed ancestor holding the title cannot be freed by the
-                    # user, so transfer it onto the tip (uniqueness + lineage kept).
-                    if self._is_compression_ancestor(conn, ancestor_id=conflict_id, descendant_id=session_id):
+                    # user, so transfer it onto the tip (uniqueness + lineage kept). An
+                    # archived row is retired identity too — it can never be a live
+                    # canonical chat again — so free its title the same way.
+                    if (conflict["archived"]
+                            or self._is_compression_ancestor(conn, ancestor_id=conflict_id, descendant_id=session_id)):
                         conn.execute("UPDATE sessions SET title = NULL WHERE id = ?", (conflict_id,))
                     else:
                         raise ValueError(f"Title '{title}' is already in use by session {conflict_id}")

@@ -93,6 +93,19 @@ def test_auto_titler_cannot_rename_derived_canonical_bot_chat(db):
     assert row["title_source"] == SessionDB.TITLE_SOURCE_DERIVED
 
 
+def test_archiving_canonical_bot_chat_frees_the_title_for_a_successor(db):
+    # #110871: archiving the canonical Bot Chat must not permanently lock its
+    # title. The archived row is retired identity — like a compression
+    # ancestor, it can be freed so a replacement chat can become canonical.
+    old_sid = _make_canonical(db, session_id="old-bot-chat")
+    assert db.set_session_archived(old_sid, True)
+
+    db.create_session("new-bot-chat", source="desktop")
+    assert db.set_session_title("new-bot-chat", SessionDB.CANONICAL_BOT_CHAT_TITLE)
+    row = db.get_session_by_title(SessionDB.CANONICAL_BOT_CHAT_TITLE)
+    assert row and row["id"] == "new-bot-chat"
+
+
 def test_auto_titler_can_rename_visible_derived_bot_chat(db):
     # Control: hidden is still the discriminator — a visible session that
     # merely carries the text "Bot Chat" upgrades derived -> llm as usual.
