@@ -367,6 +367,19 @@ def test_auto_multiplex_migration_false_opts_out_of_the_update_hook_but_not_the_
     assert _config_flag(fleet.root) is True and (fleet.root / gm.MANIFEST_NAME).exists()
 
 
+def test_declared_default_key_is_the_one_the_guard_reads(fleet):
+    """The opt-out declared in ``DEFAULT_CONFIG`` (what ``hermes config set gateway.<key>`` validates
+    against and what users are told to set) must be the same key ``auto_migration_opted_out`` reads.
+    Writing it through the real ``hermes config set`` path must actually opt out (#110683)."""
+    from hermes_cli.config import DEFAULT_CONFIG, set_config_value
+    from hermes_cli.gateway_migrate_guards import auto_migration_opted_out
+
+    assert "auto_multiplex_migration" in DEFAULT_CONFIG["gateway"], (
+        "DEFAULT_CONFIG declares a different key than the one the guard reads")
+    set_config_value("gateway.auto_multiplex_migration", "false")
+    assert auto_migration_opted_out(fleet.root) is True
+
+
 def test_explicit_migrate_with_no_standalone_secondaries_still_flips_flag_and_restarts_default(fleet, capsys, monkeypatch):
     """The user typed --multiplex: 'nothing to migrate' + flag left off was a no-op the user did not ask
     for. The update hook keeps its no-op (previous test); the explicit command proceeds."""
