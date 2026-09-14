@@ -345,6 +345,46 @@ class TestInstall:
         assert not (plan.target_dir / "new_config.toml").exists(), \
             "new_config.toml should not be copied (not in distribution_owned)"
 
+    def test_update_preserves_skills_the_distribution_does_not_ship(self, profile_env):
+        """`hermes profile update` must merge skills/, not wipe it. A bundled skill the
+        current staged payload no longer ships, and a curator-authored custom skill with
+        no source to resync from, must both survive an update that only re-provides
+        skills/demo."""
+        staged = _make_staging_dir(profile_env, "skills_src")
+        plan = install_distribution(str(staged), name="skills_profile")
+        assert (plan.target_dir / "skills" / "demo" / "SKILL.md").exists()
+
+        # Simulate skills the distribution never shipped: a bundled one and a
+        # curator-authored custom one, both created locally after install.
+        (plan.target_dir / "skills" / "other-bundled").mkdir()
+        (plan.target_dir / "skills" / "other-bundled" / "SKILL.md").write_text(
+            "---\nname: other-bundled\ndescription: b\n---\n# Bundled\n"
+        )
+        (plan.target_dir / "skills" / "custom").mkdir()
+        (plan.target_dir / "skills" / "custom" / "SKILL.md").write_text(
+            "---\nname: custom\ndescription: c\n---\n# Custom\n"
+        )
+
+        # New distribution version updates the demo skill's content but still only
+        # ships that one skill.
+        (staged / "skills" / "demo" / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: updated\n---\n# Demo skill v2\n"
+        )
+        from hermes_cli.profile_distribution import read_manifest as _read
+        m_on_disk = _read(plan.target_dir)
+        m_on_disk.source = str(staged)
+        write_manifest(plan.target_dir, m_on_disk)
+
+        update_distribution("skills_profile", force_config=True)
+
+        # The distribution-provided skill was updated.
+        assert "v2" in (plan.target_dir / "skills" / "demo" / "SKILL.md").read_text()
+        # Skills the distribution doesn't ship must NOT be wiped by the update.
+        assert (plan.target_dir / "skills" / "other-bundled" / "SKILL.md").exists(), \
+            "bundled skill not in the staged payload must survive an update"
+        assert (plan.target_dir / "skills" / "custom" / "SKILL.md").exists(), \
+            "curator-authored custom skill must survive an update"
+
     def test_install_rejects_non_distribution_directory(self, profile_env, tmp_path):
         bogus = tmp_path / "bogus_dir"
         bogus.mkdir()

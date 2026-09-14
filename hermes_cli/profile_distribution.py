@@ -356,6 +356,20 @@ def _owned_entries(staged: Path, manifest: DistributionManifest):
             yield src, rel_parts
 
 
+def _merge_owned_dir(src: Path, dest: Path) -> None:
+    """Copy each entry of *src* into *dest*, overwriting same-named entries but leaving
+    anything already in *dest* that *src* doesn't provide untouched."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for entry in src.iterdir():
+        target_entry = dest / entry.name
+        if entry.is_dir():
+            if target_entry.exists():
+                shutil.rmtree(target_entry)
+            shutil.copytree(entry, target_entry)
+        else:
+            shutil.copy2(entry, target_entry)
+
+
 def _copy_dist_payload(staged: Path, target: Path, manifest: DistributionManifest, preserve_config: bool) -> None:
     """Copy distribution-owned files (see ``_owned_entries``) from *staged* into *target*.
 
@@ -380,9 +394,16 @@ def _copy_dist_payload(staged: Path, target: Path, manifest: DistributionManifes
         dest = target.joinpath(*rel_parts)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(src, dest, ignore=_ignore_user_owned)
+            if rel_parts == ("skills",):
+                # Merge rather than replace: a profile's skills/ holds bundled skills the
+                # distribution doesn't currently ship plus curator-authored ones with no
+                # source to resync from. Only overwrite the named skill dirs the
+                # distribution actually provides; never delete the rest.
+                _merge_owned_dir(src, dest)
+            else:
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(src, dest, ignore=_ignore_user_owned)
         else:
             shutil.copy2(src, dest)
 
