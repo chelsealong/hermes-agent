@@ -10,13 +10,17 @@ same as every other ``_spawn_detached`` caller.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from hermes_cli import gateway as hermes_gateway
 from hermes_cli import gateway_windows
 from hermes_cli import main as cli_main
 import hermes_cli.main_install_repair as main_install_repair
+from hermes_cli import process_identity
 from hermes_cli import update_cmd
+import hermes_cli.update_cmd_windows as update_cmd_windows
 
 
 def _run_cold_start(monkeypatch, capsys, *, surviving_pids):
@@ -30,6 +34,12 @@ def _run_cold_start(monkeypatch, capsys, *, surviving_pids):
         "find_gateway_pids",
         lambda all_profiles=False: [] if all_profiles else surviving_pids,
     )
+    # ``_desktop_owns_gateway_lifecycle`` reads the real spawn ledger, keyed off this
+    # checkout's on-disk path (``process_identity.install_id``) rather than HERMES_HOME. On a
+    # machine where a live gateway shares that path, an unrelated real ledger entry would
+    # otherwise satisfy "Desktop owns it" here and short-circuit before ever spawning (#110728).
+    monkeypatch.setattr(update_cmd, "_desktop_owns_gateway_lifecycle", lambda: False)
+    monkeypatch.setattr(update_cmd_windows, "_desktop_owns_gateway_lifecycle", lambda: False)
     monkeypatch.setattr(gateway_windows, "_spawn_detached", lambda: 4242)
     # Avoid the real 6s/0.4s poll loop in _report_gateway_start.
     monkeypatch.setattr(
@@ -49,6 +59,27 @@ def test_cold_start_raises_when_process_does_not_survive(monkeypatch, capsys):
 
 
 def test_cold_start_reports_success_when_process_survives(monkeypatch, capsys):
+    out = _run_cold_start(monkeypatch, capsys, surviving_pids=[4242])
+
+    assert "✓ Gateway started via cold-start after update" in out
+
+
+def test_cold_start_ignores_unrelated_live_backend_ledger_entry(monkeypatch, capsys):
+    """#110728: an unrelated live "serve" ledger entry for this install path must not silently
+    make ``_desktop_owns_gateway_lifecycle`` swallow the cold-start path. Without the isolation
+    in ``_run_cold_start``, this same entry would make it report "Desktop owns it" and both
+    tests above would see no output / no exception instead of the outcome they assert.
+    """
+    monkeypatch.setattr(
+        process_identity,
+        "ledger_entries",
+        lambda **_kwargs: [{
+            "purpose": "serve",
+            "spawner_pid": os.getpid(),
+            "spawner_create": process_identity._process_create_time(),
+        }],
+    )
+
     out = _run_cold_start(monkeypatch, capsys, surviving_pids=[4242])
 
     assert "✓ Gateway started via cold-start after update" in out
