@@ -15,7 +15,7 @@
  * bot-initiated sends use `hermes -p <bot> chat --in ~ -c "Bot Chat"`.
  */
 
-import { CHAT_EMPTY_AREA, COMPOSER_AREAS, host, PALETTE_AREA, translateNow } from '@hermes/plugin-sdk'
+import { CHAT_EMPTY_AREA, COMPOSER_AREAS, host, PALETTE_AREA, translateNow, useI18n } from '@hermes/plugin-sdk'
 import type { ChatEmptyProps, PluginContext } from '@hermes/plugin-sdk'
 
 import { startFaceClock, stopFaceClock } from './avatar'
@@ -88,6 +88,17 @@ interface MentionCompletionItem {
 interface ComposerDraftPayload {
   attachments?: unknown[]
   text: string
+}
+
+/** The Bots pane's tab label, self-subscribing via `useI18n()` (core, not
+ *  plugin-scoped: this needs `sidebar.bots`, which ships with every locale).
+ *  `title: 'Bots'` below is read once at registration — outside React,
+ *  before the active locale has loaded — and would stay English forever.
+ *  `tabTitle` re-renders with the app's actual locale instead. */
+function BotsPaneTabLabel() {
+  const { t } = useI18n()
+
+  return t.sidebar.bots
 }
 
 export default {
@@ -398,7 +409,8 @@ export default {
           pane: 'sessions',
           pos: 'center',
           enforce: true
-        }
+        },
+        tabTitle: () => <BotsPaneTabLabel />
       },
       render: () => <BotsPane />
     })

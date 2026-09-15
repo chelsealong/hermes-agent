@@ -41,7 +41,7 @@ import { SidebarProvider } from '@/components/ui/sidebar'
 import { discoverBundledPlugins } from '@/contrib/plugins'
 import { registry } from '@/contrib/registry'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
-import { translateNow } from '@/i18n'
+import { translateNow, useI18n } from '@/i18n'
 import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
 import { Download, FileText, LayoutDashboard, PanelBottom, PanelTop, Terminal, Upload, Zap } from '@/lib/icons'
 import { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
@@ -117,6 +117,16 @@ import { ContribWiring, WiredPane } from './wiring'
 // toggles its header either way.
 // ---------------------------------------------------------------------------
 
+// The sessions pane's tab label, self-subscribing via `useI18n()`. The
+// `title: 'sessions'` below is read once, at the `registerMany` call below —
+// outside React, before the active locale has loaded — and would stay
+// English forever. `tabTitle` re-renders with the app's actual locale.
+const SessionsPaneTabLabel = () => {
+  const { t } = useI18n()
+
+  return t.sidebar.sessions
+}
+
 // ONE render identity for the workspace pane — syncWorkspaceTitle re-registers
 // the contribution (new title) and a fresh closure would remount the chat.
 const renderWorkspacePane = () => <WiredPane part="chatRoutes" />
@@ -175,7 +185,8 @@ registry.registerMany([
       hideOnly: true,
       width: `${SIDEBAR_DEFAULT_WIDTH}px`,
       minWidth: `${SIDEBAR_DEFAULT_WIDTH}px`,
-      maxWidth: `${SIDEBAR_MAX_WIDTH}px`
+      maxWidth: `${SIDEBAR_MAX_WIDTH}px`,
+      tabTitle: () => <SessionsPaneTabLabel />
     },
     render: () => <WiredPane part="sidebar" />
   },

@@ -18,7 +18,9 @@
 
 import type * as HermesSdk from '@hermes/plugin-sdk'
 import type { PluginContext } from '@hermes/plugin-sdk'
+import { cleanup, render, screen } from '@testing-library/react'
 import { atom } from 'nanostores'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as DataModule from './data'
@@ -41,7 +43,11 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
       onEvent: undefined,
       paneVisibility: mocks.paneVisibility,
       setWorkspaceScope: mocks.setWorkspaceScope
-    }
+    },
+    // The active locale's `sidebar.bots` — distinct from the English
+    // `title: 'Bots'` fallback, so a test asserting this value only passes
+    // if the tab label is actually reading it through `useI18n()`.
+    useI18n: () => ({ t: { sidebar: { bots: 'Боты' } } })
   }
 })
 
@@ -158,6 +164,26 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+describe('the Bots pane tab label', () => {
+  afterEach(cleanup)
+
+  it('renders through useI18n() instead of the frozen registration-time title', () => {
+    paneStores()
+
+    const harness = recordingContext()
+
+    plugin.register(harness.ctx)
+
+    const tabTitle = harness.find('pane')!.data!.tabTitle as () => ReactNode
+
+    render(tabTitle())
+
+    expect(screen.getByText('Боты')).toBeTruthy()
+
+    harness.dispose()
+  })
 })
 
 describe('the Bots pane dock', () => {
