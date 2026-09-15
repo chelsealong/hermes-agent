@@ -150,6 +150,40 @@ class TestHandleFunctionCall:
         assert pre_call[1]["middleware_trace"] == expected_trace
         assert post_call[1]["middleware_trace"] == expected_trace
 
+    def test_tool_execution_middleware_short_circuit_returns_raw_dict(self, monkeypatch):
+        """A ``tool_execution`` middleware callback is not required to call
+        ``next_call()`` at all — ``run_tool_execution_middleware`` returns
+        whatever the callback returns, verbatim (hermes_cli/middleware.py's
+        ``call_at``: ``return callback(**call_kwargs)``). Only the registry
+        handler's own return value is forced through
+        ``ToolRegistry._normalize_handler_result``; a plugin's execution
+        middleware sits *outside* that contract and can hand
+        ``handle_function_call`` a raw dict instead of a JSON string (#111815).
+        """
+        def short_circuiting_middleware(**kwargs):
+            # Never calls kwargs["next_call"](...): the registry handler
+            # (and its str-only normalization) never runs.
+            return {"output": "", "exit_code": 2}
+
+        manager = type(
+            "Manager", (), {"_middleware": {"tool_execution": [short_circuiting_middleware]}},
+        )()
+        monkeypatch.setattr("hermes_cli.plugins.get_plugin_manager", lambda: manager)
+        monkeypatch.setattr("hermes_cli.plugins.has_hook", lambda name: False)
+        monkeypatch.setattr(
+            "model_tools.registry.dispatch",
+            lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("registry.dispatch should not run")),
+        )
+
+        result = handle_function_call(
+            "terminal", {"command": "false"}, skip_tool_execution_middleware=False,
+        )
+
+        assert result == {"output": "", "exit_code": 2}
+
+        from agent.display import _detect_tool_failure
+        assert _detect_tool_failure("terminal", result) == (True, " [exit 2]")
+
     def test_registry_exception_emits_terminal_tool_hook(self, monkeypatch):
         from hermes_cli import lifecycle
 
