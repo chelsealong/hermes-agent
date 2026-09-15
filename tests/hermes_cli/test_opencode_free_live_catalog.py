@@ -33,9 +33,9 @@ _STATIC_FLOOR = list(_PROVIDER_MODELS["opencode-free"])
 
 # The live relay's current free tier. x-preview-f-free was DELISTED 2026-08-26;
 # hy3-free and laguna-s-2.1-free were DELISTED 2026-09-09 (gone from live
-# /models, anon 401 "Model … is not supported").
+# /models, anon 401 "Model … is not supported"); deepseek-v4-flash-free's promo
+# ended and completions 400 "Model is unavailable" anonymously (#111749).
 _LIVE_FREE_MODELS = [
-    "deepseek-v4-flash-free",
     "mimo-v2.5-free",
     "nemotron-3-ultra-free",
     "nemotron-3.5-lightning-free",
@@ -63,7 +63,6 @@ class TestProviderModelIdsOpencodeFree:
             result = provider_model_ids("opencode-free")
 
         assert "x-preview-f-free" not in result  # delisted — REVERT-PROOF
-        assert "deepseek-v4-flash-free" in result  # newly-live — REVERT-PROOF
         assert "mimo-v2.5-free" in result  # newly-live — REVERT-PROOF
 
     def test_live_catalog_filters_out_keyed_free_suffix_model(self):
@@ -221,3 +220,4 @@ class TestOpencodeFreeFollowUps:
         assert "x-preview-f-free" not in _PROVIDER_MODELS["opencode-free"]
         assert "hy3-free" not in _PROVIDER_MODELS["opencode-free"]
         assert "laguna-s-2.1-free" not in _PROVIDER_MODELS["opencode-free"]
+        assert "deepseek-v4-flash-free" not in _PROVIDER_MODELS["opencode-free"]

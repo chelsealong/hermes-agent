@@ -237,9 +237,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     # may lag the relay (intentional). Known-delisted models are REMOVED (the offline fallback must
     # not offer a model that 401s; x-preview-f-free delisted 2026-08-26, hy3-free and
     # laguna-s-2.1-free delisted 2026-09-09 — both dropped from live /zen/v1/models and 401
-    # "Model … is not supported" anonymously).
+    # "Model … is not supported" anonymously; deepseek-v4-flash-free's promo ended and completions
+    # 400 "Model is unavailable" anonymously (production logs 2026-09-14, issue #111749).
     "opencode-free": [
-        "deepseek-v4-flash-free", "mimo-v2.5-free",
+        "mimo-v2.5-free",
         "nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "muse-spark-1.2-contributor-free",
         "muse-spark-1.3-contributor-free",
     ],
