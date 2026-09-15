@@ -95,6 +95,36 @@ def test_only_canonical_capable_owner_receives_across_compression(tmp_path, capa
         db.close()
 
 
+def test_expected_session_id_skips_registry_lock_for_unrelated_sessions(tmp_path, monkeypatch):
+    """A session polling on behalf of an id that isn't the Bot Chat tip can never be
+    the canonical owner, so it must not pay for (or fail on) the registry lease lock."""
+    import hermes_cli.active_sessions as active_sessions_module
+    from hermes_state import SessionDB
+    from hermes_cli.active_sessions import try_acquire_active_session
+    from tools import bot_live_delivery as mailbox
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session(session_id="chat", source="cli")
+    db.set_session_title("chat", "Bot Chat")
+    meta = dict(live_session_id="live", bot_live_delivery_consumer=True)
+    lease, refusal = try_acquire_active_session(session_id="chat", surface="desktop", config={},
+                                               registry_home=tmp_path, metadata=meta)
+    assert refusal is None
+    try:
+        def boom(*args, **kwargs):
+            raise RuntimeError("active session file lock unavailable")
+        monkeypatch.setattr(active_sessions_module, "active_session_registry_snapshot", boom)
+
+        assert mailbox.find_canonical_owner(tmp_path, expected_session_id="unrelated-session") is None
+        with pytest.raises(RuntimeError):
+            mailbox.find_canonical_owner(tmp_path, expected_session_id="chat")
+        with pytest.raises(RuntimeError):
+            mailbox.find_canonical_owner(tmp_path)
+    finally:
+        lease.release()
+        db.close()
+
+
 def test_delivery_keeps_the_sender_and_refuses_a_different_one_under_the_same_id(tmp_path):
     from tools import bot_live_delivery as mailbox
 

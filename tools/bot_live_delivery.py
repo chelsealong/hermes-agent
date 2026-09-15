@@ -25,8 +25,15 @@ _OWNER_KEYS = ("profile_home", "session_id", "lease_id", "live_session_id")
 _TERMINAL = frozenset({"settled", "failed", "cancelled", "ambiguous"})
 
 
-def find_canonical_owner(profile_home: Path | str) -> dict[str, Any] | None:
-    """Return the exact Bot Chat tip's lease, including unsupported CLI owners."""
+def find_canonical_owner(profile_home: Path | str, *, expected_session_id: str | None = None) -> dict[str, Any] | None:
+    """Return the exact Bot Chat tip's lease, including unsupported CLI owners.
+
+    ``expected_session_id``, when given, skips the registry lease lookup (and its
+    process-wide file lock) unless the Bot Chat compression tip actually matches it.
+    A caller checking on behalf of an unrelated session can never be the canonical
+    owner, so there is nothing to gain from taking the lock only to fail the same
+    comparison the caller was going to make anyway.
+    """
     from hermes_cli.active_sessions import active_session_registry_snapshot
     from hermes_state import SessionDB
 
@@ -41,15 +48,19 @@ def find_canonical_owner(profile_home: Path | str) -> dict[str, Any] | None:
         db.close()
     if not session_id:
         return None
+    if expected_session_id is not None and session_id != expected_session_id:
+        return None
     for entry in active_session_registry_snapshot(registry_home=home):
         if entry["session_id"] == session_id:
             return {**entry, "profile_home": str(home)}
     return None
 
 
-def find_canonical_live_owner(profile_home: Path | str) -> dict[str, Any] | None:
+def find_canonical_live_owner(
+    profile_home: Path | str, *, expected_session_id: str | None = None,
+) -> dict[str, Any] | None:
     """Only advertised consumers may receive owner-pinned mailbox deliveries."""
-    entry = find_canonical_owner(profile_home)
+    entry = find_canonical_owner(profile_home, expected_session_id=expected_session_id)
     meta = (entry or {}).get("metadata") or {}
     if entry and meta.get("bot_live_delivery_consumer") is True and meta.get("live_session_id"):
         return {key: entry[key] for key in ("profile_home", "session_id", "lease_id")} | {

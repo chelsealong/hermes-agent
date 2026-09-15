@@ -523,7 +523,7 @@ def _poll_bot_live_delivery_once(sid: str, session: dict) -> bool:
         lease = session.get("active_session_lease")
         if lease is None or getattr(lease, "released", False):
             return False
-        owner = find_canonical_live_owner(home)
+        owner = find_canonical_live_owner(home, expected_session_id=session.get("session_key"))
         if (not owner or owner.get("lease_id") != lease.lease_id
                 or owner.get("live_session_id") != sid
                 or owner.get("session_id") != session.get("session_key")):
