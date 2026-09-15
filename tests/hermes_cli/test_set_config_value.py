@@ -85,6 +85,39 @@ class TestCatchAllPatterns:
 
 
 # ---------------------------------------------------------------------------
+# Setup-hidden platform keys → .env (#111848)
+# ---------------------------------------------------------------------------
+
+class TestSetupHiddenEnvRouting:
+    """Keys that platform setup flows (e.g. /sethome) write via ``save_env_value()``
+    must route ``hermes config set`` to the same ``.env`` file, or the two writers
+    silently disagree on where the value lives."""
+
+    @pytest.mark.parametrize("key", [
+        "FEISHU_HOME_CHANNEL",
+        "DISCORD_HOME_CHANNEL",
+        "SLACK_ALLOW_ALL_USERS",
+        "WHATSAPP_PROXY",
+    ])
+    def test_setup_hidden_key_routes_to_env(self, key, _isolated_hermes_home):
+        set_config_value(key, "oc_ROUTING_TEST")
+        env_content = _read_env(_isolated_hermes_home)
+        assert f"{key}=oc_ROUTING_TEST" in env_content
+        # Must NOT appear in config.yaml as a top-level key.
+        assert key not in _read_config(_isolated_hermes_home)
+
+    def test_setup_hidden_key_read_back_from_env(self, _isolated_hermes_home, capsys):
+        set_config_value("FEISHU_HOME_CHANNEL", "oc_ROUTING_TEST")
+        capsys.readouterr()
+
+        args = argparse.Namespace(
+            config_command="get", key="FEISHU_HOME_CHANNEL", json=False)
+        config_command(args)
+
+        assert capsys.readouterr().out.strip() == "oc_ROUTING_TEST"
+
+
+# ---------------------------------------------------------------------------
 # Non-secret keys → config.yaml
 # ---------------------------------------------------------------------------
 

@@ -28,6 +28,7 @@ from hermes_cli.colors import Colors, color
 from hermes_cli import managed_scope
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.secret_prompt import masked_secret_prompt
+from hermes_cli.setup_hidden_env import is_setup_hidden_env
 # Re-export from hermes_constants — canonical definition lives there.
 from hermes_constants import get_hermes_home, get_process_hermes_home  # noqa: F401
 from utils import atomic_replace, atomic_yaml_write, fast_safe_load
@@ -953,7 +954,10 @@ def _is_env_config_key(key: str) -> bool:
     return (
         key_upper in _ENV_CONFIG_KEYS
         or key_upper.endswith(('_API_KEY', '_TOKEN', '_SECRET'))
-        or key_upper.startswith('TERMINAL_SSH'))
+        or key_upper.startswith('TERMINAL_SSH')
+        # Platform setup flows (e.g. /sethome) write these through save_env_value() into
+        # .env — route `hermes config set` there too so the two writers agree (#111848).
+        or is_setup_hidden_env(key_upper))
 
 
 def _format_config_get_value(value, *, as_json: bool) -> str:
