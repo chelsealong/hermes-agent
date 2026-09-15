@@ -380,17 +380,65 @@ class TestNamedProfileHintIntegration:
         assert f"under {root}/profiles/<name>/." in prompt
 
 
-def test_build_system_prompt_records_stable_prefix():
+def test_build_system_prompt_records_enlarged_static_prefix():
+    """The static-prefix cache marker covers ``stable`` plus the byte-stable
+    context-file bundle, not only ``stable``: a compaction rebuild that only
+    changes the volatile tier must not have to re-cache this bundle every time."""
     agent = _make_agent()
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
         patch("agent.prompt_builder.build_context_files_prompt", return_value="context"),
     ):
+        parts = build_system_prompt_parts(agent)
         prompt = build_system_prompt(agent)
 
-    assert prompt.startswith(agent._cached_system_prompt_static)
-    assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
+    static = agent._cached_system_prompt_static
+    assert prompt.startswith(static)
+    assert static == "\n\n".join(p for p in (parts["stable"], "context") if p)
+    assert static != parts["stable"]
+
+
+def test_static_prefix_survives_volatile_only_rebuild_but_excludes_workspace(monkeypatch):
+    """Reproduces the reported bug: previously the marker covered only ``stable``, so a
+    rebuild that only changes the volatile tier (e.g. compaction's timestamp line) made
+    the whole context tier -- including an unchanged project-context bundle -- fall
+    outside the marker and get rewritten into the provider cache every time. The
+    per-process workspace snapshot must stay OUT of the marker: it differs between
+    processes that resume the same session (``_coding_parts``)."""
+    import agent.system_prompt as system_prompt
+
+    agent = _make_agent(valid_tool_names=["read_file"], _parallel_tool_call_guidance=False)
+    monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
+    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE", "HELP")
+    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS", "HELP")
+    monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
+    monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
+
+    def _build(day):
+        with (
+            patch("agent.prompt_builder.load_soul_md", return_value=""),
+            patch("agent.prompt_builder.build_environment_hints", return_value=""),
+            patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
+            patch(
+                "agent.coding_context.coding_system_prompt_parts",
+                return_value=(["CODING_STABLE"], ["WORKSPACE"], []),
+            ),
+            patch("agent.file_safety._resolve_active_profile_name", return_value="default"),
+            patch("hermes_time.now", return_value=datetime(2026, 1, day)),
+        ):
+            return build_system_prompt(agent)
+
+    first = _build(2)
+    static = agent._cached_system_prompt_static
+    second = _build(3)  # only the volatile timestamp line differs
+
+    assert first != second  # the volatile tier did change between builds
+    assert "CONTEXT_FILES" in static
+    assert "WORKSPACE" not in static
+    # The prefix captured after the first build is still a literal prefix of the
+    # second (post-"compaction") build: it need not be re-cached.
+    assert second.startswith(static)
 
 
 def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):

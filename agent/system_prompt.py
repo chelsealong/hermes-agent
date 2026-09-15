@@ -609,7 +609,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     ``volatile`` (skills index, memory, user profile, external memory block,
     timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
-    Never re-rendered mid-session."""
+    ``context_cacheable`` is the byte-stable head of ``context`` (project context files,
+    ending before the per-process workspace snapshot) used to enlarge the static-prefix
+    cache marker; see ``_static_cache_prefix``. Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
@@ -640,6 +642,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if system_message is not None:
         context_parts.append(system_message)
     context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded))
+    # The cacheable head of the context tier ends HERE, before the per-process workspace
+    # snapshot: a live repository probe pinned per process (see ``_coding_parts``), it
+    # differs between processes that resume the same session, so it must stay out of
+    # anything marked cacheable. Left empty when ``system_message`` is set, since that is
+    # ephemeral (injected at API-call time only, never cached) and would otherwise sit
+    # ahead of the context files inside this same tier.
+    context_cacheable = list(context_parts) if system_message is None else []
     if coding_workspace_parts:
         context_parts.extend([*coding_workspace_parts, *coding_trailing_parts, *post_workspace_parts])
     else:
@@ -660,7 +669,17 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
+    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts),
+            "context_cacheable": _join_tier(context_cacheable), "volatile": _join_tier(volatile_parts)}
+
+
+def _static_cache_prefix(parts: Dict[str, str]) -> str:
+    """The prompt prefix the static-prefix cache marker covers: ``stable`` plus the
+    cacheable head of the context tier (project-context files, ending before the
+    per-process workspace snapshot). Literal by construction: ``_join_tier`` strips and
+    joins with two newlines, so the join of the first k non-empty parts is a prefix of the
+    join of all of them, and ``build_system_prompt`` joins the tiers the same way."""
+    return "\n\n".join(p for p in (parts.get("stable"), parts.get("context_cacheable")) if p)
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
@@ -668,7 +687,7 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     only rebuilt after compression.  Tiers are ordered stable -> context ->
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
-    agent._cached_system_prompt_static = parts["stable"]
+    agent._cached_system_prompt_static = _static_cache_prefix(parts)
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_status(warning)
@@ -714,11 +733,15 @@ def reconstruct_static_prefix(agent: Any, system_message: Optional[str] = None, 
     ):
         return
     try:
-        static = build_system_prompt_parts(agent, system_message=system_message)["stable"]
-        if static and stored.startswith(static):
-            agent._cached_system_prompt_static = static
-            agent._static_rebuild_failed_for = None
-            return
+        parts = build_system_prompt_parts(agent, system_message=system_message)
+        # Try the enlarged prefix first, falling back to the stable-only prefix on any
+        # mismatch (changed context bundle, differing caller system_message, ...) so a
+        # mismatch never costs more than the previous stable-only layout did.
+        for static in (_static_cache_prefix(parts), parts["stable"]):
+            if static and stored.startswith(static):
+                agent._cached_system_prompt_static = static
+                agent._static_rebuild_failed_for = None
+                return
     except Exception:
         logger.debug("static system-prefix reconstruction failed on %s", log_label, exc_info=True)
     agent._cached_system_prompt_static = None
