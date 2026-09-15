@@ -151,6 +151,20 @@ class TestPerJobToolsetMcpMerge:
             result = _resolve_cron_enabled_toolsets(job, {})
         assert result == ["file", "memory", "web"]
 
+    def test_resolver_fails_closed_when_platform_lookup_raises(self):
+        # #111380: a broken `platform_toolsets.cron` lookup must not widen an
+        # unattended cron run to every toolset. `None` means "all toolsets" to
+        # `model_tools._select_tool_names`, so the failure path must return an
+        # empty list (deny), never None (allow everything).
+        job = {"enabled_toolsets": None}
+        with patch(
+            "hermes_cli.tools_config._get_platform_tools",
+            side_effect=RuntimeError("config parse error"),
+        ):
+            result = _resolve_cron_enabled_toolsets(job, self.CFG)
+        assert result == []
+        assert result is not None
+
 
 class TestResolveOrigin:
     def test_full_origin(self):
