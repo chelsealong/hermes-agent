@@ -1565,9 +1565,9 @@ class TestTerminateHostPidWindows:
         assert "/F" in captured["args"], "Force flag required for headless Chromium"
 
 class TestTerminateHostPidPosix:
-    """POSIX branch walks the tree via psutil and SIGTERMs children first."""
+    """POSIX branch walks the tree via psutil and SIGTERMs the parent first."""
 
-    def test_posix_walks_tree_and_terminates_children_then_parent(self, monkeypatch):
+    def test_posix_terminates_parent_before_children(self, monkeypatch):
         from tools import process_registry as pr
         import psutil
 
@@ -1592,7 +1592,7 @@ class TestTerminateHostPidPosix:
                 terminate_order.append(self.pid)
 
         monkeypatch.setattr(psutil, "Process", _FakeParent)
-        # This test covers only the SIGTERM tree-walk ordering; disable the
+        # This test covers only the SIGTERM ordering; disable the
         # SIGKILL-escalation step (which would call psutil.wait_procs on the
         # fakes) by setting the grace to 0.
         monkeypatch.setattr(pr.ProcessRegistry, "_daemon_term_grace_seconds",
@@ -1600,9 +1600,55 @@ class TestTerminateHostPidPosix:
 
         pr.ProcessRegistry._terminate_host_pid(12345)
 
-        assert terminate_order == [101, 102, 103, 12345], (
-            "Children must be terminated before the parent"
+        assert terminate_order == [12345, 101, 102, 103], (
+            "The parent must be terminated before its children"
         )
+
+    def test_posix_does_not_signal_children_while_parent_still_alive(self, monkeypatch):
+        """Regression for #111598: a supervisor (e.g. Electron's browser process)
+        that discovers a child died while it is still alive can treat that as
+        fatal. Children must not be SIGTERMed until the parent has died or its
+        whole grace window has elapsed."""
+        from tools import process_registry as pr
+        import psutil
+
+        terminate_order = []
+        parent_alive = {"checks": 0}
+
+        class _FakeChild:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def terminate(self):
+                assert parent_alive["checks"] > 2, (
+                    "child was SIGTERMed before the parent was confirmed dead"
+                )
+                terminate_order.append(self.pid)
+
+        class _FakeParent:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def children(self, recursive=False):
+                return [_FakeChild(101), _FakeChild(102)]
+
+            def terminate(self):
+                terminate_order.append(self.pid)
+
+            def is_running(self):
+                parent_alive["checks"] += 1
+                return parent_alive["checks"] <= 2  # alive for two polls, then dead
+
+            def status(self):
+                return "sleeping"
+
+        monkeypatch.setattr(psutil, "Process", _FakeParent)
+        monkeypatch.setattr(pr.ProcessRegistry, "_daemon_term_grace_seconds",
+                            staticmethod(lambda: 5.0))
+
+        pr.ProcessRegistry._terminate_host_pid(12345)
+
+        assert terminate_order == [12345, 101, 102]
 
     def test_posix_oserror_falls_back_to_os_kill(self, monkeypatch):
         from tools import process_registry as pr

@@ -797,10 +797,13 @@ class ProcessRegistry(ProcessCheckpointMixin):
         ``expected_start`` (kernel start time at spawn) is re-validated first: a mismatch
         or dead PID means the number was recycled onto a stranger and we refuse to touch
         it — a leaked orphan beats tree-killing someone's browser. POSIX: psutil SIGTERMs
-        children before the parent (so trees aren't reparented to init and survive), then
-        SIGKILLs survivors after ``terminal.daemon_term_grace_seconds``. Windows:
-        ``taskkill /T /F`` (psutil's stale PPID links miss orphans there); ``os.kill``
-        is the fallback."""
+        the parent alone first and gives it a full grace window to reap its own tree
+        (a supervisor whose children die out from under it while it's still alive can
+        treat that as fatal — see #111598 — so descendants are only signalled directly
+        once the parent is dead or has had its whole grace window to go quietly), then
+        SIGKILLs survivors after a second ``terminal.daemon_term_grace_seconds`` window.
+        Windows: ``taskkill /T /F`` (psutil's stale PPID links miss orphans there);
+        ``os.kill`` is the fallback."""
         if expected_start is not None and not cls._host_pid_is_ours(pid, expected_start):
             logger.warning(
                 "Refusing to terminate host pid %d: start-time mismatch — "
@@ -828,21 +831,35 @@ class ProcessRegistry(ProcessCheckpointMixin):
         except (OSError, PermissionError):
             _sigterm_quietly()
             return
-        # Snapshot the whole tree (children before parent) and SIGTERM each.
+        # Snapshot the whole tree BEFORE signalling anything.
         try:
             targets = parent.children(recursive=True)
         except gone:
             targets = []
         targets.append(parent)
+        # SIGTERM the parent alone and let it reap its own descendants first. Signalling
+        # children while the parent is still alive is what crashes a live supervisor
+        # (e.g. Electron: the browser discovers its zygote/GPU child died and calls
+        # LOG(FATAL) faster than its own SIGTERM handler can run — #111598).
+        with suppress(gone):
+            parent.terminate()
+        grace = cls._daemon_term_grace_seconds()
+        if grace > 0:
+            deadline = time.monotonic() + grace
+            while time.monotonic() < deadline and cls._proc_alive(parent):
+                time.sleep(0.05)
+        # The parent is dead, or had its whole grace window to reap its tree and didn't
+        # — either way anything left is orphaned (or a stalled parent), safe to signal
+        # directly now.
         for proc in targets:
             with suppress(gone):
-                proc.terminate()
+                if proc is not parent:
+                    proc.terminate()
         # Escalate to SIGKILL for anything that ignored SIGTERM within the grace window.
         # ``psutil.wait_procs``' gone/alive partition is deliberately NOT trusted: it
         # reaps via ``Process.wait()`` and mis-partitions across zombie transitions in a
         # parent/child tree, leaving survivors un-killed. Re-probing every target is
         # deterministic.
-        grace = cls._daemon_term_grace_seconds()
         if grace <= 0:
             return
         deadline = time.monotonic() + grace
