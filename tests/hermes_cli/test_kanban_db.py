@@ -1067,6 +1067,29 @@ def test_connect_works_when_wal_is_silently_refused(tmp_path, monkeypatch, caplo
     )
 
 
+def test_list_tasks_tolerates_non_utf8_body(kanban_home):
+    """Regression test for issue #111743.
+
+    One task row with a non-UTF-8 ``body`` (TEXT-affinity column holding
+    invalid UTF-8 bytes, e.g. from direct SQL) must not take down the whole
+    board listing with OperationalError("Could not decode to UTF-8 ...").
+    """
+    with kbc.connect_closing() as conn:
+        good_id = kb.create_task(conn, title="good task")
+        bad_id = kb.create_task(conn, title="bad task")
+        # Force genuinely undecodable UTF-8 into the TEXT-affinity body column.
+        conn.execute("UPDATE tasks SET body = CAST(x'61625F816364' AS TEXT) WHERE id = ?", (bad_id,))
+        conn.commit()
+
+    with kbc.connect_closing() as conn:
+        tasks = kb.list_tasks(conn)
+
+    ids = {t.id for t in tasks}
+    assert {good_id, bad_id} <= ids
+    bad_task = next(t for t in tasks if t.id == bad_id)
+    assert bad_task.body == "ab_�cd"
+
+
 def test_sqlite_connect_closes_tracked_conn_on_setup_failure(tmp_path, monkeypatch):
     """A PRAGMA failure after connect must not abandon a tracked kanban fd."""
     from hermes_cli import sqlite_safe_read

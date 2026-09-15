@@ -1500,7 +1500,16 @@ def list_tasks(
         query += " ORDER BY priority DESC, created_at ASC"
     if limit:
         query += f" LIMIT {int(limit)}"
-    rows = conn.execute(query, params).fetchall()
+    # A TEXT-affinity column (e.g. body) can hold non-UTF-8 bytes written by
+    # direct SQL, an older version, or a test — the default strict decoder
+    # then raises OperationalError("Could not decode to UTF-8 column ...")
+    # for that one row and kills the whole listing. Decode leniently instead.
+    original_text_factory = conn.text_factory
+    conn.text_factory = lambda b: b.decode("utf-8", errors="replace") if isinstance(b, bytes) else b
+    try:
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.text_factory = original_text_factory
     return [Task.from_row(r) for r in rows]
 
 
