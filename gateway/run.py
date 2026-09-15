@@ -2853,18 +2853,20 @@ def _get_channel_override(
 
 
 def _resolve_hermes_bin() -> Optional[list[str]]:
-    """Hermes update command argv: ``hermes`` on PATH, else ``python -m hermes_cli.main``, else None."""
-    import shutil
-    hermes_bin = shutil.which("hermes")
-    if hermes_bin:
-        return [hermes_bin]
+    """Hermes update/restart command argv: ``python -m hermes_cli.main`` under the *running*
+    interpreter when importable, else ``hermes`` on PATH, else None. The running interpreter is
+    preferred because callers (``/update``, ``/restart``) feed this straight into a detached
+    ``Popen`` — trusting a bare ``shutil.which("hermes")`` PATH lookup there lets anything earlier
+    on PATH than the real binary get executed (Windows PATH hijack, #111569)."""
     try:
         import importlib.util
         if importlib.util.find_spec("hermes_cli") is not None:
             return [sys.executable, "-m", "hermes_cli.main"]
     except Exception:
         pass
-    return None
+    import shutil
+    hermes_bin = shutil.which("hermes")
+    return [hermes_bin] if hermes_bin else None
 
 
 _PROFILE_ID_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")

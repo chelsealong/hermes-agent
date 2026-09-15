@@ -103,6 +103,21 @@ class TestHandleUpdateCommand:
 
         assert result == [sys.executable, "-m", "hermes_cli.main"]
 
+    @pytest.mark.asyncio
+    async def test_resolve_hermes_bin_ignores_path_when_module_importable(self):
+        """_resolve_hermes_bin must not trust a PATH-resolved ``hermes`` binary when the running
+        interpreter can invoke hermes_cli directly. A malicious executable placed earlier on PATH
+        (Windows PATH hijack, #111569) must never be selected over the running interpreter."""
+        import sys
+        from gateway.run import _resolve_hermes_bin
+
+        fake_spec = MagicMock()
+        with patch("shutil.which", return_value=r"C:\Users\victim\AppData\Local\evil\hermes.exe"), \
+             patch("importlib.util.find_spec", return_value=fake_spec):
+            result = _resolve_hermes_bin()
+
+        assert result == [sys.executable, "-m", "hermes_cli.main"]
+
 
     @pytest.mark.asyncio
     async def test_writes_pending_marker(self, tmp_path):
