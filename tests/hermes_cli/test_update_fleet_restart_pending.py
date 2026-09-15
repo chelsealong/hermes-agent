@@ -354,6 +354,12 @@ def test_run_pending_restart_true_when_no_gateways(monkeypatch, capsys):
         (scope, cmd, SimpleNamespace(returncode=0, stdout=""))
         for scope, cmd in update_cmd_fleet._SYSTEMD_SCOPES
     ])
+    # On macOS this phase also probes launchd for the install's fleet; keep it
+    # a no-op here too so the assertion below isn't at the mercy of whatever
+    # profiles happen to exist on the host running the test (#111866).
+    monkeypatch.setattr(
+        update_cmd_fleet, "_restart_macos_launchd_gateways", lambda *a, **k: None
+    )
     assert update_cmd._run_pending_fleet_restart() is True
     assert "Pending fleet restart completed" in capsys.readouterr().out
 

@@ -39,6 +39,9 @@ from hermes_cli.update_cmd import (
 )
 
 
+# Most of this file is host-independent (pure label/parsing logic, or every
+# launchd seam mocked) and keeps running on Linux CI as it always has — only
+# ``os.getuid()`` (patched below) doesn't exist on Windows.
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
     reason="launchd fleet restart is macOS-only; helpers use POSIX os.getuid",
@@ -197,7 +200,6 @@ class TestProbeLaunchdDomainForLabel:
 
 class TestGetServicePidsScoping:
     def _wire(self, monkeypatch):
-        monkeypatch.setattr(gw, "is_macos", lambda: True)
         monkeypatch.setattr(gw, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gw, "get_launchd_label", lambda: "ai.hermes.gateway")
         monkeypatch.setattr(
@@ -214,6 +216,7 @@ class TestGetServicePidsScoping:
             gw, "_locate_launchd_gateway_service", lambda label: located[label]
         )
 
+    @pytest.mark.macos_only
     def test_all_profiles_returns_every_gateway_service_pid(self, monkeypatch):
         """The update sweep's exclude-set must protect ALL freshly-restarted
         services, not only the invoking profile's (else the sweep SIGTERMs
@@ -221,6 +224,7 @@ class TestGetServicePidsScoping:
         self._wire(monkeypatch)
         assert gw._get_service_pids(all_profiles=True) == {100, 200}
 
+    @pytest.mark.macos_only
     def test_default_stays_scoped_to_current_profile(self, monkeypatch):
         """Regression guard: default-scope callers (gateway status, cron,
         stop_profile_gateway's orphan reaper) must NOT start seeing sibling

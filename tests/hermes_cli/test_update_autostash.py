@@ -8,6 +8,7 @@ import pytest
 from hermes_cli import config as hermes_config
 from hermes_cli import main as hermes_main
 from hermes_cli import update_cmd
+import hermes_cli.update_cmd_fleet as update_cmd_fleet
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,8 @@ def _patch_gateway_discovery():
     with patch("hermes_cli.gateway.find_gateway_pids", return_value=[]), \
          patch("hermes_cli.gateway.supports_systemd_services", return_value=False), \
          patch("hermes_cli.gateway.find_profile_gateway_processes", return_value=[]), \
+         patch("hermes_cli.update_cmd._restart_macos_launchd_gateways", return_value=None), \
+         patch("hermes_cli.update_cmd_fleet._restart_macos_launchd_gateways", return_value=None), \
          patch("hermes_cli.update_inventory.collect_runtime_inventory", return_value=None), \
          patch("hermes_cli.update_inventory.report_unaccounted_runtimes", return_value=False), \
          patch.object(hermes_main, "_fleet_probe_expected_runtimes", lambda *a, **kw: False), \

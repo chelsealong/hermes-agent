@@ -17,6 +17,7 @@ from hermes_cli import main as hermes_main
 import hermes_cli.main_web_build as main_web_build
 import hermes_cli.main_install_repair as main_install_repair
 from hermes_cli import update_cmd
+import hermes_cli.update_cmd_fleet as update_cmd_fleet
 
 
 def _make_head_moved_side_effect(pre_sha="abc123", post_sha="def456"):
@@ -126,6 +127,12 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
     )
     monkeypatch.setattr(
         hermes_gateway, "find_profile_gateway_processes", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
+        update_cmd, "_restart_macos_launchd_gateways", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        update_cmd_fleet, "_restart_macos_launchd_gateways", lambda *a, **k: None
     )
 
 
