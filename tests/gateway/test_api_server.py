@@ -750,6 +750,29 @@ class TestRunEventCallback:
             assert secret not in event[field], field
 
 
+    @pytest.mark.asyncio
+    async def test_tool_completed_carries_redacted_result_preview(self, adapter):
+        """tool.completed must publish a redacted result preview (#111815) so consumers
+        can distinguish a blocked failure from an ordinary one, not just a bare error flag."""
+        run_id = "run_tool_completed_preview"
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue()
+        adapter._run_streams[run_id] = queue
+        adapter._run_statuses.pop(run_id, None)
+
+        callback = adapter._make_run_event_callback(run_id, loop)
+        secret = "sk-proj-abcdef1234567890abcdef1234567890abcdef12"
+        callback(
+            "tool.completed", tool_name="terminal", duration=0.077, is_error=True,
+            result=f"BLOCKED by security policy (key {secret})",
+        )
+
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["error"] is True
+        assert "BLOCKED" in event["preview"]
+        assert secret not in event["preview"]
+
+
 # ---------------------------------------------------------------------------
 # /health endpoint
 # ---------------------------------------------------------------------------

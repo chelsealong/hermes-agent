@@ -47,6 +47,21 @@ _FIXED_EVENT_FIELDS = {
     "tool.completed": lambda tool, preview, kw: {
         "tool": tool, "duration": round(kw.get("duration", 0), 3), "error": kw.get("is_error", False)},
     "reasoning.available": lambda tool, preview, kw: {"text": preview or ""}}
+# tool.completed's result preview is capped well below _detect_tool_failure's 500-char
+# heuristic window so a large tool result never dominates the SSE frame.
+_RUN_EVENT_RESULT_PREVIEW_MAX_CHARS = 300
+
+
+def _tool_completed_preview(result: Any) -> Optional[str]:
+    """Plain-text, length-capped preview of a raw tool result for the ``tool.completed`` wire event."""
+    if result is None:
+        return None
+    from agent.tool_dispatch_helpers import _multimodal_text_summary
+    try:
+        text = _multimodal_text_summary(result)
+    except Exception:
+        text = str(result)
+    return text[:_RUN_EVENT_RESULT_PREVIEW_MAX_CHARS]
 
 
 def _remember_room_retention(request: "web.Request", claims: dict[str, Any]) -> None:
@@ -165,7 +180,12 @@ def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop
         # lifecycle boundaries must land so clients can observe delegate_task failures.
         fields = _FIXED_EVENT_FIELDS.get(event_type)
         if fields is not None:
-            _push(_run_event(run_id, event_type, **fields(tool_name, preview, kwargs)))
+            event_fields = fields(tool_name, preview, kwargs)
+            if event_type == "tool.completed":
+                result_preview = _tool_completed_preview(kwargs.get("result"))
+                if result_preview is not None:
+                    event_fields["preview"] = redact_sensitive_text(result_preview, force=True)
+            _push(_run_event(run_id, event_type, **event_fields))
         elif event_type in {"subagent.start", "subagent.complete"}:
             event = _run_event(run_id, event_type)
             if preview is not None:

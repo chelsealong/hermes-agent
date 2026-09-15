@@ -58,6 +58,17 @@ class TestDetectToolFailureTerminal:
         assert suffix.endswith("]")
 
 
+    def test_dict_result_nonzero_exit_is_a_failure(self):
+        # Callers may pass an already-parsed dict instead of a JSON string (#111815).
+        is_failure, suffix = _detect_tool_failure("terminal", {"output": "", "exit_code": 2})
+        assert is_failure is True
+        assert suffix == " [exit 2]"
+
+
+    def test_dict_result_zero_exit_is_not_a_failure(self):
+        assert _detect_tool_failure("terminal", {"output": "ok\n", "exit_code": 0}) == (False, "")
+
+
 
 
 class TestDetectToolFailureMemory:
