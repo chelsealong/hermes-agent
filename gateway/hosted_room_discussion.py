@@ -489,10 +489,24 @@ def _rotate(members: Sequence[DiscussionMember], round_index: int) -> tuple[Disc
     return tuple((*members[shift:], *members[:shift]))
 
 
+# Harness control-frame markers (agent/prompt_builder.STEER_MARKER_OPEN/CLOSE,
+# agent/context_compressor.SUMMARY_PREFIX) are trusted by every agent based on literal string
+# match alone, wherever they sit in context. A member's model can confabulate them verbatim (or an
+# attacker can craft a reply containing them); since this delta is relayed into every OTHER
+# member's role=user prompt as plain in-band text, an unstripped marker impersonates a genuine
+# out-of-band user message or compaction handoff for every participant that reads it.
+_HARNESS_MARKER_RE = re.compile(r"\[/?OUT-OF-BAND[^\]]*\]|\[CONTEXT COMPACTION[^\]]*\]", re.IGNORECASE)
+
+
+def _defang_harness_markers(text: str) -> str:
+    return _HARNESS_MARKER_RE.sub("[control-frame marker removed]", text)
+
+
 def _format_message(event: _ValidatedEvent, room: DiscussionRoom) -> str:
+    text = _defang_harness_markers(event.payload["text"])
     if event.kind == "message.user":
-        return f"User (user): {event.payload['text']}"
-    return f"@{_member_by_id(room, event.payload['member_id']).handle}: {event.payload['text']}"
+        return f"User (user): {text}"
+    return f"@{_member_by_id(room, event.payload['member_id']).handle}: {text}"
 
 
 def _truncate_utf8_text(value: Any, *, max_bytes: int, suffix: str = "") -> str:
