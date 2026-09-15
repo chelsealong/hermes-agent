@@ -114,6 +114,43 @@ class TestCategoryNamespaceRecursion:
 
 
 
+# ── Unreadable plugin directory (Windows ACL denial) ────────────────────────
+
+
+class TestScanDirectoryUnreadablePlugin:
+    """Regression #111804: a plugin directory that raises ``OSError`` while
+    being probed (Windows ``WinError 5`` access-denied) must be skipped, not
+    abort discovery of sibling plugins."""
+
+    def test_unreadable_plugin_dir_is_skipped_not_fatal(self, tmp_path, monkeypatch, caplog):
+        from hermes_cli.plugins_discovery import scan_directory
+
+        good = tmp_path / "good-plugin"
+        good.mkdir()
+        (good / "plugin.yaml").write_text("name: good-plugin\nversion: 0.1.0\n")
+
+        bad = tmp_path / "bad-plugin"
+        bad.mkdir()
+        (bad / "plugin.yaml").write_text("name: bad-plugin\nversion: 0.1.0\n")
+
+        real_exists = Path.exists
+
+        def flaky_exists(self):
+            if self.parent.name == "bad-plugin" and self.name in ("plugin.yaml", "plugin.yml"):
+                raise PermissionError(5, "Access is denied")
+            return real_exists(self)
+
+        monkeypatch.setattr(Path, "exists", flaky_exists)
+
+        with caplog.at_level("WARNING"):
+            manifests = scan_directory(tmp_path, "user")
+
+        names = {m.name for m in manifests}
+        assert "good-plugin" in names
+        assert "bad-plugin" not in names
+        assert any("bad-plugin" in rec.getMessage() for rec in caplog.records)
+
+
 # ── Kind parsing ───────────────────────────────────────────────────────────
 
 

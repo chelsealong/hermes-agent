@@ -546,7 +546,11 @@ def _discover_dashboard_plugins() -> list:
             children = sorted((Path(e.path) for e in scan), key=lambda p: p.name)
         for child in children:
             manifest_file = child / "dashboard" / "manifest.json"
-            if not child.is_dir() or not manifest_file.exists():
+            try:
+                if not child.is_dir() or not manifest_file.exists():
+                    continue
+            except OSError as exc:
+                _log.warning("Skipping unreadable dashboard plugin %s: %s", child, exc)
                 continue
             try:
                 data = json.loads(manifest_file.read_text(encoding="utf-8"))

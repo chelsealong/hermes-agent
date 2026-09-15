@@ -4540,7 +4540,40 @@ class TestDashboardPluginManifestExtensions:
         assert len(entries) == 1
         assert entries[0]["tab"]["path"] == "/from-profile"
 
+    def test_unreadable_plugin_dir_is_skipped_not_fatal(self, tmp_path, monkeypatch, caplog):
+        """Regression #111804: a WinError-5-style access-denied while probing
+        one plugin's manifest must not take down dashboard plugin discovery
+        for its siblings."""
+        self._write_plugin(tmp_path, "good-plugin", {
+            "name": "good-plugin",
+            "label": "Good Plugin",
+            "tab": {"path": "/good-plugin"},
+            "entry": "dist/index.js",
+        })
+        self._write_plugin(tmp_path, "bad-plugin", {
+            "name": "bad-plugin",
+            "label": "Bad Plugin",
+            "tab": {"path": "/bad-plugin"},
+            "entry": "dist/index.js",
+        })
 
+        real_exists = Path.exists
+
+        def flaky_exists(self):
+            if self.parent.name == "dashboard" and self.parent.parent.name == "bad-plugin":
+                raise PermissionError(5, "Access is denied")
+            return real_exists(self)
+
+        monkeypatch.setattr(Path, "exists", flaky_exists)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        with caplog.at_level("WARNING"):
+            plugins = _web_server_dashboard._discover_dashboard_plugins()
+
+        names = {p["name"] for p in plugins}
+        assert "good-plugin" in names
+        assert "bad-plugin" not in names
+        assert any("bad-plugin" in rec.getMessage() for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
