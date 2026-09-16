@@ -46,17 +46,26 @@ function focusSelectedComposer() {
 
   const editor = host?.querySelector<HTMLElement>('[data-slot="composer-rich-input"]')
 
-  if (editor && document.activeElement !== editor) {
-    focusComposerInput(editor)
-    const caret = carets.get(editor)
-    const selection = window.getSelection()
+  if (!editor || document.activeElement === editor) {
+    return
+  }
 
-    if (caret && editor.contains(caret.startContainer) && editor.contains(caret.endContainer) && selection) {
-      selection.removeAllRanges()
-      selection.addRange(caret)
-    } else {
-      placeCaretEnd(editor)
-    }
+  const selection = window.getSelection()
+
+  // A held, non-collapsed selection outside this editor is the user reading
+  // the transcript — pointer movement alone must not steal it into a caret.
+  if (selection && !selection.isCollapsed && !editor.contains(selection.anchorNode)) {
+    return
+  }
+
+  focusComposerInput(editor)
+  const caret = carets.get(editor)
+
+  if (caret && editor.contains(caret.startContainer) && editor.contains(caret.endContainer) && selection) {
+    selection.removeAllRanges()
+    selection.addRange(caret)
+  } else {
+    placeCaretEnd(editor)
   }
 }
 

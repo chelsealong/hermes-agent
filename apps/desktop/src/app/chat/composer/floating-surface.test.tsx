@@ -8,6 +8,7 @@ import { $composerPopout, setComposerPoppedOut } from '@/store/composer-popout'
 import { FloatingComposerSurface } from './floating-surface'
 import { claimFloatingComposer, pinFloatingComposerCapture } from './floating-target'
 import { getActiveComposer, markActiveComposer } from './focus'
+import { RICH_INPUT_SLOT } from './rich-editor'
 import { ComposerScopeProvider, ComposerSurfaceProvider, MAIN_COMPOSER_SCOPE } from './scope'
 
 function Surface({ id, visible = true, groupId = id }: { id: string; visible?: boolean; groupId?: string }) {
@@ -123,4 +124,39 @@ it('hands the floating recipient to a visible tab when its old tab hides or clos
   await act(async () => fireEvent.click(screen.getByText('Switch')))
   expect(screen.getByLabelText('Draft b').closest<HTMLElement>('[data-composer-owner]')!.style.display).toBe('contents')
   expect(screen.queryByLabelText('Draft a')).not.toBeNull()
+})
+
+it('leaves a held transcript text selection alone when the pointer moves over a pane', () => {
+  render(
+    <>
+      <p data-testid="transcript">Read this line before moving the mouse</p>
+      <PaneGroupContext value="a">
+        <PaneVisibleContext value={true}>
+          <ComposerScopeProvider value={{ ...MAIN_COMPOSER_SCOPE, target: 'a' }}>
+            <ComposerSurfaceProvider value="a">
+              <div data-chat-surface="" data-composer-surface-id="a" data-testid="pane-a" data-tree-group="a">
+                <FloatingComposerSurface>
+                  <div contentEditable data-slot={RICH_INPUT_SLOT} data-testid="editor-a" />
+                </FloatingComposerSurface>
+              </div>
+            </ComposerSurfaceProvider>
+          </ComposerScopeProvider>
+        </PaneVisibleContext>
+      </PaneGroupContext>
+    </>
+  )
+
+  const transcriptText = screen.getByTestId('transcript').firstChild!
+  const selection = window.getSelection()!
+  const range = globalThis.document.createRange()
+  range.setStart(transcriptText, 0)
+  range.setEnd(transcriptText, 4)
+  selection.removeAllRanges()
+  selection.addRange(range)
+
+  fireEvent.pointerMove(screen.getByTestId('pane-a'), { clientX: 640, clientY: 360 })
+
+  expect(globalThis.document.activeElement).not.toBe(screen.getByTestId('editor-a'))
+  expect(selection.isCollapsed).toBe(false)
+  expect(selection.anchorNode).toBe(transcriptText)
 })
