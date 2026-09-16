@@ -30,12 +30,8 @@ def receipt_home(tmp_path, monkeypatch):
     )
     # ensure no receipt bleeds between tests
     ur._current = None
-    ur._began = False
-    ur._finalize_attempted = False
     yield home
     ur._current = None
-    ur._began = False
-    ur._finalize_attempted = False
 
 
 def _finalize(outcome="success", fleet=None):
@@ -163,20 +159,6 @@ class TestReceiptLifecycle:
     def test_read_latest_receipt_missing(self, receipt_home):
         assert ur.read_latest_receipt() is None
 
-    def test_lost_receipt_is_reported_on_finalize(self, receipt_home, capsys):
-        """#112465: if the singleton is gone by finalize time despite begin_update_receipt()
-        having run this session, that must be observable, not silently indistinguishable from
-        "no receipt was ever expected"."""
-        ur.begin_update_receipt()
-        ur.record_step("git_pull", True)
-        # Simulate the module-identity-loss failure mode: something (a stale-module purge that
-        # slipped past its protection, or any other path) wipes the singleton before finalize.
-        ur._current = None
-        assert ur.finalize_update_receipt("success") is None
-        out = capsys.readouterr().out
-        assert "lost" in out.lower()
-        assert ur.read_latest_receipt() is None
-
     def test_write_failure_is_printed_not_swallowed(self, receipt_home, monkeypatch, capsys):
         ur.begin_update_receipt()
         monkeypatch.setattr(
@@ -228,16 +210,6 @@ class TestCommandBoundaryFinalization:
     def test_noop_when_never_begun(self, receipt_home):
         assert ur.finalize_pending_update_receipt(2, "sys.exit(2)") is None
         assert ur.read_latest_receipt() is None
-
-    def test_lost_receipt_is_reported_at_command_boundary(self, receipt_home, capsys):
-        """The command-boundary safety net (main.py's ``_finalize_update_receipt``) is the other
-        place #112465's run saw silence: it short-circuits on ``_current is None`` before ever
-        calling ``finalize_update_receipt``, so it needs its own observability check."""
-        ur.begin_update_receipt()
-        ur._current = None
-        assert ur.finalize_pending_update_receipt(0, "boundary") is None
-        out = capsys.readouterr().out
-        assert "lost" in out.lower()
 
     def test_cmd_update_boundary_finalizes_on_early_exit(
         self, receipt_home, monkeypatch

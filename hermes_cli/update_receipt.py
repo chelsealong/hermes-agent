@@ -25,13 +25,6 @@ COMMAND_BOUNDARY_STOP_REASON = "completed at command boundary"
 # record steps from any depth without threading a handle through every helper.
 _current: Optional["UpdateReceipt"] = None
 
-# Set by begin_update_receipt(), cleared once a finalize call has actually run to completion
-# (success or write failure). Lets finalize_update_receipt()/finalize_pending_update_receipt()
-# tell "a receipt was begun but is gone by finalize time" (module-identity loss, #112465) apart
-# from the expected exactly-once no-op second call.
-_began = False
-_finalize_attempted = False
-
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -131,9 +124,7 @@ def _receipt_dir() -> Path:
 
 def begin_update_receipt() -> None:
     """Start recording a new update receipt. Never raises."""
-    global _current, _began, _finalize_attempted
-    _began = True
-    _finalize_attempted = False
+    global _current
     try:
         _current = UpdateReceipt()
     except Exception as exc:  # pragma: no cover - defensive
@@ -165,27 +156,16 @@ def record_gateway_restart(**kwargs: Any) -> None:
     _record("gateway_restart_result", "gateway restart result", **kwargs)
 
 
-def _report_lost_receipt(where: str) -> None:
-    """Make a silently-vanished receipt observable (#112465): begin_update_receipt() ran, but by
-    the time finalize was attempted the singleton was already gone — module identity loss, not the
-    ordinary exactly-once no-op. Printed (not logged) because the updater's own log level discards
-    ``logger.debug``, which is exactly why this class of failure was invisible before."""
-    print(f"⚠ Update receipt lost before it could be finalized ({where}): no receipt was open, "
-          "but one was begun this run.")
-
-
 def finalize_update_receipt(outcome: str, fleet: list | None = None, stop_reason: str = "") -> Optional[Path]:
     """Finalize + persist the receipt (``success``/``partial``/``failed``/``refused``); path or None.
 
     Exactly-once by construction: the module singleton is popped first, so a second call (e.g. the
     command-boundary safety net after an inner path already finalized) is a no-op returning None.
     """
-    global _current, _finalize_attempted
+    global _current
     receipt = _current
     _current = None
     if receipt is None:
-        if _began and not _finalize_attempted:
-            _report_lost_receipt("finalize_update_receipt")
         return None
     try:
         receipt.finalize(outcome)
@@ -206,8 +186,6 @@ def finalize_update_receipt(outcome: str, fleet: list | None = None, stop_reason
         print(f"⚠ Update receipt write failed: {exc}")
         logger.debug("Could not write update receipt: %s", exc)
         return None
-    finally:
-        _finalize_attempted = True
 
 
 def finalize_pending_update_receipt(exit_code: Optional[int] = None, stop_reason: str = "") -> Optional[Path]:
@@ -222,8 +200,6 @@ def finalize_pending_update_receipt(exit_code: Optional[int] = None, stop_reason
     singleton) or when recording was never started. See #91283.
     """
     if _current is None:
-        if _began and not _finalize_attempted:
-            _report_lost_receipt("finalize_pending_update_receipt")
         return None
     outcome = "success" if exit_code in (0, None) else "refused" if exit_code == 2 else "failed"
     if exit_code is not None:
