@@ -12,12 +12,25 @@ import importlib
 import json
 import pkgutil
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 MANIFEST = ROOT / "compat_manifest.json"
+
+# Stdlib modules that exist only on POSIX. A handful of manifest targets (the dashboard PTY
+# bridge) are POSIX-only by design and say so (``hermes_cli/pty_bridge.py``): they import
+# ``fcntl``/``termios`` at module scope, which don't exist on Windows. Failing to resolve one of
+# those on Windows isn't a broken pointer — it's just Windows not being POSIX — so it shouldn't
+# fail the identity check below alongside genuinely unresolvable pointers.
+_POSIX_ONLY_STDLIB = {"fcntl", "termios", "pwd", "grp", "resource", "crypt"}
+
+
+def _unresolvable_is_platform_gap(exc: BaseException) -> bool:
+    return sys.platform == "win32" and isinstance(exc, ModuleNotFoundError) and exc.name in _POSIX_ONLY_STDLIB
+
 
 # This file resolves every pointer on purpose; the once-per-name plugin warning is expected here.
 pytestmark = [
@@ -28,6 +41,16 @@ pytestmark = [
 
 def _entries():
     return [e for e in json.loads(MANIFEST.read_text())["entries"] if e["kind"] == "moved-lazy"]
+
+
+def test_platform_gap_forgives_only_posix_only_import_failures_on_windows(monkeypatch):
+    """The Windows PTY-bridge gap (#112576) must not widen into forgiving any broken pointer."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert _unresolvable_is_platform_gap(ModuleNotFoundError("No module named 'fcntl'", name="fcntl"))
+    assert not _unresolvable_is_platform_gap(ModuleNotFoundError("No module named 'nope'", name="nope"))
+    assert not _unresolvable_is_platform_gap(AttributeError("boom"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert not _unresolvable_is_platform_gap(ModuleNotFoundError("No module named 'fcntl'", name="fcntl"))
 
 
 def _sibling_modules(facade: str) -> list[str]:
@@ -58,6 +81,8 @@ def test_moved_lazy_pointers_resolve_to_the_split_off_siblings_object():
         try:
             got = getattr(importlib.import_module(facade), name)
         except Exception as exc:  # unresolvable pointer is its own failure
+            if _unresolvable_is_platform_gap(exc):
+                continue
             bad.append((facade, name, f"unresolvable: {exc!r}"))
             continue
         for s in sibs:

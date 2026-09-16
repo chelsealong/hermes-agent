@@ -7,7 +7,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import textwrap
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +42,20 @@ def test_scan_plugin_walks_dir_and_skips_tests(tmp_path):
     (tmp_path / "tests").mkdir(); (tmp_path / "tests" / "t.py").write_text("from tools.web_tools import prefers_gateway\n")
     hits = pc.scan_plugin(tmp_path, MANIFEST)
     assert sorted(h.file for h in hits) == ["__init__.py", "sub/m.py"]
+
+
+def test_scan_plugin_emits_posix_paths_on_backslash_hosts(tmp_path, monkeypatch):
+    """``hit.file`` is displayed in the compat table and shipped as JSON to Desktop/TUI; it must
+    read the same on every host. Native Windows isn't available here, so a real relative path is
+    reinterpreted through ``PureWindowsPath`` — separator-only, host-independent — to reproduce
+    the backslash rendering that a plain ``str(Path.relative_to(...))`` produces there (#112576).
+    """
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "m.py").write_text("from tools.web_tools import prefers_gateway\n")
+    real_relative_to = Path.relative_to
+    monkeypatch.setattr(Path, "relative_to", lambda self, *a, **k: PureWindowsPath(real_relative_to(self, *a, **k)))
+    hits = pc.scan_plugin(tmp_path, MANIFEST)
+    assert [h.file for h in hits] == ["sub/m.py"]
 
 
 def _manifest(name, path, source="user"):
