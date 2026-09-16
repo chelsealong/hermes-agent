@@ -17,6 +17,11 @@ _GGUF_MAGIC = b"GGUF"
 SPLIT_PART_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 _PART_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$")
 
+# Tensor names spill_overrides() offloads to host: expert FFN weights only (MoE), or every FFN
+# weight (hybrid recurrent). Must stay in sync with context_policy.spill_overrides.
+_FFN_EXPERT_WEIGHT_RE = re.compile(r"^blk\.\d+\.ffn_.*_exps\.weight$")
+_FFN_WEIGHT_RE = re.compile(r"^blk\.\d+\.ffn_.*\.weight$")
+
 
 def model_id_from_stem(stem: str) -> str:
     """Model id from a GGUF file stem (split-part suffix stripped)."""
@@ -57,6 +62,8 @@ class GGUFHeader:
     n_tensors: int = 0
     tensor_bytes: int = 0          # exact sum over the tensor table
     embd_table_bytes: int = 0      # token_embd.weight (duplicated host-side when fully offloaded)
+    ffn_weight_bytes: int = 0      # sum of blk.*.ffn_*.weight (hybrid spill offloads all of these)
+    ffn_expert_weight_bytes: int = 0  # sum of blk.*.ffn_*_exps.weight (MoE spill offloads only these)
 
     # ── typed accessors ──────────────────────────────────────
 
@@ -180,6 +187,8 @@ def read_gguf_header(path: str | Path) -> GGUFHeader:
 
         tensor_bytes = 0
         embd_bytes = 0
+        ffn_bytes = 0
+        ffn_expert_bytes = 0
         for _ in range(n_tensors):
             name = read_str(f)
             (n_dims,) = read(f, "<I")
@@ -197,7 +206,12 @@ def read_gguf_header(path: str | Path) -> GGUFHeader:
             tensor_bytes += nbytes
             if name == "token_embd.weight":
                 embd_bytes = nbytes
+            if _FFN_WEIGHT_RE.match(name):
+                ffn_bytes += nbytes
+            if _FFN_EXPERT_WEIGHT_RE.match(name):
+                ffn_expert_bytes += nbytes
 
     return GGUFHeader(path=str(path), version=version, metadata=metadata,
                       n_tensors=n_tensors, tensor_bytes=tensor_bytes,
-                      embd_table_bytes=embd_bytes)
+                      embd_table_bytes=embd_bytes, ffn_weight_bytes=ffn_bytes,
+                      ffn_expert_weight_bytes=ffn_expert_bytes)

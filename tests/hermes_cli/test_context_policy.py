@@ -30,7 +30,9 @@ from hermes_cli.local_runtime.estimator import (
     ctx_bytes,
     kv_dtype_factor,
     physics_check,
+    profile_from_gguf,
 )
+from hermes_cli.local_runtime.gguf import GGUFHeader
 
 GIB = 1 << 30
 KIB = 1024
@@ -175,6 +177,59 @@ def test_physics_check_prices_at_floor_not_native():
     the check prices the floor only."""
     p = hybrid(weights_gib=22)
     assert physics_check(p, card(24, ram_gib=8), FLOOR) is None
+
+
+def test_physics_check_refuses_when_pinned_weights_exceed_vram():
+    """spill_overrides() only ever offloads FFN/expert weights to host; the pinned remainder
+    (attention/embedding/KV-critical) can never move to RAM. A model whose non-spilled weights
+    alone already exceed VRAM must be refused even though weights+ctx fit comfortably in
+    VRAM+RAM — the combined check alone would silently admit it. Regression for #112787."""
+    from dataclasses import replace
+
+    p = replace(hybrid(weights_gib=10), pinned_weights_bytes=8 * GIB)
+    budget = card(6, ram_gib=64)
+
+    combined_needed = p.weights_bytes + ctx_bytes(p, FLOOR)
+    assert combined_needed <= budget.usable_vram_bytes + budget.ram_available_bytes
+
+    refusal = physics_check(p, budget, FLOOR)
+    assert isinstance(refusal, PhysicsRefusal)
+    assert "VRAM" in refusal.message
+
+
+def test_profile_from_gguf_pins_only_expert_ffn_for_moe():
+    header = GGUFHeader(
+        path="moe.gguf", version=3,
+        metadata={
+            "general.architecture": "testmoe", "testmoe.block_count": 2,
+            "testmoe.context_length": 4096, "testmoe.embedding_length": 64,
+            "testmoe.attention.head_count": 8, "testmoe.attention.head_count_kv": 8,
+            "testmoe.attention.key_length": 8, "testmoe.attention.value_length": 8,
+            "testmoe.expert_count": 4,
+        },
+        tensor_bytes=20 * GIB, ffn_weight_bytes=15 * GIB, ffn_expert_weight_bytes=15 * GIB)
+
+    profile = profile_from_gguf(header)
+    assert profile.moe is True
+    assert profile.pinned_weights_bytes == 5 * GIB
+
+
+def test_profile_from_gguf_pins_all_ffn_for_hybrid():
+    header = GGUFHeader(
+        path="hybrid.gguf", version=3,
+        metadata={
+            "general.architecture": "testhybrid", "testhybrid.block_count": 4,
+            "testhybrid.context_length": 4096, "testhybrid.embedding_length": 64,
+            "testhybrid.attention.head_count": 8,
+            "testhybrid.attention.head_count_kv": [8, 0, 8, 0],
+            "testhybrid.attention.key_length": 8, "testhybrid.attention.value_length": 8,
+        },
+        tensor_bytes=20 * GIB, ffn_weight_bytes=12 * GIB, ffn_expert_weight_bytes=0)
+
+    profile = profile_from_gguf(header)
+    assert profile.moe is False
+    assert profile.recurrent_layer_count == 2
+    assert profile.pinned_weights_bytes == 8 * GIB
 
 
 @pytest.mark.parametrize("uma", [False, True])

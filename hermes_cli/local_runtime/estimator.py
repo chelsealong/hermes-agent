@@ -45,6 +45,11 @@ class ModelProfile:
     moe: bool = False
     architecture: str = ""
     n_vocab: int = 0            # prices logits buffers (ubatch x vocab)
+    # Weights spill_overrides() can never move off the GPU (attention/embedding/KV-critical),
+    # i.e. weights_bytes minus whatever a MoE/hybrid spill offloads. 0 means "nothing pinned" —
+    # true for dense profiles (whole layers cut back-to-front, attention included) and the default
+    # for synthetic profiles built directly rather than through profile_from_gguf.
+    pinned_weights_bytes: int = 0
     # Context-cost multiplier. MTP spec decode keeps a small draft context beside the main one;
     # calibrated against four measured server-RSS points on Qwen3.8 Q4 (128K/221K/256K, both
     # postures): the draft adds ~17% to per-token KV; 1.2 rounds up so the error stays on the safe
@@ -94,10 +99,24 @@ def profile_from_gguf(header: GGUFHeader) -> ModelProfile:
         layers.append((kind, per_token))
         n_attn_seen += 1
 
+    moe = header.expert_count > 0
+    is_hybrid = any(kind == LayerKind.RECURRENT for kind, _ in layers)
+    # Mirrors spill_overrides(): MoE offloads only expert FFN weights, hybrid offloads every FFN
+    # weight, dense offloads none via -ot (its spill is llama.cpp's own back-to-front layer cut,
+    # which does move attention weights, so nothing is pinned).
+    if moe:
+        spillable = header.ffn_expert_weight_bytes
+    elif is_hybrid:
+        spillable = header.ffn_weight_bytes
+    else:
+        spillable = 0
+    pinned = max(0, header.tensor_bytes - spillable)
+
     return ModelProfile(
         name=header.path, weights_bytes=header.tensor_bytes, embd_table_bytes=header.embd_table_bytes,
         n_ctx_train=header.n_ctx_train, layers=layers, swa_window=header.sliding_window,
-        moe=header.expert_count > 0, architecture=header.architecture, n_vocab=header.n_vocab)
+        moe=moe, architecture=header.architecture, n_vocab=header.n_vocab,
+        pinned_weights_bytes=pinned)
 
 
 def kv_dtype_factor(flash_attention: bool) -> float:
@@ -123,8 +142,9 @@ def ctx_bytes(profile: ModelProfile, window: int, *, flash_attention: bool = Tru
 
 @dataclass
 class PhysicsRefusal:
-    """The only true refusal: weights + floor-KV + state exceed VRAM + RAM. The remedy is a
-    smaller quant, never a smaller window."""
+    """The only true refusal: either weights + floor-KV + state exceed VRAM + RAM, or (MoE/hybrid
+    only) the weights spill_overrides() can never offload plus floor-KV alone exceed VRAM. The
+    remedy is a smaller quant, never a smaller window."""
 
     needed_bytes: int
     available_bytes: int
@@ -141,14 +161,32 @@ def footprint_bytes(profile: ModelProfile, window: int, *, flash_attention: bool
 def physics_check(profile: ModelProfile, budget: HardwareBudget,
                   floor: int, *, flash_attention: bool = True,
                   overhead_bytes: int = 0) -> PhysicsRefusal | None:
-    needed = footprint_bytes(profile, min(floor, profile.n_ctx_train or floor),
-                             flash_attention=flash_attention, overhead_bytes=overhead_bytes)
-    available = budget.usable_vram_bytes + budget.ram_available_bytes
-    if needed <= available:
-        return None
+    window = min(floor, profile.n_ctx_train or floor)
+    ctx = ctx_bytes(profile, window, flash_attention=flash_attention)
+    overhead = max(0, overhead_bytes)
     gib = 1 << 30
-    return PhysicsRefusal(
-        needed_bytes=needed, available_bytes=available,
-        message=(f"{profile.name}: needs ~{needed / gib:.1f} GiB at the "
-                 f"{floor // 1024}K floor but only ~{available / gib:.1f} GiB "
-                 "of VRAM+RAM are available — try a smaller model or a supported smaller quant"))
+
+    needed = profile.weights_bytes + ctx + overhead
+    available = budget.usable_vram_bytes + budget.ram_available_bytes
+    if needed > available:
+        return PhysicsRefusal(
+            needed_bytes=needed, available_bytes=available,
+            message=(f"{profile.name}: needs ~{needed / gib:.1f} GiB at the "
+                     f"{floor // 1024}K floor but only ~{available / gib:.1f} GiB "
+                     "of VRAM+RAM are available — try a smaller model or a supported smaller quant"))
+
+    # weights+ctx fitting VRAM+RAM is not enough for MoE/hybrid profiles: spill_overrides() only
+    # ever offloads FFN/expert weights to host, so pinned_weights_bytes (attention/embedding/
+    # KV-critical) plus ctx must fit in VRAM alone — no window or amount of RAM helps otherwise.
+    # Dense profiles (pinned_weights_bytes == 0) have no such reserved subset — llama.cpp's own
+    # back-to-front layer cut can move attention layers to host too — so they skip this check.
+    if profile.pinned_weights_bytes <= 0:
+        return None
+    pinned_needed = profile.pinned_weights_bytes + ctx + overhead
+    if pinned_needed > budget.usable_vram_bytes:
+        return PhysicsRefusal(
+            needed_bytes=pinned_needed, available_bytes=budget.usable_vram_bytes,
+            message=(f"{profile.name}: needs ~{pinned_needed / gib:.1f} GiB at the "
+                     f"{floor // 1024}K floor but only ~{budget.usable_vram_bytes / gib:.1f} GiB "
+                     "of VRAM are available — try a smaller model or a supported smaller quant"))
+    return None
