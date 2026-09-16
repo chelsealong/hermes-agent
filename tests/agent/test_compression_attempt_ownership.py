@@ -24,10 +24,13 @@ no timing, no threads.
 from types import SimpleNamespace
 
 from agent.conversation_compression import (
+    _active_attempt_superseded,
+    _candidate_rejected,
     _claim_compressor_attempt,
     _clear_compression_cancelled_check_if_owner,
     _compressor_attempt_is_current,
     _install_compression_cancelled_check,
+    _mark_active_compression_attempt,
     _restore_compressor_attempt_state,
     _snapshot_compressor_attempt_state,
 )
@@ -210,6 +213,81 @@ class TestSummaryRoutePinSingleUse:
         from agent.context_compressor import take_pinned_summary_route
 
         assert take_pinned_summary_route() is None
+
+
+class TestNoOpEntriesCannotSupersede:
+    """#112482: no-op entry claims (lock contention, breaker gate) must not
+    make a completed, still-in-flight candidate look superseded."""
+
+    def test_noop_claims_do_not_supersede_the_active_attempt(self):
+        compressor = _compressor()
+
+        # The real attempt claims a generation and marks itself active — it
+        # actually reaches the summary call.
+        real_gen = _claim_compressor_attempt(compressor)
+        _mark_active_compression_attempt(compressor, real_gen)
+
+        # While the real attempt's multi-minute summary is in flight, several
+        # unrelated entrypoints (turn preflight, pre-API, hygiene) each open
+        # compress_context(), claim a generation, then discover lock
+        # contention and sit out WITHOUT ever marking themselves active.
+        for _ in range(5):
+            _claim_compressor_attempt(compressor)
+
+        # The real attempt's candidate is not superseded merely because the
+        # raw claim counter moved on underneath it.
+        assert _active_attempt_superseded(compressor, real_gen) is False
+
+    def test_candidate_rejected_accepts_completed_summary_despite_noop_churn(self):
+        """Reproduces the reported livelock: a completed summary must commit
+        even though generation advanced past it via no-op sit-outs alone."""
+        compressor = _compressor()
+        real_gen = _claim_compressor_attempt(compressor)
+        _mark_active_compression_attempt(compressor, real_gen)
+
+        for _ in range(15):  # dozens of lock-contended sit-outs in the report
+            _claim_compressor_attempt(compressor)
+
+        agent = SimpleNamespace(
+            context_compressor=compressor, session_id="s", _last_compaction_in_place=True,
+            _emit_warning=lambda m: None,
+        )
+        messages_before_compression = [{"role": "user", "content": "hi"}]
+        compressed = [{"role": "assistant", "content": "…summary…"}]
+        messages = list(messages_before_compression)
+
+        rejected = _candidate_rejected(
+            agent, compressed, messages, messages_before_compression,
+            attempt_generation=real_gen, attempt_started_at=0.0,
+        )
+
+        assert rejected is False
+
+    def test_genuinely_newer_active_attempt_still_supersedes(self):
+        """A REAL fallback attempt (one that reached the summary call) must
+        still correctly discard a late-unwinding primary's candidate."""
+        compressor = _compressor()
+        primary_gen = _claim_compressor_attempt(compressor)
+        _mark_active_compression_attempt(compressor, primary_gen)
+
+        fallback_gen = _claim_compressor_attempt(compressor)
+        _mark_active_compression_attempt(compressor, fallback_gen)
+
+        agent = SimpleNamespace(
+            context_compressor=compressor, session_id="s", _last_compaction_in_place=True,
+            _emit_warning=lambda m: None,
+        )
+        messages_before_compression = [{"role": "user", "content": "hi"}]
+        compressed = [{"role": "assistant", "content": "late primary summary"}]
+        messages = list(messages_before_compression)
+
+        rejected = _candidate_rejected(
+            agent, compressed, messages, messages_before_compression,
+            attempt_generation=primary_gen, attempt_started_at=0.0,
+        )
+
+        assert rejected is True
+        assert messages == messages_before_compression
 
 
 class TestMidRestoreClaimRace:

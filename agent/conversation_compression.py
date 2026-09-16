@@ -234,6 +234,27 @@ def _compressor_attempt_is_current(compressor: Any, generation: int) -> bool:
         return int(getattr(compressor, "_compression_attempt_generation", 0) or 0) == generation
 
 
+def _mark_active_compression_attempt(compressor: Any, generation: int) -> None:
+    """Record that *generation* has begun real summary work (streamed the summary call).
+    A no-op entry (lock contention, breaker gate) claims a generation via
+    :func:`_claim_compressor_attempt` but never calls this, so it can never supersede a
+    still-in-flight candidate below — only a genuinely competing worker can (#112482)."""
+    with _COMPRESSOR_ATTEMPT_LOCK:
+        with contextlib.suppress(Exception):
+            compressor._active_compression_attempt_generation = generation
+
+
+def _active_attempt_superseded(compressor: Any, generation: Any) -> bool:
+    """True when a DIFFERENT attempt has started real work since *generation* began.
+    Unlike :func:`_compressor_attempt_is_current`, this ignores no-op entry claims that never
+    reached :func:`_mark_active_compression_attempt` — those never competed for the compressor."""
+    if not generation:
+        return False
+    with _COMPRESSOR_ATTEMPT_LOCK:
+        active = getattr(compressor, "_active_compression_attempt_generation", None)
+    return active is not None and active != generation
+
+
 def _install_compression_cancelled_check(compressor: Any, check: Any, generation: int) -> None:
     """Install the F4 cancellation consult, stamped with its owner attempt."""
     with _COMPRESSOR_ATTEMPT_LOCK:
@@ -2706,6 +2727,9 @@ def _run_summary_dispatch(
             )
             compressed = messages
         else:
+            # Only an attempt that actually reaches the summary call can supersede a
+            # still-in-flight candidate; see _active_attempt_superseded (#112482).
+            _mark_active_compression_attempt(agent.context_compressor, attempt_generation)
             with (
                 aux_progress_hook(_progress_hook), aux_stream_deadline(_host_stream_deadline),
                 aux_interrupt_protection(cancel_check=_compression_cancel_requested),
@@ -3213,13 +3237,15 @@ def _candidate_rejected(
             )
         return True
 
-    # A newer attempt claiming this compressor supersedes us; discard the late
-    # candidate. Fence poison alone misses a successor that minted its own fence.
-    if not _compressor_attempt_is_current(agent.context_compressor, attempt_generation):
+    # A newer attempt that actually started summary work supersedes us; discard the
+    # late candidate. Fence poison alone misses a successor that minted its own fence.
+    # Entries that merely claimed a generation and no-oped (lock contention, breaker
+    # gate) never mark themselves active and so cannot supersede a real candidate (#112482).
+    if _active_attempt_superseded(agent.context_compressor, attempt_generation):
         logger.warning(
             "Discarding late compression candidate: attempt generation "
             "%s was superseded by a newer attempt (current: %s) (session=%s).", attempt_generation,
-            getattr(agent.context_compressor, "_compression_attempt_generation", None),
+            getattr(agent.context_compressor, "_active_compression_attempt_generation", None),
             agent.session_id or "none",
         )
         _restore_messages_snapshot(messages, messages_before_compression)
