@@ -269,6 +269,13 @@ async def _resolve_gateway_status(profile_dir: Optional[Path], health_url) -> Di
         gateway_state = runtime.get("gateway_state")
         if not gateway_running:
             gateway_state = gateway_state if gateway_state in {"stopped", "startup_failed"} else "stopped"
+            if gateway_state == "startup_failed" and runtime.get("desired_state") == "stopped":
+                # Operator intentionally stopped this profile (`gateway stop` persists
+                # desired_state="stopped"): the retained startup_failed/exit_reason is
+                # history, not a live condition — report "stopped" so the overview
+                # doesn't raise an unqualified current alert for a dead process. The
+                # historical exit_reason is still returned below for callers that want it.
+                gateway_state = "stopped"
         elif remote_health_body is not None and gateway_state in {None, "stopped"}:
             # The health probe confirmed the gateway is alive, but the local runtime status
             # file may be stale (cross-container): override so the badge is correct.
