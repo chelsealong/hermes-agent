@@ -364,6 +364,48 @@ class TestActiveTurnRedirectCheckpoint:
             "[This response was interrupted by a user correction.]"
         )
 
+    def test_repetition_dominated_partial_is_not_replayed_verbatim(self):
+        """#112764: a token-repetition-loop partial embedded verbatim into the
+        next prompt's api_content re-seeds the loop (the model re-latches onto
+        its own degenerate text). The existing guard already used on the
+        truncated-continuation path must also gate this interrupt checkpoint."""
+        from agent.conversation_loop import _apply_active_turn_redirect
+
+        agent = _bare_agent()
+        degenerate = "I. " * 1941  # matches the reported incident shape (#112764)
+        agent._current_streamed_assistant_text = degenerate
+        messages = [{"role": "user", "content": "start"}]
+
+        _apply_active_turn_redirect(agent, messages, "New direction.")
+
+        placeholder = messages[-2]
+        correction = messages[-1]
+        blob = (
+            str(placeholder.get("content") or "")
+            + str(placeholder.get("api_content") or "")
+            + str(correction.get("content") or "")
+            + str(correction.get("api_content") or "")
+        )
+        assert degenerate not in blob
+        assert "I. I. I." not in blob
+        # The model still learns it was interrupted, just not with the bytes that caused it.
+        assert "repetition loop" in correction["api_content"]
+
+    def test_ordinary_long_partial_still_replayed(self):
+        """The repetition guard is deliberately conservative — a long partial with no
+        dominant repeated fragment must still reach the model unchanged."""
+        from agent.conversation_loop import _apply_active_turn_redirect
+
+        agent = _bare_agent()
+        varied = " ".join(f"paragraph {i} covers a distinct point." for i in range(60))
+        agent._current_streamed_assistant_text = varied
+        messages = [{"role": "user", "content": "start"}]
+
+        _apply_active_turn_redirect(agent, messages, "New direction.")
+
+        correction = messages[-1]
+        assert varied in correction["api_content"]
+
 
 class TestEmptyHiddenAssistantRehealRegression:
     """#88955: a no-visible-text redirect persisted an empty

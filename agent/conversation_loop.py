@@ -28,6 +28,7 @@ from agent.prompt_caching import (
     strip_anthropic_cache_control,
     strip_anthropic_tool_cache_control,
 )
+from agent.repetition_guard import is_repetition_dominated
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.surface_switch import (
     identity_line_value, note_inert_pinned_tools, split_runtime_boundary, stage_surface_switch_note,
@@ -66,6 +67,10 @@ _STALE_MARKER_RE = re.compile(r"^\[[A-Za-z_][A-Za-z0-9_.-]*\]$")
 
 # Shared by _apply_active_turn_redirect and the api_messages ghost-row filter so both sites cannot drift.
 _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correction.]"
+
+# Stand-in for a repetition-dominated partial in the interrupt checkpoint (#112764): replaying the
+# degenerate bytes re-seeds the loop, so the model gets told what happened instead of the bytes.
+_REPETITION_LOOP_NOTICE = "[the reply degenerated into a repetition loop and was interrupted]"
 
 
 # One-time wrap-up notice appended when a wall-clock run budget (--run-budget) crosses 80%.
@@ -286,6 +291,10 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     empty-response storms); the interruption scaffold is replay text carried only in the user
     correction's ``api_content``; an on-screen-empty placeholder is ``display_kind=hidden``."""
     visible = agent._strip_think_blocks(getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
+    if visible and is_repetition_dominated(visible):
+        # A repetition-loop partial replayed verbatim re-seeds the loop on the next call (#112764);
+        # the model needs to know it was interrupted, not the corrupted bytes.
+        visible = _REPETITION_LOOP_NOTICE
 
     checkpoint_parts = [_INTERRUPT_SCAFFOLD_MARKER]
     if visible:
