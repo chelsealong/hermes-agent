@@ -107,6 +107,51 @@ def test_default_model_only_declaration_routes():
 
 
 
+def test_custom_compat_mirror_of_configured_provider_is_not_ambiguous():
+    """#112788: get_compatible_custom_providers() mirrors every providers.<slug> entry as a
+    legacy custom:<name> view (provider_key set to the originating slug) so old readers keep
+    working. That mirror must not be treated as a second, distinct provider declaring the same
+    model — only a genuinely different provider should trigger the ambiguity error."""
+    user_providers = {
+        "relay": {"name": "relay", "base_url": "http://relay/v1", "default_model": "claude-opus-4-7"},
+    }
+    custom_providers = [
+        # Mirrors providers_dict_to_custom_providers()'s output for the "relay" entry above.
+        {"name": "relay", "provider_key": "relay", "base_url": "http://relay/v1",
+         "models": {"claude-opus-4-7": {}}},
+    ]
+    result = _run_switch(
+        raw_input="claude-opus-4-7",
+        current_provider="openai-codex",
+        current_model="gpt-5.4",
+        user_providers=user_providers,
+        custom_providers=custom_providers,
+    )
+    assert result.success is True, result.error_message
+    assert result.target_provider == "relay"
+    assert result.new_model == "claude-opus-4-7"
+
+
+def test_two_distinct_providers_declaring_same_model_still_ambiguous():
+    """A genuine second provider (no provider_key mirroring an existing providers.<slug>) that
+    declares the same model must still be flagged as ambiguous."""
+    user_providers = {
+        "relay": {"name": "relay", "base_url": "http://relay/v1", "default_model": "claude-opus-4-7"},
+    }
+    custom_providers = [
+        {"name": "other-relay", "base_url": "http://other/v1", "models": {"claude-opus-4-7": {}}},
+    ]
+    result = _run_switch(
+        raw_input="claude-opus-4-7",
+        current_provider="openai-codex",
+        current_model="gpt-5.4",
+        user_providers=user_providers,
+        custom_providers=custom_providers,
+    )
+    assert result.success is False
+    assert "declared by multiple configured providers" in result.error_message
+
+
 def test_xai_oauth_soft_accept_preserved_when_no_match():
     """The xai-oauth hidden-model soft-accept (sibling of openai-codex) is also
     a no-op when config declares no matching model."""

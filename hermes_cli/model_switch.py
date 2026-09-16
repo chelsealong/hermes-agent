@@ -857,8 +857,14 @@ def _configured_provider_matches(
     if isinstance(user_providers, dict):
         candidates += [(slug, cfg) for slug, cfg in user_providers.items()
                        if isinstance(slug, str) and isinstance(cfg, dict)]
+    # get_compatible_custom_providers() mirrors every providers.<slug> entry as a legacy
+    # custom:<name> view for backward-compat readers; provider_key on that mirror names the
+    # providers.<slug> it came from. Skip those here so the same configured endpoint isn't
+    # counted twice (once under its real slug, once under its custom: compat alias) — see #112788.
+    known_provider_keys = {slug.strip().lower() for slug, _ in candidates}
     candidates += [(f"custom:{e['name']}", e) for e in _custom_entries(custom_providers)
-                   if isinstance(e.get("name"), str) and e["name"].strip()]
+                   if isinstance(e.get("name"), str) and e["name"].strip()
+                   and str(e.get("provider_key", "")).strip().lower() not in known_provider_keys]
 
     matches: dict[str, str] = {}
     for slug, cfg in candidates:
