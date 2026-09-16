@@ -32,6 +32,7 @@ from agent.auxiliary_client import AuxiliaryExplicitCancellation
 from agent.conversation_compression import (
     CompressionCommitFence,
     _claim_compressor_attempt,
+    _mark_active_compression_attempt,
     compress_context,
     compression_blocked_transiently,
     run_compress_context_with_progress_timeout,
@@ -236,8 +237,11 @@ class TestSupersessionDiscardsLateResults:
 
         def compress_and_get_superseded(messages, **_kwargs):
             # While this attempt's summary was in flight, a NEWER attempt
-            # claimed the compressor (what a retry/fallback does).
-            _claim_compressor_attempt(agent.context_compressor)
+            # claimed the compressor AND reached its own summary call (what a
+            # real retry/fallback does — #112482 distinguishes this from a
+            # no-op sit-out, which claims but never marks itself active).
+            newer_generation = _claim_compressor_attempt(agent.context_compressor)
+            _mark_active_compression_attempt(agent.context_compressor, newer_generation)
             return [{"role": "assistant", "content": "stale summary"}]
 
         agent.context_compressor.compress = compress_and_get_superseded
