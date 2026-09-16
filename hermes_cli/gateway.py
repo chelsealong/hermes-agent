@@ -563,6 +563,36 @@ def _iter_proc_cmdlines(exclude_pids: set[int]):
         yield pid, cmdline.replace("\x00", " ")
 
 
+def _is_foreign_user_process(pid: int) -> bool:
+    """True when ``pid`` belongs to a different OS user than us (shared-machine guard).
+
+    Fails open (not foreign) whenever ownership can't be determined — permission error,
+    unsupported platform, missing psutil — so this never hides a real gateway; it only
+    ever narrows the process-table scan. Set ``HERMES_FLEET_SCAN_ALL_USERS=1`` to keep
+    managing other users' gateways intentionally (e.g. ``hermes update`` under sudo).
+    """
+    if os.environ.get("HERMES_FLEET_SCAN_ALL_USERS") == "1":
+        return False
+    if not hasattr(os, "getuid"):
+        return False
+    try:
+        me = os.getuid()
+    except OSError:
+        return False
+    try:
+        return os.stat(f"/proc/{pid}").st_uid != me
+    except OSError:
+        pass
+    try:
+        import psutil  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return psutil.Process(pid).uids().real != me
+    except Exception:
+        return False
+
+
 def _scan_gateway_pids(
     exclude_pids: set[int], all_profiles: bool = False, include_restart_managers: bool = False
 ) -> list[int]:
@@ -604,7 +634,11 @@ def _scan_gateway_pids(
         matches_runtime = looks_like_gateway_command_line(command) or (
             include_restart_managers and looks_like_gateway_runtime_command_line(command)
         )
-        if matches_runtime and (all_profiles or _matches_current_profile(command)):
+        if (
+            matches_runtime
+            and (all_profiles or _matches_current_profile(command))
+            and not _is_foreign_user_process(pid)
+        ):
             _append_unique_pid(pids, pid, exclude_pids)
 
     try:
