@@ -1401,17 +1401,26 @@ def _collect_fleet_snapshot(restart, rows_expected: bool) -> list:
 def _restarted_units_gone(scoped_units) -> bool:
     """True when every restarted systemd unit is neither active nor activating: the successor died,
     nothing will publish a state stamp, so the settle poll should fail closed now instead of at the
-    deadline. Unknown (no units, systemctl missing/slow) keeps waiting."""
+    deadline. Unknown (no units, systemctl missing/slow, or a scope that doesn't own the unit) keeps
+    waiting: a scope-mismatched entry (a user unit queried in the system scope, or vice versa) answers
+    LoadState=not-found, which means "wrong scope", not "successor died". See #112466."""
     if not scoped_units:
         return False
     scope_cmds = dict(_SYSTEMD_SCOPES)
     for scoped in scoped_units:
         scope, _, name = scoped.partition("/")
         try:
-            state = _systemctl(scope_cmds[scope] + ["is-active", name], timeout=5).stdout.strip()
+            show = _systemctl(
+                scope_cmds[scope] + ["show", name, "--property=LoadState,ActiveState"], timeout=5)
         except (KeyError, FileNotFoundError, subprocess.TimeoutExpired):
             return False
-        if state in ("active", "activating", "reloading"):
+        props = {}
+        for line in (show.stdout or "").splitlines():
+            key, _, value = line.partition("=")
+            props[key] = value
+        if props.get("LoadState") == "not-found":
+            return False
+        if props.get("ActiveState") in ("active", "activating", "reloading"):
             return False
     return True
 

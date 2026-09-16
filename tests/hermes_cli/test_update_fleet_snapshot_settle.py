@@ -60,11 +60,29 @@ def test_snapshot_stops_waiting_once_the_restarted_unit_is_dead(monkeypatch) -> 
     monkeypatch.setattr("hermes_cli.update_receipt.collect_fleet_versions", lambda **_kwargs: [])
     monkeypatch.setattr(
         update_cmd_fleet, "_systemctl",
-        lambda cmd, *, timeout: SimpleNamespace(stdout="failed\n", stderr="", returncode=3))
+        lambda cmd, *, timeout: SimpleNamespace(
+            stdout="LoadState=loaded\nActiveState=failed\n", stderr="", returncode=0))
 
     restart = SimpleNamespace(pre_restart_gateway_pids=[101], restarted_scoped_units={"user/hermes-gateway.service"})
     assert update_cmd_fleet._collect_fleet_snapshot(restart, rows_expected=True) == []
     assert clock.now < 30.0
+
+
+def test_snapshot_keeps_waiting_on_scope_mismatched_unit(monkeypatch) -> None:
+    """A unit recorded under the wrong scope answers LoadState=not-found there, which must not be
+    read as "the successor died" (#112466): the settle poll should keep going to the deadline."""
+    clock = _FakeClock()
+    monkeypatch.setattr(update_cmd_fleet._time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(update_cmd_fleet._time, "sleep", clock.sleep)
+    monkeypatch.setattr("hermes_cli.update_receipt.collect_fleet_versions", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        update_cmd_fleet, "_systemctl",
+        lambda cmd, *, timeout: SimpleNamespace(
+            stdout="LoadState=not-found\nActiveState=inactive\n", stderr="", returncode=0))
+
+    restart = SimpleNamespace(pre_restart_gateway_pids=[101], restarted_scoped_units={"system/hermes-gateway.service"})
+    assert update_cmd_fleet._collect_fleet_snapshot(restart, rows_expected=True) == []
+    assert clock.now >= update_cmd_fleet._FLEET_PROBE_SETTLE_TIMEOUT_SECONDS
 
 
 def test_verifier_clears_marker_after_late_current_gateway_state(monkeypatch) -> None:
