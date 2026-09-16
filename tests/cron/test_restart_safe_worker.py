@@ -506,6 +506,31 @@ def test_launch_external_worker_degrades_by_default_with_real_helper(
     assert not (tmp_path / "cron/external-workers/exec-1.json").exists()
 
 
+def test_launch_external_worker_uses_venv_python_not_bare_sys_executable(
+    tmp_path, monkeypatch
+):
+    """#112729: a symlinked runtime interpreter loses the active venv's
+    site-packages, so the worker must launch with the venv-aware python
+    (``hermes_cli.gateway.get_python_path()``), not a bare ``sys.executable``."""
+    import cron.scheduler as scheduler
+    import hermes_cli.gateway as gateway
+    import tools.process_registry as process_registry
+
+    job = {"id": "job-1", "execution_id": "exec-1", "prompt": "work"}
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(scheduler, "load_config_readonly", lambda: {})
+    monkeypatch.setattr(process_registry, "_is_supervised_gateway_process", lambda: True)
+    monkeypatch.setenv("INVOCATION_ID", "managed-service")
+    monkeypatch.setattr(process_registry, "_systemd_run_user_scope_available", lambda: False)
+    fake_venv_python = "/opt/venvs/hermes/bin/python3"
+    monkeypatch.setattr(gateway, "get_python_path", lambda: fake_venv_python)
+    spawned, _payloads, _handoff, _get = _stub_external_worker_launch(scheduler, monkeypatch)
+
+    assert scheduler._launch_external_cron_worker(job) is True
+    assert spawned[0][0][0] == fake_venv_python
+    assert spawned[0][0][0] != sys.executable
+
+
 def test_shared_run_path_hands_gateway_fire_to_external_worker(monkeypatch):
     import cron.scheduler as scheduler
 

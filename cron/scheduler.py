@@ -3101,8 +3101,15 @@ def _launch_external_cron_worker(job: dict) -> bool:
     handoff_dir = _get_hermes_home() / "cron" / "external-workers"
     payload_path = handoff_dir / f"{execution_id}.json"
     ack_path = handoff_dir / f"{execution_id}.ready"
+
+    # sys.executable can resolve through a symlinked interpreter to a bundled
+    # runtime python that lacks the active venv's site-packages (#112729).
+    # get_python_path() is the same venv-aware lookup the gateway respawn
+    # path uses to avoid that.
+    from hermes_cli.gateway import get_python_path
+
     command = [
-        sys.executable,
+        get_python_path(),
         "-m",
         "cron.scheduler",
         "--external-worker-file",
