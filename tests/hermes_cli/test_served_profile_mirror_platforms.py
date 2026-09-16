@@ -64,3 +64,21 @@ def test_messaging_card_for_a_served_profile_reads_connected_not_restart_needed(
     assert payload["gateway_running"] is True
     assert payload["state"] == "connected", payload
     assert payload["ingress_url"] == "http://127.0.0.1:45719/p/alpha/v1"
+
+
+def test_messaging_card_ignores_a_stale_own_gateway_state_for_a_served_profile(served_root, monkeypatch):
+    """A profile that ran standalone before multiplexing took over (or was multiplexed
+    before, then stopped) keeps its own gateway_state.json on disk — non-None, so the
+    old ``runtime is None`` fallback check never fired, and this stale file (still
+    "stopped"/empty platforms) shadowed the multiplexer's live, namespaced state
+    forever: "Restart needed" for a platform that was actually connected (#112765).
+    """
+    from hermes_cli.web_routers import messaging
+    alpha = served_root / "profiles" / "alpha"
+    (alpha / "gateway_state.json").write_text(json.dumps({"gateway_state": "stopped", "platforms": {}}))
+    monkeypatch.setattr(messaging, "_platform_enablement", lambda *a, **k: (True, True, None))
+    entry = {"id": "telegram", "name": "Telegram", "description": "", "docs_url": "", "env_vars": [],
+             "required_env": []}
+    [payload] = messaging._platform_payloads(alpha, [entry])
+    assert payload["gateway_running"] is True
+    assert payload["state"] == "connected", payload

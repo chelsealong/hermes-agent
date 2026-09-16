@@ -277,15 +277,19 @@ def _platform_payloads(scoped_dir: Optional[Path], entries) -> list[dict[str, An
     """Payloads for ``entries``; call inside ``_profile_scope`` (load_env honors the
     HERMES_HOME contextvar; the gateway status readers do not, hence the explicit path)."""
     env_on_disk = load_env()
-    runtime = read_runtime_status(path=scoped_dir / "gateway_state.json") if scoped_dir is not None else read_runtime_status()
-    if runtime is None:
-        # A profile served by the multiplexer writes no record of its own; its adapters live in the
-        # multiplexer's record under ``<profile>:<platform>``. Unscoped, the profile is the process's
-        # own home (a pooled ``hermes --profile X serve``); the default home resolves to None here.
-        own_home = scoped_dir if scoped_dir is not None else get_process_hermes_home()
-        served = multiplexer_liveness_for_profile(own_home)
-        if served is not None:
-            runtime = {**served[1], "platforms": profile_platforms_from_multiplexer(served[1], own_home.name)}
+    # A profile served by the multiplexer writes no record of its own; its adapters live in the
+    # multiplexer's record under ``<profile>:<platform>``. Unscoped, the profile is the process's
+    # own home (a pooled ``hermes --profile X serve``); the default home resolves to None here.
+    # Checked BEFORE falling back to the profile's own file (not just when that file is missing):
+    # a profile that ran standalone before multiplexing took over, or that multiplexing has since
+    # stopped serving, keeps a stale gateway_state.json of its own — non-None but never updated —
+    # which must not shadow the multiplexer's live, namespaced state (#112765).
+    own_home = scoped_dir if scoped_dir is not None else get_process_hermes_home()
+    served = multiplexer_liveness_for_profile(own_home)
+    if served is not None:
+        runtime = {**served[1], "platforms": profile_platforms_from_multiplexer(served[1], own_home.name)}
+    else:
+        runtime = read_runtime_status(path=scoped_dir / "gateway_state.json") if scoped_dir is not None else read_runtime_status()
     return [_messaging_platform_payload(entry, env_on_disk, runtime, scoped=scoped_dir is not None, profile_home=scoped_dir)
             for entry in entries]
 
