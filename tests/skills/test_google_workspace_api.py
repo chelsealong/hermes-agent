@@ -269,3 +269,122 @@ def test_docs_append_carries_tab_id_and_refuses_ambiguous_writes(api_module, mon
         api_module.docs_append(types.SimpleNamespace(doc_id="doc1", text="more", tab=None))
     err = json.loads(capsys.readouterr().err)
     assert "tabs" in err and len(err["tabs"]) == 3
+
+
+def test_next_birthday_occurrence_later_this_year(api_module):
+    from datetime import date
+
+    today = date(2026, 1, 1)
+    assert api_module._next_birthday_occurrence(6, 15, today) == date(2026, 6, 15)
+
+
+def test_next_birthday_occurrence_already_passed_wraps_to_next_year(api_module):
+    from datetime import date
+
+    today = date(2026, 9, 17)
+    assert api_module._next_birthday_occurrence(1, 1, today) == date(2027, 1, 1)
+
+
+def test_next_birthday_occurrence_today_is_zero_days_out(api_module):
+    from datetime import date
+
+    today = date(2026, 9, 17)
+    assert api_module._next_birthday_occurrence(9, 17, today) == today
+
+
+def test_next_birthday_occurrence_leap_day_falls_back_in_non_leap_year(api_module):
+    """Feb 29 has no exact anniversary in a non-leap year; land on Feb 28."""
+    from datetime import date
+
+    today = date(2027, 1, 1)  # 2027 is not a leap year
+    assert api_module._next_birthday_occurrence(2, 29, today) == date(2027, 2, 28)
+
+
+def test_next_birthday_occurrence_leap_day_lands_exactly_in_leap_year(api_module):
+    from datetime import date
+
+    today = date(2028, 1, 1)  # 2028 is a leap year
+    assert api_module._next_birthday_occurrence(2, 29, today) == date(2028, 2, 29)
+
+
+def test_select_birthday_date_skips_entries_without_month_or_day(api_module):
+    person = {"birthdays": [{"date": {"year": 1990}}, {"date": {"month": 5, "day": 4}}]}
+    assert api_module._select_birthday_date(person) == {"month": 5, "day": 4}
+    assert api_module._select_birthday_date({"birthdays": [{"date": {"year": 1990}}]}) is None
+    assert api_module._select_birthday_date({}) is None
+
+
+def test_format_birthday_display_with_and_without_year(api_module):
+    assert api_module._format_birthday_display(1985, 9, 21) == "21.09.1985"
+    assert api_module._format_birthday_display(None, 10, 4) == "04.10."
+
+
+def test_contacts_birthdays_paginates_filters_sorts_and_limits(api_module, monkeypatch, capsys):
+    """Wires pagination, ignores unusable entries, and sorts by daysUntil."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    near = today + timedelta(days=5)
+    far = today + timedelta(days=200)
+
+    page1 = {
+        "connections": [
+            {"names": [{"displayName": "No Birthday"}]},
+            {
+                "names": [{"displayName": "Year Only"}],
+                "birthdays": [{"date": {"year": 1990}}],
+            },
+            {
+                "names": [{"displayName": "Far Person"}],
+                "birthdays": [{"date": {"month": far.month, "day": far.day}}],
+            },
+        ],
+        "nextPageToken": "page2-token",
+    }
+    page2 = {
+        "connections": [
+            {
+                "names": [{"displayName": "Near Person"}],
+                "birthdays": [{"date": {"year": 1985, "month": near.month, "day": near.day}}],
+            },
+        ],
+    }
+
+    calls = []
+
+    def fake_run_gws(parts, params=None, body=None):
+        calls.append(params)
+        return page2 if params.get("pageToken") else page1
+
+    monkeypatch.setattr(api_module, "_run_gws", fake_run_gws)
+
+    api_module.contacts_birthdays(types.SimpleNamespace(days=None, max=100))
+    result = json.loads(capsys.readouterr().out)
+
+    # Both pages were fetched.
+    assert len(calls) == 2
+    assert calls[1]["pageToken"] == "page2-token"
+
+    # "No Birthday" and "Year Only" are excluded; the rest are sorted soonest-first.
+    assert [r["name"] for r in result] == ["Near Person", "Far Person"]
+
+    expected_near_next = api_module._next_birthday_occurrence(near.month, near.day, today)
+    near_record = result[0]
+    assert near_record["nextDate"] == expected_near_next.isoformat()
+    assert near_record["daysUntil"] == (expected_near_next - today).days
+    assert near_record["turningAge"] == expected_near_next.year - 1985
+    assert near_record["birthday"] == f"{near.day:02d}.{near.month:02d}.1985"
+
+    far_record = result[1]
+    assert "turningAge" not in far_record
+    assert far_record["birthday"] == f"{far.day:02d}.{far.month:02d}."
+
+    # --days filters out contacts whose next occurrence falls outside the horizon.
+    api_module.contacts_birthdays(types.SimpleNamespace(days=30, max=100))
+    filtered = json.loads(capsys.readouterr().out)
+    assert [r["name"] for r in filtered] == ["Near Person"]
+
+    # --max caps the (already sorted) output.
+    api_module.contacts_birthdays(types.SimpleNamespace(days=None, max=1))
+    capped = json.loads(capsys.readouterr().out)
+    assert [r["name"] for r in capped] == ["Near Person"]

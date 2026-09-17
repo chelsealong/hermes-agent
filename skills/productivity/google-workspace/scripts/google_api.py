@@ -14,6 +14,7 @@ Usage:
   python google_api.py calendar create --summary "Meeting" --start DATETIME --end DATETIME
   python google_api.py drive search "budget report" [--max 10]
   python google_api.py contacts list [--max 20]
+  python google_api.py contacts birthdays [--days 30] [--max 20]
   python google_api.py sheets get SHEET_ID RANGE
   python google_api.py sheets update SHEET_ID RANGE --values '[[...]]'
   python google_api.py sheets append SHEET_ID RANGE --values '[[...]]'
@@ -909,6 +910,102 @@ def contacts_list(args):
     print(json.dumps(contacts, indent=2, ensure_ascii=False))
 
 
+def _iter_people_connections(person_fields="names,birthdays", page_size=200):
+    """Yield every People API connection for the authenticated user, paginating."""
+    page_token = None
+    while True:
+        params = {
+            "resourceName": "people/me",
+            "pageSize": page_size,
+            "personFields": person_fields,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
+        if _gws_binary():
+            results = _run_gws(["people", "people", "connections", "list"], params=params)
+        else:
+            service = build_service("people", "v1")
+            results = service.people().connections().list(**params).execute()
+
+        yield from results.get("connections", [])
+
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            return
+
+
+def _is_leap_year(year: int) -> bool:
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def _next_birthday_occurrence(month: int, day: int, today):
+    """Return the next date on/after `today` that this month/day recurs on.
+
+    Feb 29 birthdays fall back to Feb 28 in non-leap years, since there is no
+    Feb 29 to land on.
+    """
+    from datetime import date
+
+    for candidate_year in (today.year, today.year + 1):
+        actual_day = day
+        if month == 2 and day == 29 and not _is_leap_year(candidate_year):
+            actual_day = 28
+        candidate = date(candidate_year, month, actual_day)
+        if candidate >= today:
+            return candidate
+    raise AssertionError("unreachable: a birthday always recurs within a year")
+
+
+def _select_birthday_date(person: dict):
+    """Return the first birthday entry with a usable month/day, or None."""
+    for entry in person.get("birthdays", []):
+        d = entry.get("date") or {}
+        if d.get("month") and d.get("day"):
+            return d
+    return None
+
+
+def _format_birthday_display(year, month: int, day: int) -> str:
+    base = f"{day:02d}.{month:02d}."
+    return f"{base}{year}" if year else base
+
+
+def contacts_birthdays(args):
+    from datetime import date
+
+    today = date.today()
+    records = []
+    for person in _iter_people_connections():
+        names = person.get("names", [{}])
+        name = names[0].get("displayName", "") if names else ""
+
+        bday = _select_birthday_date(person)
+        if not bday:
+            continue
+
+        month, day, year = bday["month"], bday["day"], bday.get("year")
+        next_date = _next_birthday_occurrence(month, day, today)
+        record = {
+            "name": name,
+            "birthday": _format_birthday_display(year, month, day),
+            "nextDate": next_date.isoformat(),
+            "daysUntil": (next_date - today).days,
+        }
+        if year:
+            record["turningAge"] = next_date.year - year
+        records.append(record)
+
+    if args.days is not None:
+        records = [r for r in records if r["daysUntil"] <= args.days]
+
+    records.sort(key=lambda r: r["daysUntil"])
+    if args.max is not None:
+        records = records[: args.max]
+
+    print(json.dumps(records, indent=2, ensure_ascii=False))
+
+
 # =========================================================================
 # Sheets
 # =========================================================================
@@ -1268,6 +1365,11 @@ def main():
     p = con_sub.add_parser("list")
     p.add_argument("--max", type=int, default=50)
     p.set_defaults(func=contacts_list)
+
+    p = con_sub.add_parser("birthdays")
+    p.add_argument("--days", type=int, default=None, help="Only include birthdays within this many days (default: all)")
+    p.add_argument("--max", type=int, default=100, help="Maximum number of results to return")
+    p.set_defaults(func=contacts_birthdays)
 
     # --- Sheets ---
     sh = sub.add_parser("sheets")
