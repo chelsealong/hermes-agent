@@ -713,6 +713,47 @@ def test_startup_warn_discharged_when_fleet_current(monkeypatch, capsys):
     assert not update_cmd._fleet_restart_pending_marker_path().exists()
 
 
+def test_startup_warn_discharged_despite_receipt_serve_runtime(monkeypatch, capsys):
+    """A recorded ``serve`` runtime must not keep the marker forever (#113906).
+
+    The gateway matrix can never observe a ``serve``/dashboard process, so its mere
+    presence in the receipt must not block discharge once every *gateway* row the
+    receipt does own is provably current.
+    """
+    disk_sha = "e" * 40
+    update_cmd._write_fleet_restart_pending_marker(expected_sha=disk_sha)
+    _patch_marker_sha(monkeypatch, disk_sha)
+    receipt_dir = get_hermes_home() / "logs" / "update_receipts"
+    receipt_dir.mkdir(parents=True)
+    (receipt_dir / "latest.json").write_text(
+        json.dumps(
+            {
+                "exit_code": 1,
+                "stop_reason": "KeyboardInterrupt: ",
+                "outcome": "failed",
+                "plan": {
+                    "runtimes": [
+                        {"kind": "gateway", "profile": "default", "pid": 42, "code_sha": "7" * 40},
+                        {"kind": "serve", "pid": 43, "code_sha": None, "restart_via": "respawn-argv"},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.update_receipt.collect_fleet_versions",
+        lambda **kwargs: [
+            {"profile": "default", "pid": 99, "code_sha": disk_sha, "code_version": "0.21.3", "state": "current"}
+        ],
+    )
+
+    update_cmd._warn_pending_fleet_restart_on_startup()
+
+    assert capsys.readouterr().err == ""
+    assert not update_cmd._fleet_restart_pending_marker_path().exists()
+
+
 @pytest.mark.parametrize(
     "disk_sha, fleet",
     [
