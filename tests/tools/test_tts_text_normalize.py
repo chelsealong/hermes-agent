@@ -47,3 +47,15 @@ def test_prepare_spoken_text_polish_edge_cases():
     assert "and/or" in prepare_spoken_text("choose and/or option")
     assert "N/A" in prepare_spoken_text("status N/A here")
     assert "2026/06/02" in prepare_spoken_text("due 2026/06/02 ok")
+
+
+def test_prepare_spoken_text_strips_standalone_cjk_filler_interjections():
+    # Standalone "嗯"/"哼" are hesitation interjections some command TTS providers
+    # vocalize unprompted; they should not reach the provider. See #114114.
+    assert "嗯" not in prepare_spoken_text("嗯，这个问题很有趣。")
+    assert "哼" not in prepare_spoken_text("今天天气不错，哼。")
+    # A filler between two pause marks leaves one pause behind, not a doubled one.
+    assert prepare_spoken_text("这样吧，嗯，我们就这么定了。") == "这样吧，我们就这么定了。"
+    # The same characters inside a real word are speech content, not filler.
+    assert "嗯声" in prepare_spoken_text("嗯声很大，请注意。")
+    assert "哼唧" in prepare_spoken_text("哼唧了半天也没说清楚。")

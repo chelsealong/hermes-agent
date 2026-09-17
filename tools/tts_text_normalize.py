@@ -50,6 +50,15 @@ _EMOJI_RE = re.compile(
     flags=re.UNICODE)
 _VARIATION_SELECTOR_RE = re.compile("[︎️]")
 
+# Standalone Chinese filler interjections (e.g. the model hedging with a bare "嗯"/"哼").
+# Some command TTS providers vocalize these as unrequested hesitation sounds. Only a run
+# bounded by non-ideograph context is stripped, so the same characters inside a real word
+# (e.g. "嗯声") are left alone. See #114114.
+_CJK_FILLER_RE = re.compile(r"(?<![一-鿿])[嗯哼]+(?![一-鿿])")
+# A filler sitting between two pause marks ("，嗯，") would otherwise leave both behind
+# ("，，"); keep only the trailing mark.
+_CJK_FILLER_BETWEEN_PAUSES_RE = re.compile(r"[，。！？；：,.!?;:][嗯哼]+(?P<trail>[，。！？；：,.!?;:])")
+
 
 def strip_markdown_for_tts(text: str) -> str:
     """Strip Markdown/Telegram formatting while preserving readable words."""
@@ -73,6 +82,16 @@ def strip_markdown_for_tts(text: str) -> str:
     text = _MD_HR_RE.sub("", text)
     # Leftover table pipes become pauses instead of a spoken "vertical bar".
     return _MD_TABLE_PIPE_RE.sub("; ", text)
+
+
+def strip_cjk_filler_interjections(text: str) -> str:
+    """Remove standalone Chinese filler interjections (``嗯``, ``哼``) some command TTS
+    providers read aloud as unrequested hesitation sounds, without touching the same
+    characters inside a real word (e.g. ``嗯声``)."""
+    if not text:
+        return ""
+    text = _CJK_FILLER_BETWEEN_PAUSES_RE.sub(r"\g<trail>", text)
+    return _CJK_FILLER_RE.sub("", text)
 
 
 def _normalize_temperature_ranges(text: str) -> str:
@@ -203,11 +222,12 @@ def flatten_newlines_for_payload(text: str) -> str:
 
 def prepare_spoken_text(text: str, max_chars: int | None = 4000) -> str:
     """Return a TTS-friendly script from assistant text (deterministic cleanup, not a rewrite).
-    Pipeline: non-spoken blocks > Markdown > symbols/units > line formatting into sentence
-    pauses > single line (for newline-sensitive providers), then ``max_chars``."""
+    Pipeline: non-spoken blocks > Markdown > CJK filler interjections > symbols/units > line
+    formatting into sentence pauses > single line (for newline-sensitive providers), then
+    ``max_chars``."""
     spoken = text
-    for step in (strip_nonspoken_blocks, strip_markdown_for_tts, normalize_symbols_for_tts,
-                 smooth_whitespace_for_tts, flatten_newlines_for_payload):
+    for step in (strip_nonspoken_blocks, strip_markdown_for_tts, strip_cjk_filler_interjections,
+                 normalize_symbols_for_tts, smooth_whitespace_for_tts, flatten_newlines_for_payload):
         spoken = step(spoken)
     if max_chars is not None and max_chars > 0 and len(spoken) > max_chars:
         spoken = spoken[:max_chars].rstrip()
