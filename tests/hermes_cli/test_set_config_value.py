@@ -527,6 +527,19 @@ class TestSchemaValidation:
         assert "brand_new_future_key" in _read_config(_isolated_hermes_home)
         assert "not a recognized config key" in capsys.readouterr().out
 
+    def test_platform_toolsets_write_has_no_notice_or_wrong_suggestion(
+        self, _isolated_hermes_home, capsys
+    ):
+        """#113658: platform_toolsets is a first-class, wizard-written root (an
+        _EXTRA_KNOWN_ROOT_KEYS entry omitted from DEFAULT_CONFIG because its sub-keys are
+        user-chosen platform names). It must not trip the unknown-key notice, and must not
+        suggest the unrelated 'platform_hints' root."""
+        set_config_value("platform_toolsets.cli", '["hermes-cli"]')
+        out = capsys.readouterr().out
+        assert "not a recognized config key" not in out
+        assert "platform_hints" not in out
+        assert "platform_toolsets:\n  cli:" in _read_config(_isolated_hermes_home)
+
 
 
 
@@ -569,6 +582,10 @@ class TestValidateConfigKey:
         "platforms.discord.enabled",
         "gateway.platforms.my_platform.extra.token",
         "approvals.mode",
+        "platform_toolsets.cli",
+        "known_plugin_toolsets.cli",
+        "known_builtin_toolsets.telegram",
+        "fallback_model.provider",
     ])
     def test_known_keys_pass(self, key):
         from hermes_cli.config import _validate_config_key

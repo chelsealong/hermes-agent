@@ -3263,8 +3263,14 @@ _OPEN_SUBKEY_TOP_LEVEL_KEYS = _OPEN_DICT_TOP_LEVEL_KEYS | _DYNAMIC_TOP_LEVEL_KEY
 
 
 def _known_top_level_keys() -> set[str]:
-    """Return the union of known top-level config keys for validation."""
-    return set(DEFAULT_CONFIG) | _OPEN_SUBKEY_TOP_LEVEL_KEYS
+    """Return the union of known top-level config keys for validation.
+
+    ``_EXTRA_KNOWN_ROOT_KEYS`` roots (``platform_toolsets``, ``fallback_model``, ...) are
+    intentionally absent from ``DEFAULT_CONFIG`` (#113658) but are still real, tool-written
+    roots — they must count as known here too, or every write under one falsely triggers the
+    unknown-key notice with an unrelated "did you mean" suggestion.
+    """
+    return set(DEFAULT_CONFIG) | _OPEN_SUBKEY_TOP_LEVEL_KEYS | _EXTRA_KNOWN_ROOT_KEYS
 
 
 def _suggest_closest_key(key: str, candidates: set[str], cutoff: float = 0.6) -> Optional[str]:
