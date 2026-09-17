@@ -215,6 +215,26 @@ async def test_generic_unavailable_response_counts_as_completed(adapter):
 
 
 @pytest.mark.asyncio
+async def test_attempt_cap_stops_unbounded_redispatch(adapter, monkeypatch):
+    """#113631: a message whose delivered response never satisfies the completion gate
+    (e.g. no reply anchor was recorded, as happens with reply_to_mode: off) must not be
+    re-dispatched forever. A per-message attempt cap has to stop it independently of
+    whether the completion gate itself is ever satisfied."""
+    monkeypatch.setenv("DISCORD_MISSED_MESSAGE_BACKFILL_ATTEMPT_CAP", "3")
+    message = make_message(message_id=555)
+
+    # Never persistently complete: no reply anchor was ever recorded for this message,
+    # mirroring _record_discord_response's early return when reply_to is falsy.
+    assert adapter._discord_message_is_persistently_complete("555") is False
+    assert await adapter._should_backfill_discord_message(message) is True
+
+    for _ in range(3):
+        adapter._record_recovery_attempt(message, status="failed", error="never completes")
+
+    assert await adapter._should_backfill_discord_message(message) is False
+
+
+@pytest.mark.asyncio
 async def test_run_backfill_dispatches_unaddressed_messages(adapter, monkeypatch):
     bot_user = adapter._client.user
     message = make_message(

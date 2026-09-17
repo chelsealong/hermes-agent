@@ -2163,6 +2163,15 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         return self._missed_message_backfill_number(
             "max_dispatches", "DISCORD_MISSED_MESSAGE_BACKFILL_MAX_DISPATCHES", 10, int, 1, 100)
 
+    def _missed_message_backfill_attempt_cap(self) -> int:
+        """Per-message re-dispatch ceiling, independent of the per-scan max_dispatches.
+
+        A message that can never satisfy the completion gate (e.g. no reply anchor was
+        recorded for its response) would otherwise be re-dispatched on every reconnect
+        forever (#113631)."""
+        return self._missed_message_backfill_number(
+            "attempt_cap", "DISCORD_MISSED_MESSAGE_BACKFILL_ATTEMPT_CAP", 20, int, 1, 1000)
+
     def _ensure_missed_message_backfill_task(self) -> asyncio.Task:
         """Return the active recovery task, or start one when none is running."""
         task = self._missed_message_backfill_task
@@ -2403,8 +2412,22 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             return False
         if self._discord_message_has_active_claim(str(getattr(message, "id", ""))):
             return False
+        message_id = str(getattr(message, "id", ""))
+        if self._discord_message_attempts(message_id) >= self._missed_message_backfill_attempt_cap():
+            return False
         # A success reaction is only an ack, not evidence the substantive response completed.
         return not await self._message_has_non_down_bot_response(message)
+
+    def _discord_message_attempts(self, message_id: str) -> int:
+        if not message_id:
+            return 0
+
+        def _op(conn):
+            row = conn.execute(
+                "SELECT attempts FROM discord_messages WHERE message_id=?", (message_id,),
+            ).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        return int(self._with_discord_recovery_db(_op, default=0))
 
     def _is_down_notice_content(self, content: str) -> bool:
         """Recognize only explicit Hermes/gateway outage notices."""
