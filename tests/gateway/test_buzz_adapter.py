@@ -3513,7 +3513,9 @@ class TestStandaloneSend:
 class TestBuzzAdapterEdit:
 
     @pytest.mark.asyncio
-    async def test_edit_targets_the_original_event_and_uses_stdin(self):
+    async def test_edit_targets_the_original_event_and_passes_content_directly(self):
+        """buzz-cli's ``messages edit`` forwards --content literally (#113909):
+        unlike ``messages send``, it never expands "-" from stdin."""
         adapter = _make_adapter()
         adapter._channel_state[CHANNEL] = {"chat_type": "group", "last_ts": 0, "seen": {}}
         cli = _ScriptedCli()
@@ -3526,9 +3528,8 @@ class TestBuzzAdapterEdit:
         args, stdin_text = cli.calls[0]
         assert args[:2] == ["messages", "edit"]
         assert args[args.index("--event") + 1] == "orig1"
-        # Content travels via stdin (--content -), never argv, same as send
-        assert args[args.index("--content") + 1] == "-"
-        assert stdin_text == "partial answer"
+        assert args[args.index("--content") + 1] == "partial answer"
+        assert stdin_text is None
 
     @pytest.mark.asyncio
     async def test_edit_returns_the_original_id_not_the_cli_event_id(self):
@@ -3606,6 +3607,38 @@ class TestBuzzAdapterEdit:
         input_failure = await adapter.edit_message(CHANNEL, "orig1", "text")
         assert input_failure.success is False
         assert input_failure.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_edit_wire_path_delivers_real_content_through_an_actual_cli_process(self, tmp_path):
+        """Regression for #113909: buzz-cli's ``messages edit`` forwards --content
+        literally and never expands "-" from stdin, unlike ``messages send``.
+
+        A fake CLI process reproduces that exact per-subcommand asymmetry so this
+        test exercises the real argv/stdin wire path, not a mock of ``_run_cli``.
+        """
+        fake_cli = tmp_path / "buzz"
+        fake_cli.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "args = sys.argv[1:]\n"
+            "cmd = args[1]\n"
+            "content = args[args.index('--content') + 1]\n"
+            "if cmd == 'send' and content == '-':\n"
+            "    content = sys.stdin.read()\n"
+            "print(json.dumps({'accepted': True, 'event_id': 'evt-real', 'content': content}))\n",
+            encoding="utf-8",
+        )
+        fake_cli.chmod(0o755)
+
+        adapter = _make_adapter()
+        adapter.cli_path = str(fake_cli)
+        adapter._channel_state[CHANNEL] = {"chat_type": "group", "last_ts": 0, "seen": {}}
+
+        multiline = "line one\nline two\nline three"
+        result = await adapter.edit_message(CHANNEL, "orig1", multiline)
+
+        assert result.success is True
+        assert result.raw_response["content"] == multiline
 
     @pytest.mark.asyncio
     async def test_delete_targets_the_event(self):

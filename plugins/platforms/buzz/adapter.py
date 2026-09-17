@@ -864,8 +864,10 @@ class BuzzAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Buzz edit needs a message id")
         if not content:
             return SendResult(success=False, error="Empty message")
-        args = ["messages", "edit", "--event", str(message_id), "--content", "-"]
-        code, out, err = await self._run_cli(args, input_text=content)
+        # Unlike ``messages send``, buzz-cli's ``messages edit`` forwards --content
+        # literally and does not expand "-" from stdin (#113909) — pass the text directly.
+        args = ["messages", "edit", "--event", str(message_id), "--content", content]
+        code, out, err = await self._run_cli(args)
         if code != 0:
             return SendResult(success=False, error=_cli_error_message(err, code), retryable=code == 2)
         data = _json_or(out, {})
