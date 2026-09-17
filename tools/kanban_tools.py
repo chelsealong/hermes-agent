@@ -437,9 +437,16 @@ _auto_heartbeat_last_attempt: float = 0.0
 
 
 def heartbeat_current_worker_from_env() -> bool:
-    """Claim extension + board heartbeat for the current worker; True iff a write was
-    attempted. ``HERMES_KANBAN_RUN_ID`` pins the run row so a reclaimed stale run is not
-    heartbeated; ``HERMES_KANBAN_CLAIM_LOCK`` absent -> default claimer (local workers)."""
+    """Claim extension + board heartbeat for the current worker; True iff a write actually
+    landed. ``HERMES_KANBAN_RUN_ID`` pins the run row so a reclaimed stale run is not
+    heartbeated; ``HERMES_KANBAN_CLAIM_LOCK`` absent -> default claimer (local workers).
+
+    A dispatcher-spawned worker (agent-session spawn, cron, plugin lane) inherits the
+    delegate_task env marker from its own launcher and would otherwise be fenced as if it
+    were mutating a delegate_task parent's board (#113609): an in-process delegate_task
+    child of THIS process must still be fenced, so the exemption is scoped to this one
+    write via ``worker_self_write_context`` and checked after that in-process guard.
+    """
     global _auto_heartbeat_last_attempt
     tid = os.environ.get("HERMES_KANBAN_TASK")
     now = time.monotonic()
@@ -447,17 +454,19 @@ def heartbeat_current_worker_from_env() -> bool:
         return False
     _auto_heartbeat_last_attempt = now
     try:
+        from agent.delegation_context import worker_self_write_context
         from hermes_cli import kanban_db_dispatch as kbd
-        with _board(None, quiet_close=True) as (kb, conn):
+        landed = False
+        with worker_self_write_context(), _board(None, quiet_close=True) as (kb, conn):
             ops = ((kb.heartbeat_claim, {"claimer": os.environ.get("HERMES_KANBAN_CLAIM_LOCK")}),
                    (kbd.heartbeat_worker, {"note": None, "expected_run_id": _worker_run_id(tid)}))
             for fn, kwargs in ops:
                 op = fn.__name__
                 try:
-                    fn(conn, tid, **kwargs)
+                    landed = bool(fn(conn, tid, **kwargs)) or landed
                 except Exception:
                     logger.debug("auto-heartbeat: %s failed", op, exc_info=True)
-        return True
+        return landed
     except Exception:
         logger.debug("auto-heartbeat: bridge failed", exc_info=True)
         return False

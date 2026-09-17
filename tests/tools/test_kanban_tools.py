@@ -402,6 +402,53 @@ def test_heartbeat_extends_claim_expires(worker_env):
     )
 
 
+def test_auto_heartbeat_lands_for_worker_fenced_by_inherited_env_marker(monkeypatch, worker_env):
+    """A dispatcher-owned worker that inherited HERMES_DELEGATED_CHILD_CONTEXT from its own
+    launcher (agent-session spawn, cron, plugin lane) must still be able to heartbeat itself.
+
+    Regression test for #113609: the env-marker branch of kanban_path_is_fenced() denied
+    the worker's own heartbeat_claim/heartbeat_worker writes, and
+    heartbeat_current_worker_from_env() swallowed both PermissionErrors and returned True
+    regardless, so the claim silently starved while the failure stayed invisible.
+    """
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    conn = kbc.connect()
+    try:
+        conn.execute("UPDATE tasks SET claim_expires = 1, last_heartbeat_at = NULL WHERE id = ?", (worker_env,))
+        conn.commit()
+        before = conn.execute(
+            "SELECT claim_expires, last_heartbeat_at FROM tasks WHERE id = ?", (worker_env,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert before["claim_expires"] == 1
+    assert before["last_heartbeat_at"] is None
+
+    # Simulate a spawn path that carries the delegate_task env marker into this worker's
+    # own process (agent-session spawn, cron, plugin lane) — set only now, after the board
+    # setup above, since connect() opens read-only once this marker is present.
+    monkeypatch.setenv("HERMES_DELEGATED_CHILD_CONTEXT", "1")
+
+    kt._auto_heartbeat_last_attempt = 0.0
+    landed = kt.heartbeat_current_worker_from_env()
+    assert landed is True, "heartbeat_current_worker_from_env() must report honestly whether a write landed"
+
+    conn = kbc.connect()
+    try:
+        after = conn.execute(
+            "SELECT claim_expires, last_heartbeat_at FROM tasks WHERE id = ?", (worker_env,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert after["claim_expires"] > before["claim_expires"], (
+        "claim was not extended; a genuinely live worker would be reclaimed as stale"
+    )
+    assert after["last_heartbeat_at"] is not None
+
+
 def test_comment_happy_path(worker_env):
     from tools import kanban_tools as kt
     out = kt._handle_comment({

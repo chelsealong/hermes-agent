@@ -16,6 +16,11 @@ _DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar("hermes_delegated_child_
 # Any in-process execution that is NOT the dispatcher-owned worker (cron jobs). Kept separate
 # so delegate_task-specific behaviour (subprocess env scrubbing, its error strings) is unchanged.
 _NON_DISPATCHER_OWNED_CONTEXT: ContextVar[bool] = ContextVar("hermes_non_dispatcher_owned_context", default=False)
+# Scoped to the dispatcher-owned worker's own claim/heartbeat write, set only for the
+# duration of that write. A spawned worker inherits the env marker from its own launcher
+# (agent-session spawn, cron, plugin lane) and is fenced by kanban_path_is_fenced() as if it
+# were a delegate_task descendant of itself; this authorizes only that one liveness write.
+_WORKER_SELF_WRITE_CONTEXT: ContextVar[bool] = ContextVar("hermes_worker_self_write_context", default=False)
 
 DELEGATED_CHILD_ENV_MARKER = "HERMES_DELEGATED_CHILD_CONTEXT"
 
@@ -68,6 +73,19 @@ def non_dispatcher_owned_context() -> Iterator[None]:
         exit_non_dispatcher_owned_context(token)
 
 
+@contextmanager
+def worker_self_write_context() -> Iterator[None]:
+    """Authorize the dispatcher-owned worker's own claim/heartbeat write for the scope of
+    the write, so a spawned worker that inherited the env marker from its own launcher can
+    still extend its own claim. Never authorizes an in-process delegate_task child, which
+    ``kanban_path_is_fenced`` checks first regardless of this flag."""
+    token = _WORKER_SELF_WRITE_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _WORKER_SELF_WRITE_CONTEXT.reset(token)
+
+
 def is_dispatcher_owned_worker_context() -> bool:
     """The single predicate every ``HERMES_KANBAN_*`` identity gate should use."""
     return not (is_delegated_child_process_context() or _NON_DISPATCHER_OWNED_CONTEXT.get())
@@ -109,11 +127,14 @@ def scrub_kanban_env(env: Mapping[str, str] | MutableMapping[str, str]) -> dict[
 
 def kanban_path_is_fenced(path: "os.PathLike[str] | str") -> bool:
     """Whether Kanban mutations at *path* (a board DB or board-metadata root) are denied for this
-    process: always for an in-process delegate child (the parent's own board); for a spawned
-    descendant only when *path* is the dispatcher-pinned ``HERMES_KANBAN_DB`` or lies under the
-    fenced root the marker carries. A legacy ``"1"`` marker fences everything."""
+    process: always for an in-process delegate child (the parent's own board); never inside
+    :func:`worker_self_write_context`; for a spawned descendant otherwise only when *path* is
+    the dispatcher-pinned ``HERMES_KANBAN_DB`` or lies under the fenced root the marker
+    carries. A legacy ``"1"`` marker fences everything."""
     if _DELEGATED_CHILD_CONTEXT.get():
         return True
+    if _WORKER_SELF_WRITE_CONTEXT.get():
+        return False
     marker = os.environ.get(DELEGATED_CHILD_ENV_MARKER, "")
     if not marker:
         return False
