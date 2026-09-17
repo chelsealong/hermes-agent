@@ -35,6 +35,12 @@ class KeylessMCPError(RuntimeError):
 
 _RATE_LIMIT_MARKERS = ("rate limit", "rate-limit", "ratelimit", "too many requests", "429", "quota exceeded", "slow down")
 
+# A hard failure that is about *this vendor* specifically (an IP-reputation block, an
+# expired/invalid key, a vendor-side outage) rather than the request: the other ring
+# vendors are not affected, so the ring should still advance instead of stopping cold.
+_VENDOR_BLOCK_MARKERS = ("forbidden", "unauthorized", "suspicious", "blocked")
+_VENDOR_BLOCK_STATUS = re.compile(r"\b(401|402|403|5\d\d)\b")
+
 # vendor -> (display label, env key, signup URL) for the standard failure hint.
 _VENDOR_HINTS = {
     "exa": ("Exa", "EXA_API_KEY", "https://exa.ai"), "parallel": ("Parallel", "PARALLEL_API_KEY", "https://parallel.ai"),
@@ -43,8 +49,14 @@ _VENDOR_HINTS = {
 
 
 def _is_rate_limitish(message: str) -> bool:
-    """Heuristic: does an error message look like free-tier throttling?"""
-    return any(marker in (message or "").lower() for marker in _RATE_LIMIT_MARKERS)
+    """Heuristic: does an error message look like free-tier throttling, or a vendor-specific
+    hard failure (401/402/403/5xx, an IP block) that the next ring vendor need not share?"""
+    lowered = (message or "").lower()
+    if any(marker in lowered for marker in _RATE_LIMIT_MARKERS):
+        return True
+    if any(marker in lowered for marker in _VENDOR_BLOCK_MARKERS):
+        return True
+    return bool(_VENDOR_BLOCK_STATUS.search(lowered))
 
 
 def _fail_msg(vendor: str, kind: str, exc: Any, *, other_backends: bool = True) -> str:
@@ -374,9 +386,9 @@ def _walk_ring(name: str, kind: str, call, throttled) -> tuple:
 
 
 def search_with_failover(name: str, query: str, limit: int = 5) -> Dict[str, Any]:
-    """Rate-limit-shaped errors advance to the next vendor, other errors stop the walk
-    (a malformed query fails everywhere). ``data.served_by`` is set when the serving
-    vendor differs from *name*."""
+    """Rate-limit-shaped and vendor-specific hard failures advance to the next vendor,
+    other errors stop the walk (a malformed query fails everywhere). ``data.served_by``
+    is set when the serving vendor differs from *name*."""
 
     def _throttled(result: Dict[str, Any]) -> bool:
         return not result.get("success") and _is_rate_limitish(result.get("error", ""))
@@ -392,8 +404,8 @@ def search_with_failover(name: str, query: str, limit: int = 5) -> Dict[str, Any
 
 
 def extract_with_failover(name: str, urls: List[str]) -> List[Dict[str, Any]]:
-    """Fails over only when EVERY url in a batch is rate-limit-shaped (partial failures
-    are page problems, returned as-is)."""
+    """Fails over only when EVERY url in a batch is rate-limit-shaped or a vendor-specific
+    hard failure (partial failures are page problems, returned as-is)."""
 
     def _all_throttled(results: List[Dict[str, Any]]) -> bool:
         return bool(results) and all(r.get("error", "") and _is_rate_limitish(r.get("error", "")) for r in results)

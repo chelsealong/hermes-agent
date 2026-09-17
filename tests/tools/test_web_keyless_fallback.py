@@ -517,6 +517,26 @@ class TestKeylessFailover:
         assert out["success"] is True
         assert out["data"]["served_by"] == "parallel"
 
+    def test_search_fails_over_on_vendor_block_error(self, monkeypatch):
+        """#113893: a pinned vendor's IP-block/auth hard failure (403) must still
+        advance the ring, not just classic rate-limit wording."""
+        self._pin(monkeypatch, "firecrawl")
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "firecrawl",
+            lambda q, l: {
+                "success": False,
+                "error": (
+                    "Keyless Firecrawl search failed: Client error '403 Forbidden' for url "
+                    "'https://api.firecrawl.dev/v2/search'. Set FIRECRAWL_API_KEY "
+                    "(https://firecrawl.dev) for reliable service."
+                ),
+            },
+        )
+        monkeypatch.setitem(keyless_mcp._KEYLESS_SEARCHERS, "keenable", lambda q, l: self._ok("keenable"))
+        out = keyless_mcp.search_with_failover("firecrawl", "q", 3)
+        assert out["success"] is True
+        assert out["data"]["served_by"] == "keenable"
+
     def test_search_no_failover_on_non_throttle_error(self, monkeypatch):
         self._pin(monkeypatch, "exa")
         monkeypatch.setitem(
