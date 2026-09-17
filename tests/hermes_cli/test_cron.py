@@ -588,3 +588,47 @@ class TestSlashCronListLastStatus:
 
         out = self._run_list(tmp_cron_dir, capsys)
         assert "(ok)" in out
+
+
+class TestSlashCronRunSkipVisibility:
+    """#113923 secondary: the in-chat ``/cron run <id>`` (cli_commands_mixin) must not claim a
+    retrigger was accepted when the manual-run claim was actually refused — it printed
+    "Triggered job" + "It will run on the next scheduler tick." unconditionally for
+    action == "run", ignoring ``result["job"]["execution_skipped"]`` (which ``hermes cron run``,
+    the standalone CLI's own ``_run_outcome``, already surfaces)."""
+
+    def _run(self, cmd, tmp_cron_dir, capsys):
+        from hermes_cli.cli_commands_mixin import CLICommandsMixin
+
+        class _Host(CLICommandsMixin):
+            pass
+
+        _Host()._handle_cron_command(cmd)
+        return capsys.readouterr().out
+
+    def test_refused_retrigger_is_not_reported_as_triggered(self, tmp_cron_dir, capsys):
+        import datetime
+
+        job = create_job(prompt="Nightly brief", schedule="every 1h")
+        jobs = load_jobs()
+        # A live fire_claim held by another owner: claim_job_for_fire refuses this manual
+        # run exactly like a scheduler-tick-in-progress or a not-yet-expired stale claim would.
+        jobs[0]["fire_claim"] = {
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "by": "other-owner"}
+        save_jobs(jobs)
+
+        out = self._run(f"/cron run {job['id']}", tmp_cron_dir, capsys)
+
+        assert "Triggered job" not in out
+        assert "It will run on the next scheduler tick." not in out
+        assert "Not run" in out
+        assert "already being fired by the scheduler" in out
+
+    def test_accepted_run_still_reports_triggered(self, tmp_cron_dir, capsys, monkeypatch):
+        job = create_job(prompt="Nightly brief", schedule="every 1h")
+        monkeypatch.setattr("cron.scheduler.run_one_job", lambda *a, **kw: True)
+
+        out = self._run(f"/cron run {job['id']}", tmp_cron_dir, capsys)
+
+        assert "Triggered job" in out
+        assert "It will run on the next scheduler tick." in out

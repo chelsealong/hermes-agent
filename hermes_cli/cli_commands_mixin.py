@@ -1772,6 +1772,10 @@ class CLICommandsMixin:
         if action == "remove":
             removed = result.get("removed_job", {})
             return print(f"(^_^)b Removed job: {removed.get('name', job_id)} ({job_id})")
+        if action == "run":
+            skipped = result["job"].get("execution_skipped")
+            if skipped:
+                return print(f"(._.) Not run: {result['job']['name']} ({job_id}) — {skipped}")
         verb = {"pause": "Paused", "resume": "Resumed", "run": "Triggered"}[action]
         print(f"(^_^)b {verb} job: {result['job']['name']} ({job_id})")
         if action == "resume":
