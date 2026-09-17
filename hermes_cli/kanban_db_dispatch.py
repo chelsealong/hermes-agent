@@ -1495,17 +1495,36 @@ def _dispatch_profile_allowlist(normalize_profile_name) -> Optional[frozenset]:
         kanban:
           dispatch_profiles: ["sage", "researcher"]   # or "sage,researcher"
 
-    Returns ``None`` when the key is unset (upstream behavior: any existing
-    profile is claimable). A set value is fail-closed: an empty list claims
-    nothing. Config read is fail-open like the sibling ``kanban.*`` readers.
+    Returns ``None`` only when the key is truly absent from the config file
+    (upstream behavior: any existing profile is claimable). A key that is
+    present but blank/null, a malformed ``kanban:`` section, or a config
+    read that raises, all fail closed to an empty allowlist instead — a
+    corrupt or mistyped config must not silently widen claim scope on a
+    shared board. ``load_config_readonly()`` merges in per-key defaults
+    (including ``dispatch_profiles: None``) whether or not the user set
+    anything, so presence is checked against the raw, un-merged config file
+    instead — the merged view alone cannot tell "unset" from "set to null".
     """
     try:
-        from hermes_cli.config import load_config_readonly
-        raw = (load_config_readonly() or {}).get("kanban", {}).get("dispatch_profiles")
+        from hermes_cli.config import load_config_readonly, read_raw_config_readonly
+        kanban_cfg = (load_config_readonly() or {}).get("kanban", {})
+        raw_kanban = (read_raw_config_readonly() or {}).get("kanban", {})
     except Exception:
+        _kb._log.warning(
+            "kanban.dispatch_profiles: config read failed; failing closed to an empty allowlist"
+        )
+        return frozenset()
+    if not isinstance(kanban_cfg, dict) or not isinstance(raw_kanban, dict):
+        _kb._log.warning(
+            "kanban.dispatch_profiles: 'kanban' config section is not a mapping; "
+            "failing closed to an empty allowlist"
+        )
+        return frozenset()
+    if "dispatch_profiles" not in raw_kanban:
         return None
+    raw = kanban_cfg.get("dispatch_profiles")
     if raw is None:
-        return None
+        return frozenset()
     names = [str(n) for n in raw] if isinstance(raw, (list, tuple)) else str(raw).split(",")
     allowed = set()
     for n in names:

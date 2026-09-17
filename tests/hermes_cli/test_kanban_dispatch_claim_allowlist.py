@@ -68,6 +68,34 @@ def test_default_assignee_outside_allowlist_leaves_card_unassigned(
     assert "assigned" not in kinds
 
 
+def test_malformed_kanban_section_fails_closed(kanban_home, all_assignees_spawnable):
+    """A ``kanban:`` section that isn't a mapping (YAML/typo mistake) must
+    fail closed rather than crash the reader into the old fail-open path."""
+    (kanban_home / "config.yaml").write_text("kanban: not-a-mapping\n", encoding="utf-8")
+    with kbc.connect() as conn:
+        tid = kb.create_task(conn, title="foreign card", assignee="default")
+        assert kbd.has_spawnable_ready(conn) is False
+        res = kbd.dispatch_once(conn, dry_run=True)
+    assert res.spawned == []
+    assert res.skipped_nonspawnable == [tid]
+
+
+def test_blank_allowlist_key_fails_closed(kanban_home, all_assignees_spawnable):
+    """A present-but-blank ``dispatch_profiles:`` key (YAML null from a typo
+    or a stray colon) must fail closed like an explicit empty list, not widen
+    to 'any profile claimable' — the exact bug that lets a foreign home claim
+    ``default``-assigned cards on a shared board."""
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n  dispatch_profiles:\n", encoding="utf-8",
+    )
+    with kbc.connect() as conn:
+        tid = kb.create_task(conn, title="foreign card", assignee="default")
+        assert kbd.has_spawnable_ready(conn) is False
+        res = kbd.dispatch_once(conn, dry_run=True)
+    assert res.spawned == []
+    assert res.skipped_nonspawnable == [tid]
+
+
 def test_unset_allowlist_keeps_default_claimable(kanban_home, all_assignees_spawnable):
     """No key = upstream behaviour: any existing profile, ``default`` included."""
     with kbc.connect() as conn:
