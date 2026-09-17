@@ -93,6 +93,22 @@ class TestKnownPrefixes:
         text = "fw-tooshort fw_tooshort fpk_tooshort"
         assert redact_sensitive_text(text) == text
 
+    def test_sk_prefix_key_with_embedded_dot_fully_masked(self):
+        """A dot-containing sk- key (e.g. Alibaba Bailian sk-sp-*) must be masked past the dot.
+
+        Before the fix, ``sk-[A-Za-z0-9_-]{10,}`` stopped at the first dot and left the
+        remainder of the key in plaintext (#113901). Reproduces the issue's exact repro: a
+        random YAML file read through ``cat``, which stays on the code_file path (no
+        ENV/YAML-assignment pass) so only the vendor-prefix pass can catch the key.
+        """
+        from agent.redact import redact_terminal_output
+
+        key = "sk-sp-ABCDEFGH1234567890.abcdefgh1234567890_XYZ-0987654321"
+        out = f"a:\n  api_key: {key}\n"
+        result = redact_terminal_output(out, command="cat secrets.yaml")
+        assert key not in result
+        assert "abcdefgh1234567890_XYZ-0987654321" not in result
+
 
 
 
