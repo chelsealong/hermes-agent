@@ -123,23 +123,6 @@ class TestCronjobRunExecutesImmediately:
         assert res["success"] is False
         m_run.assert_not_called()
 
-    def test_execute_job_now_reaps_stale_executions_before_claiming(self):
-        """#113923: `_try_dispatch_background_run` only reaps a stale claim left by a dead
-        prior owner when `async_delivery_supported()` is true. A one-shot `hermes cron run`
-        process deliberately forces that check false (to guarantee synchronous execution) and
-        so never reaches that reap call — it fell straight into `_execute_job_now`'s own claim
-        attempt with the stale claim still in place, blocking every retrigger for the 300s TTL.
-        `_execute_job_now` must reap before claiming, independent of that dispatch path."""
-        order = []
-        with patch("tools.cronjob_tools._reap_stale_executions",
-                   side_effect=lambda name: order.append(("reap", name))) as m_reap, \
-             patch("tools.cronjob_tools.claim_job_for_fire",
-                   side_effect=lambda *a, **kw: order.append(("claim", a, kw)) or False):
-            res = _execute_job_now(dict(_JOB))
-        m_reap.assert_called_once_with(_JOB["name"])
-        assert [step[0] for step in order] == ["reap", "claim"]
-        assert res["claimed"] is False
-
     def test_execute_job_now_passes_live_gateway_context_to_delivery(self):
         """Manual runs must deliver on the live gateway adapter's owning loop."""
         adapters = {"matrix": object()}

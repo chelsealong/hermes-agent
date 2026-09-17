@@ -209,14 +209,7 @@ def _claim_for_manual_run(job_id: str, log_label: str):
 def _execute_job_now(job: Dict[str, Any], extra_prompt: Optional[str] = None) -> Dict[str, Any]:
     """Run a job now, outside the scheduler tick: claim via ``claim_job_for_fire`` (the ticker's
     CAS, so a concurrent tick cannot double-fire and next_run_at advances), then fire through
-    the shared ``run_one_job`` body. Returns {"claimed", "success", "error"}.
-
-    Reaps stale claims first (#113923): ``_try_dispatch_background_run`` only reaps when
-    ``async_delivery_supported()`` is true, so a genuinely one-shot invocation (e.g. a `hermes
-    cron run` process, which forces that check false to guarantee synchronous execution) never
-    reaches that call and would otherwise be blocked by its own prior stale claim for the
-    remainder of the TTL."""
-    _reap_stale_executions(str(job.get("name") or job["id"]))
+    the shared ``run_one_job`` body. Returns {"claimed", "success", "error"}."""
     claimed_job, err = _claim_for_manual_run(job["id"], "immediate run")
     return err if err is not None else _run_claimed_job(claimed_job, extra_prompt=extra_prompt)
 
