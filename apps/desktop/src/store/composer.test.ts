@@ -8,6 +8,7 @@ import {
   type ComposerAttachment,
   createComposerAttachmentOccurrenceId,
   createComposerAttachmentScope,
+  migrateNewSessionDraft,
   migrateSessionDraft,
   removeComposerAttachment,
   requestVoiceConversationStart,
@@ -290,5 +291,27 @@ describe('session drafts', () => {
 
     clearSessionDraft('from')
     clearSessionDraft('to')
+  })
+
+  it('migrates the pre-session bucket onto a chat first-ever session id', () => {
+    stashSessionDraft(null, 'typed before this chat had a session id', [])
+
+    expect(migrateNewSessionDraft('session-new')).toBe(true)
+    expect(takeSessionDraft('session-new').text).toBe('typed before this chat had a session id')
+    expect(takeSessionDraft(null).text).toBe('')
+
+    clearSessionDraft('session-new')
+  })
+
+  it('does not clobber an existing draft already stashed on the new session id', () => {
+    stashSessionDraft(null, 'typed before this chat had a session id', [])
+    stashSessionDraft('session-new', 'already typed there', [])
+
+    expect(migrateNewSessionDraft('session-new')).toBe(false)
+    expect(takeSessionDraft('session-new').text).toBe('already typed there')
+    expect(takeSessionDraft(null).text).toBe('typed before this chat had a session id')
+
+    clearSessionDraft('session-new')
+    clearSessionDraft(null)
   })
 })

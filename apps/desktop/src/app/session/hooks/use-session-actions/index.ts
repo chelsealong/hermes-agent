@@ -27,7 +27,7 @@ import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { recoverInFlightTurnJournal } from '@/lib/inflight-turn-journal'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { $clarifyRequests } from '@/store/clarify'
-import { migrateSessionDraft } from '@/store/composer'
+import { migrateNewSessionDraft, migrateSessionDraft } from '@/store/composer'
 import { clearQueuedPrompts, migrateQueuedPrompts } from '@/store/composer-queue'
 import { $connectionRequests } from '@/store/connection-request'
 import {
@@ -724,6 +724,16 @@ export function useSessionActions({
         setNewChatWorkspaceTarget(undefined)
         setActiveSessionId(created.session_id)
         setSelectedStoredSessionId(stored)
+
+        // This chat had no session id until the create above landed, so
+        // anything typed while it was pre-session stashed under the shared
+        // '__new__' bucket (composer.ts's NEW_SESSION_DRAFT_KEY) — migrate it
+        // onto the id this chat now owns, or it's only reachable under a key
+        // nothing resolves to anymore (#114122).
+        if (stored) {
+          migrateNewSessionDraft(stored)
+        }
+
         setSessionStartedAt(Date.now())
         const yoloArmed = $yoloActive.get()
         const runtimeInfo = applyRuntimeInfo(created.info)

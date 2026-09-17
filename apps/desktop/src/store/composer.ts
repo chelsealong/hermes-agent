@@ -436,6 +436,21 @@ export function migrateSessionDraft(fromKey: string | null | undefined, toKey: s
   return true
 }
 
+/**
+ * Move whatever was typed before this chat had a session id onto its new one.
+ *
+ * A composer with no scope yet stashes under the shared pre-session bucket
+ * (`draftKey(null) === NEW_SESSION_DRAFT_KEY`). Once a session id is minted for
+ * that same chat, the draft must follow it or the text is only reachable under
+ * a key nothing resolves to anymore. Callers must only invoke this for a session
+ * that genuinely had no prior id — see `createBackendSessionForSend`, the sole
+ * caller, which proves that by construction (its drift check aborts before this
+ * point on any navigation to an unrelated chat).
+ */
+export function migrateNewSessionDraft(toKey: string | null | undefined): boolean {
+  return migrateSessionDraft(NEW_SESSION_DRAFT_KEY, toKey)
+}
+
 export function setComposerDraft(value: string) {
   $composerDraft.set(value)
 }
