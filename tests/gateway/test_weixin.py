@@ -593,6 +593,29 @@ class TestWeixinVoiceSending:
         assert voice_item["bits_per_sample"] == 16
 
 
+class TestWeixinMediaRouterKwargCompat:
+    """gateway/platforms/base.py's media dispatch loop calls send_voice/send_video with
+    an is_voice= kwarg (and send_voice with additional reply_to/metadata kwargs). Without
+    **kwargs on WeixinAdapter's overrides, that call raised TypeError before any upload
+    was attempted, so audio/video MEDIA: attachments were silently dropped."""
+
+    def test_send_voice_accepts_router_is_voice_kwarg(self):
+        adapter = _make_adapter()
+        result = asyncio.run(adapter.send_voice(
+            chat_id="wxid_test123", audio_path="/tmp/x.ogg", metadata=None, is_voice=True,
+        ))
+        assert result.success is False
+        assert result.error == "Not connected"
+
+    def test_send_video_accepts_router_is_voice_kwarg(self):
+        adapter = _make_adapter()
+        result = asyncio.run(adapter.send_video(
+            chat_id="wxid_test123", video_path="/tmp/x.mp4", metadata=None, is_voice=False,
+        ))
+        assert result.success is False
+        assert result.error == "Not connected"
+
+
 class TestIsStaleSessionRet:
     """Regression test for #17228: distinguish stale-session ret=-2 from rate-limit ret=-2."""
 
