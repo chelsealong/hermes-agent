@@ -35,6 +35,15 @@ class KeylessMCPError(RuntimeError):
 
 _RATE_LIMIT_MARKERS = ("rate limit", "rate-limit", "ratelimit", "too many requests", "429", "quota exceeded", "slow down")
 
+# Vendor-availability failures (IP/auth policy rejections, server-side errors): the same
+# request will likely succeed against a healthy vendor, so these are ring-advanceable too.
+# Request-shaped errors (400/422, malformed query) stay excluded — they fail everywhere.
+_VENDOR_UNAVAILABLE_MARKERS = (
+    "401", "402", "403", "unauthorized", "forbidden", "payment required",
+    "500", "502", "503", "504", "server error", "bad gateway", "service unavailable", "gateway timeout",
+    "suspicious", "blocked",
+)
+
 # vendor -> (display label, env key, signup URL) for the standard failure hint.
 _VENDOR_HINTS = {
     "exa": ("Exa", "EXA_API_KEY", "https://exa.ai"), "parallel": ("Parallel", "PARALLEL_API_KEY", "https://parallel.ai"),
@@ -45,6 +54,14 @@ _VENDOR_HINTS = {
 def _is_rate_limitish(message: str) -> bool:
     """Heuristic: does an error message look like free-tier throttling?"""
     return any(marker in (message or "").lower() for marker in _RATE_LIMIT_MARKERS)
+
+
+def _is_failover_eligible(message: str) -> bool:
+    """Heuristic: should the ring try the next vendor for this error? True for rate-limit
+    wording and for vendor-availability failures (401/402/403/5xx, IP-policy block
+    language); false for request-shaped errors, which fail identically on every vendor."""
+    lowered = (message or "").lower()
+    return _is_rate_limitish(message) or any(marker in lowered for marker in _VENDOR_UNAVAILABLE_MARKERS)
 
 
 def _fail_msg(vendor: str, kind: str, exc: Any, *, other_backends: bool = True) -> str:
@@ -374,12 +391,12 @@ def _walk_ring(name: str, kind: str, call, throttled) -> tuple:
 
 
 def search_with_failover(name: str, query: str, limit: int = 5) -> Dict[str, Any]:
-    """Rate-limit-shaped errors advance to the next vendor, other errors stop the walk
-    (a malformed query fails everywhere). ``data.served_by`` is set when the serving
-    vendor differs from *name*."""
+    """Rate-limit-shaped and vendor-availability errors (401/402/403/5xx, IP-policy blocks)
+    advance to the next vendor, other errors stop the walk (a malformed query fails
+    everywhere). ``data.served_by`` is set when the serving vendor differs from *name*."""
 
     def _throttled(result: Dict[str, Any]) -> bool:
-        return not result.get("success") and _is_rate_limitish(result.get("error", ""))
+        return not result.get("success") and _is_failover_eligible(result.get("error", ""))
 
     order, vendor, result, exhausted = _walk_ring(name, "search", lambda v: _KEYLESS_SEARCHERS[v](query, limit), _throttled)
     if not order:
@@ -392,11 +409,11 @@ def search_with_failover(name: str, query: str, limit: int = 5) -> Dict[str, Any
 
 
 def extract_with_failover(name: str, urls: List[str]) -> List[Dict[str, Any]]:
-    """Fails over only when EVERY url in a batch is rate-limit-shaped (partial failures
-    are page problems, returned as-is)."""
+    """Fails over only when EVERY url in a batch is rate-limit-shaped or vendor-unavailable
+    (partial failures are page problems, returned as-is)."""
 
     def _all_throttled(results: List[Dict[str, Any]]) -> bool:
-        return bool(results) and all(r.get("error", "") and _is_rate_limitish(r.get("error", "")) for r in results)
+        return bool(results) and all(r.get("error", "") and _is_failover_eligible(r.get("error", "")) for r in results)
 
     order, _vendor, results, _exhausted = _walk_ring(name, "extract", lambda v: _KEYLESS_EXTRACTORS[v](list(urls)), _all_throttled)
     if not order:
