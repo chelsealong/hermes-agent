@@ -416,6 +416,19 @@ describe('AppContextMenu', () => {
     expect(await screen.findByText('Settings')).toBeTruthy()
   })
 
+  it('places Import session right after New session on bare chrome', async () => {
+    installBridge()
+    mountMenu()
+    const host = attach('<div><p>plain chrome</p></div>')
+
+    fireEvent.contextMenu(host.querySelector('p')!)
+
+    const newSessionItem = (await screen.findByText('New session')).closest('[data-slot="dropdown-menu-item"]')!
+    const importItem = screen.getByText('Import session').closest('[data-slot="dropdown-menu-item"]')!
+
+    expect(importItem.previousElementSibling).toBe(newSessionItem)
+  })
+
   it('skips plain right-clicks inside a skip-marked surface, but not links in it', async () => {
     installBridge()
     mountMenu()

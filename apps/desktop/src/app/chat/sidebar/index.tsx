@@ -8,7 +8,7 @@ import { useLocation } from 'react-router'
 import { PlatformAvatar } from '@/app/messaging/platform-icon'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
 import { KbdGroup } from '@/components/ui/kbd'
 import { SearchField } from '@/components/ui/search-field'
@@ -138,6 +138,7 @@ import {
   ARTIFACTS_ROUTE,
   CRON_ROUTE,
   MESSAGING_ROUTE,
+  SESSION_IMPORT_ROUTE,
   SIDEBAR_NAV_AREA,
   type SidebarNavContribution,
   SKILLS_ROUTE
@@ -265,6 +266,16 @@ const HEADER_ACTION_BTN =
 // a hover-revealed action.
 const HEADER_NAV_BTN =
   'text-(--ui-text-tertiary) opacity-70 transition-opacity hover:bg-(--ui-control-hover-background) hover:text-foreground hover:opacity-100 focus-visible:opacity-100'
+
+// A synthetic nav item for the flat-list header's import action — onNavigate
+// only reads `.route` off it, the same path the (now-removed) sidebar nav row
+// used to take.
+const SESSION_IMPORT_NAV_ITEM: SidebarNavItem = {
+  icon: () => null,
+  id: 'session-import',
+  label: '',
+  route: SESSION_IMPORT_ROUTE
+}
 
 // FTS results cover sessions that aren't in the loaded page; synthesize a
 // minimal SessionInfo so they render in the same row component (resume works
@@ -1614,6 +1625,12 @@ export function ChatSidebar({
                               }
                             }}
                           />
+                          {isNewSession && (
+                            <ContextMenuItem onSelect={() => onNavigate(SESSION_IMPORT_NAV_ITEM)}>
+                              <Codicon name="cloud-download" size="0.875rem" />
+                              <span>{t.sessionImport.action}</span>
+                            </ContextMenuItem>
+                          )}
                         </ContextMenuContent>
                       </ContextMenu>
                     ) : (
@@ -1846,6 +1863,24 @@ export function ChatSidebar({
                         <div className="grid size-6 place-items-center">
                           <SidebarFilterMenu className={HEADER_NAV_BTN} />
                         </div>
+                        {sessionsMode === 'flat' && (
+                          <div className="grid size-6 place-items-center">
+                            <Tip label={t.sessionImport.action}>
+                              <Button
+                                aria-label={t.sessionImport.action}
+                                className={HEADER_NAV_BTN}
+                                onClick={event => {
+                                  event.stopPropagation()
+                                  onNavigate(SESSION_IMPORT_NAV_ITEM)
+                                }}
+                                size="icon-xs"
+                                variant="ghost"
+                              >
+                                <Codicon name="cloud-download" size="0.75rem" />
+                              </Button>
+                            </Tip>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>

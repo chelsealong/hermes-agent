@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { group, split } from '@/components/pane-shell/tree/model'
 import { $layoutTree, noteActiveTreeGroup } from '@/components/pane-shell/tree/store'
@@ -11,7 +11,7 @@ import { $selectedStoredSessionId, $sessions } from '@/store/session'
 import { $removedSessionIds } from '@/store/session-removal'
 import { makeSessionInfo } from '@/test/session-info'
 
-import { type AppView, ROUTES_AREA, SIDEBAR_NAV_AREA } from '../../routes'
+import { type AppView, ROUTES_AREA, SESSION_IMPORT_ROUTE, SIDEBAR_NAV_AREA } from '../../routes'
 
 import { ChatSidebar } from './index'
 
@@ -160,5 +160,64 @@ describe('ChatSidebar navigation activity', () => {
     expect(screen.queryByRole('button', { name: 'Kanban' })).toBeNull()
     expectOnlyCurrent(null)
     expectOnlySelectedSession(null)
+  })
+})
+
+describe('ChatSidebar session import discoverability', () => {
+  const onNavigate = vi.fn()
+
+  const renderWithOnNavigate = () =>
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <SidebarProvider>
+          <ChatSidebar
+            currentView="chat"
+            onArchiveSession={noop}
+            onBranchSession={noop}
+            onDeleteSession={noop}
+            onLoadMoreSessions={noop}
+            onManageCronJob={noop}
+            onNavigate={onNavigate}
+            onNewSessionInWorkspace={noop}
+            onNewSessionSplit={noop}
+            onResumeSession={noop}
+            onTriggerCronJob={noopAsync}
+          />
+        </SidebarProvider>
+      </MemoryRouter>
+    )
+
+  beforeEach(() => {
+    $sessions.set([])
+    $removedSessionIds.set(new Set())
+    onNavigate.mockClear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    $sessions.set([])
+    $removedSessionIds.set(new Set())
+  })
+
+  it('routes the flat-list header action to the session importer', () => {
+    renderWithOnNavigate()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import session' }))
+
+    expect(onNavigate).toHaveBeenCalledWith(expect.objectContaining({ route: SESSION_IMPORT_ROUTE }))
+  })
+
+  it('offers Import session in the New session row context menu, after Open in split', async () => {
+    renderWithOnNavigate()
+
+    fireEvent.contextMenu(screen.getByText('New session'))
+
+    const splitItem = await screen.findByRole('menuitem', { name: /Open in split/ })
+    const importItem = screen.getByRole('menuitem', { name: 'Import session' })
+
+    expect(importItem.compareDocumentPosition(splitItem) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+
+    fireEvent.click(importItem)
+    expect(onNavigate).toHaveBeenCalledWith(expect.objectContaining({ route: SESSION_IMPORT_ROUTE }))
   })
 })
