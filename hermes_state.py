@@ -1429,6 +1429,7 @@ class SessionDB(
             from hermes_state_registry import release
             release(self)
             return
+        self._read_budget.unregister(self)
         self._stop_token_writer()
         hook, self._token_atexit_hook = self._token_atexit_hook, None
         if hook is not None:

@@ -157,6 +157,13 @@ class _PathReadBudget:
         self._members: "weakref.WeakSet[SessionDB]" = weakref.WeakSet()
         self._duplicate_handles_warned = False
 
+    def unregister(self, db: "SessionDB") -> None:
+        """Drop a closed handle from the live count. Without this, a caller that
+        keeps its reference after close() (a completed one-shot, a test fixture)
+        stays in the WeakSet and is still counted as a live writer."""
+        with self._lock:
+            self._members.discard(db)
+
     def register(self, db: "SessionDB") -> None:
         with self._lock:
             self._members.add(db)

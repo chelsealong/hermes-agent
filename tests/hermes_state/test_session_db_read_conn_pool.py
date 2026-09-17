@@ -685,3 +685,25 @@ def test_read_only_handles_do_not_count_toward_the_duplicate_writer_warning(db, 
     finally:
         for d in extra:
             d.close()
+
+
+@pytest.mark.requires_wal
+def test_closed_handles_do_not_count_toward_the_duplicate_writer_warning(db, caplog):
+    """close() drains the connection, but a caller may keep its (now-closed) SessionDB
+    object referenced. A retained-but-closed handle no longer holds a writer connection
+    and must not count toward the warning (#113637)."""
+    import logging
+
+    from hermes_state import SessionDB
+    from hermes_state_readpool import _HANDLES_PER_PATH_WARN
+
+    closed = []
+    with caplog.at_level(logging.WARNING, logger="hermes_state"):
+        for _ in range(_HANDLES_PER_PATH_WARN + 1):
+            handle = SessionDB(db_path=db.db_path)
+            handle.close()
+            closed.append(handle)
+    assert all(handle._conn is None for handle in closed)
+    assert not any(
+        "live SessionDB handles on" in r.getMessage() for r in caplog.records
+    ), "retained closed handles were counted as live writers"
