@@ -976,6 +976,14 @@ class TestLaunchdSupervisedBackends:
             with open(path, "wb") as f:
                 plistlib.dump({"Label": label, "ProgramArguments": argv}, f)
         (agents / "broken.plist").write_bytes(b"not a plist")
+        # A hand-edited plist with a raw `&` in a <string> is not well-formed XML: plistlib.load()
+        # raises xml.parsers.expat.ExpatError, which is not a ValueError/InvalidFileException (#114142).
+        (agents / "malformed-xml.plist").write_bytes(
+            b'<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+            b"<key>Label</key><string>ai.hermes.bad</string>"
+            b"<key>ProgramArguments</key><array><string>hermes</string><string>&&</string></array>"
+            b"</dict></plist>\n"
+        )
 
         uid = 501
         probed: list[tuple[str, str]] = []
