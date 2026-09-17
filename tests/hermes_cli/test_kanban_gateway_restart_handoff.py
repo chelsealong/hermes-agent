@@ -130,6 +130,7 @@ def test_standalone_dispatcher_keeps_direct_worker_spawn(
     class FakeProc:
         pid = 4243
 
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: captured_cmd.extend(cmd) or FakeProc())
     monkeypatch.setattr("tools.process_registry._is_supervised_gateway_process", lambda: False)
     monkeypatch.setattr(
@@ -139,6 +140,57 @@ def test_standalone_dispatcher_keeps_direct_worker_spawn(
 
     assert kbd._default_spawn(task, str(workspace)) == 4243
     assert captured_cmd[:3] == ["hermes", "-p", "coder"]
+
+
+@pytest.mark.linux_only
+def test_oneshot_unit_dispatcher_worker_is_still_scoped(
+    worker_setup: tuple[Path, kb.Task], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#113612: a standalone dispatcher (``hermes kanban dispatch``) invoked
+    directly as the ``ExecStart`` of a ``Type=oneshot`` systemd unit is not
+    ``_is_supervised_gateway_process()`` — it is not the gateway at all — but
+    its worker still dies the instant the unit's cgroup is torn down at exit.
+    Kanban's ``require_restart_safe_scope=True`` contract must still isolate
+    the worker here, not only when the dispatcher happens to be the gateway.
+    """
+    workspace, task = worker_setup
+    captured_cmd: list[str] = []
+
+    class FakeProc:
+        pid = 4244
+
+    monkeypatch.setenv("INVOCATION_ID", "oneshot-dispatch-unit")
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: captured_cmd.extend(cmd) or FakeProc())
+    monkeypatch.setattr("tools.process_registry._is_supervised_gateway_process", lambda: False)
+    monkeypatch.setattr("tools.process_registry._systemd_run_user_scope_available", lambda: True)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/systemd-run")
+    monkeypatch.setattr("tools.process_registry._worker_memory_max_bytes", lambda: 536_870_912)
+
+    assert kbd._default_spawn(task, str(workspace)) == 4244
+    assert captured_cmd[:4] == ["/usr/bin/systemd-run", "--user", "--scope", "--quiet"]
+    separator = captured_cmd.index("--")
+    assert captured_cmd[separator + 1 : separator + 4] == ["hermes", "-p", "coder"]
+
+
+@pytest.mark.linux_only
+def test_oneshot_unit_dispatcher_fails_closed_without_scope(
+    worker_setup: tuple[Path, kb.Task], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same non-gateway ``Type=oneshot`` topology as above, but no user scope
+    can be created: the worker must NOT be spawned unmanaged into a cgroup
+    that is about to be torn down (#113612's silent-death mechanism) — it
+    should fail closed like the managed-gateway case does."""
+    workspace, task = worker_setup
+    popen_calls: list[list[str]] = []
+
+    monkeypatch.setenv("INVOCATION_ID", "oneshot-dispatch-unit")
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: popen_calls.append(list(cmd)))
+    monkeypatch.setattr("tools.process_registry._is_supervised_gateway_process", lambda: False)
+    monkeypatch.setattr("tools.process_registry._systemd_run_user_scope_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="restart-safe systemd scope"):
+        kbd._default_spawn(task, str(workspace))
+    assert popen_calls == []
 
 
 @pytest.mark.linux_only

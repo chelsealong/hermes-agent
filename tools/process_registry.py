@@ -349,19 +349,30 @@ def scoped_spawn_lost_user_bus(spawn_env: Dict[str, str]) -> bool:
 def restart_safe_gateway_child_argv(
     command: List[str], *, unit_suffix: str, require_restart_safe_scope: bool,
 ) -> GatewayChildDispatch:
-    """Place a managed-systemd gateway child outside the gateway cgroup.
+    """Place a managed-systemd child outside a unit's cgroup before it tears down.
 
-    A systemd-supervised gateway restart kills every process in the service
-    cgroup, so children that must survive it run in a transient user scope.
-    Hosts with no user systemd session (containers, LXCs without linger) cannot
-    create one; hard-failing there is a silent cron outage, so callers state the
-    policy: ``require_restart_safe_scope=True`` raises (kanban's long-lived
-    workers), ``False`` degrades to a direct external subprocess with a
-    once-per-process warning (cron, behind ``cron.require_restart_safe_scope``).
+    A systemd-supervised gateway restart — or, just as fatally, a ``Type=oneshot``
+    unit's own exit — kills every process left in the service cgroup, so children
+    that must survive it run in a transient user scope. Hosts with no user systemd
+    session (containers, LXCs without linger) cannot create one; hard-failing there
+    is a silent cron outage, so callers state the policy: ``require_restart_safe_scope=True``
+    raises (kanban's long-lived workers), ``False`` degrades to a direct external
+    subprocess with a once-per-process warning (cron, behind ``cron.require_restart_safe_scope``).
+
+    Outside a systemd unit altogether, or under one that a caller has not asked to be
+    guaranteed safe from, the topology is left alone: not every systemd-launched
+    process risks imminent teardown, and probing costs a subprocess. But a caller with
+    ``require_restart_safe_scope=True`` is stating it cannot tell the two cases apart
+    from here (#113612 — a standalone Kanban dispatcher invoked directly by a
+    ``Type=oneshot`` unit is not "the gateway" yet dies with it just the same), so that
+    policy is honoured under any systemd unit, not only when this process is the
+    supervised gateway itself.
     """
     if not _IS_LINUX:
         return GatewayChildDispatch("in_process", command)
-    if not _is_supervised_gateway_process() or not os.environ.get("INVOCATION_ID"):
+    if not os.environ.get("INVOCATION_ID"):
+        return GatewayChildDispatch("in_process", command)
+    if not _is_supervised_gateway_process() and not require_restart_safe_scope:
         return GatewayChildDispatch("in_process", command)
 
     def _degrade(detail: str) -> GatewayChildDispatch:
