@@ -968,3 +968,27 @@ class TestShippedCatalog:
                     )
 
         assert not problems, "unpinned catalog entries:\n" + "\n".join(problems)
+
+    def test_no_retired_mcp_endpoints(self, monkeypatch):
+        """Contract: shipped manifests must not point at endpoints vendors
+        have shut down.
+
+        Regression for #113907 — the Asana catalog entry kept pointing at
+        the retired V1 ``/sse`` endpoint after Asana shut it down in favor
+        of the V2 Streamable HTTP endpoint at ``/v2/mcp``.
+        """
+        monkeypatch.delenv("HERMES_OPTIONAL_MCPS", raising=False)
+        from hermes_cli.mcp_catalog import _catalog_root, _parse_manifest
+
+        root = _catalog_root()
+        if not root.exists():
+            pytest.skip("optional-mcps/ not present in this checkout")
+
+        retired_urls = {"https://mcp.asana.com/sse"}
+        problems = []
+        for m in root.glob("*/manifest.yaml"):
+            entry = _parse_manifest(m)
+            if entry.transport.type == "http" and entry.transport.url in retired_urls:
+                problems.append(f"{entry.name}: transport.url {entry.transport.url!r} is retired")
+
+        assert not problems, "\n".join(problems)

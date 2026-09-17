@@ -8,12 +8,14 @@ description: >-
 source: https://developers.asana.com/docs/using-asanas-mcp-server
 
 # Official vendor-hosted remote MCP (URL-only — Hermes never spawns a local
-# process for this entry). Native OAuth 2.1 + Dynamic Client Registration;
-# Hermes's MCP client + mcp_oauth_manager handle discovery, PKCE, token
-# exchange, and refresh.
+# process for this entry). The V1 endpoint (/sse) shut down 2026-08-05;
+# V2 is Streamable HTTP and does NOT support Dynamic Client Registration —
+# Asana requires a pre-registered OAuth app (issue #113907). Hermes's MCP
+# client + mcp_oauth_manager still handle PKCE, token exchange, and refresh
+# once the user supplies a static client_id/client_secret.
 transport:
   type: http
-  url: https://mcp.asana.com/sse
+  url: https://mcp.asana.com/v2/mcp
 
 auth:
   type: oauth
@@ -26,6 +28,10 @@ suggest:
     - asana.com
 
 post_install: |
-  On first connection Hermes opens a browser to authorize with
-  Asana (or run `hermes mcp login asana`). Approve access,
-  then restart the session so tools load.
+  Asana V2 has no Dynamic Client Registration: create an Asana MCP app in
+  the Asana developer console first, register the callback Hermes will use,
+  then set oauth.client_id/client_secret for this server (config.yaml +
+  .env — never commit secrets). See the pre-registered-client walkthrough
+  in the OAuth over SSH / Remote Hosts guide. Then run
+  `hermes mcp login asana`, approve access, and restart the session so
+  tools load.
