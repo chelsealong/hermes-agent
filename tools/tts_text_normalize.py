@@ -56,8 +56,10 @@ _VARIATION_SELECTOR_RE = re.compile("[︎️]")
 # (e.g. "嗯声") are left alone. See #114114.
 _CJK_FILLER_RE = re.compile(r"(?<![一-鿿])[嗯哼]+(?![一-鿿])")
 # A filler sitting between two pause marks ("，嗯，") would otherwise leave both behind
-# ("，，"); keep only the trailing mark.
-_CJK_FILLER_BETWEEN_PAUSES_RE = re.compile(r"[，。！？；：,.!?;:][嗯哼]+(?P<trail>[，。！？；：,.!?;:])")
+# ("，，"); keep only the trailing mark. The repeated group consumes a whole chain of
+# these ("，嗯，嗯，") in one match, so a middle pause shared between two filler runs
+# isn't left stranded the way two independent, non-overlapping matches would leave it.
+_CJK_FILLER_BETWEEN_PAUSES_RE = re.compile(r"[，。！？；：,.!?;:](?:[嗯哼]+[，。！？；：,.!?;:])+")
 
 
 def strip_markdown_for_tts(text: str) -> str:
@@ -90,7 +92,7 @@ def strip_cjk_filler_interjections(text: str) -> str:
     characters inside a real word (e.g. ``嗯声``)."""
     if not text:
         return ""
-    text = _CJK_FILLER_BETWEEN_PAUSES_RE.sub(r"\g<trail>", text)
+    text = _CJK_FILLER_BETWEEN_PAUSES_RE.sub(lambda m: m.group()[-1], text)
     return _CJK_FILLER_RE.sub("", text)
 
 

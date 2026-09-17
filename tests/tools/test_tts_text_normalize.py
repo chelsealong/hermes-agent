@@ -56,6 +56,14 @@ def test_prepare_spoken_text_strips_standalone_cjk_filler_interjections():
     assert "哼" not in prepare_spoken_text("今天天气不错，哼。")
     # A filler between two pause marks leaves one pause behind, not a doubled one.
     assert prepare_spoken_text("这样吧，嗯，我们就这么定了。") == "这样吧，我们就这么定了。"
+    # A chain of two fillers sharing a middle pause ("，嗯，嗯，") still collapses to a
+    # single trailing pause; two independent, non-overlapping matches would otherwise
+    # strand the shared middle pause and leave it doubled.
+    assert prepare_spoken_text("这样吧，嗯，嗯，我们就这么定了。") == "这样吧，我们就这么定了。"
+    # A filler that opens the string (nothing precedes it) is not "between" two pauses,
+    # so only the trailing pause it shares with the next filler is collapsed away; this
+    # matches how a single leading filler ("嗯，...") already behaves.
+    assert prepare_spoken_text("嗯，嗯，好的。") == "，好的。"
     # The same characters inside a real word are speech content, not filler.
     assert "嗯声" in prepare_spoken_text("嗯声很大，请注意。")
     assert "哼唧" in prepare_spoken_text("哼唧了半天也没说清楚。")
