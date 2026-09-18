@@ -3,8 +3,6 @@
 import asyncio
 import threading
 
-import pytest
-
 
 def test_dashboard_flow_exposes_authorization_url_and_accepts_callback():
     from tools.mcp_dashboard_oauth import DashboardOAuthFlow
@@ -48,24 +46,51 @@ def test_dashboard_flow_preserves_rfc9207_iss():
     assert asyncio.run(flow.wait_for_callback()) == ("code-1", "s1", "https://mcp.cloudflare.com")
 
 
-def test_wait_for_callback_reports_mark_error_reason():
-    """A worker that fails before the browser callback arrives (e.g. discovery or
-    client-registration errors) must surface via wait_for_callback(), not the
-    generic 'did not include an authorization code' message (#114727)."""
+def test_cancel_while_worker_awaits_callback_surfaces_real_reason():
+    """Mirrors ``DELETE /api/mcp/oauth/flows/{flow_id}`` (hermes_cli/web_routers/mcp.py),
+    which calls ``mark_error("Cancelled by user")`` to unblock a worker that is genuinely
+    still parked in ``wait_for_callback()`` because ``publish_authorization_url()`` already
+    succeeded (i.e. the SDK's callback_handler is awaiting the browser redirect). The real
+    reason must survive instead of being replaced by the generic 'did not include an
+    authorization code' message (#114727).
+
+    Note: a worker that fails *before* the redirect (discovery/DCR errors) never reaches
+    wait_for_callback() at all — the SDK's OAuthClientProvider.async_auth_flow raises out of
+    those steps directly, and the caller's `except Exception: flow.mark_error(...)` only
+    populates `self.error`, which was already surfaced correctly pre-patch via
+    wait_for_authorization_url() and snapshot()."""
     from tools.mcp_dashboard_oauth import DashboardOAuthFlow
 
     flow = DashboardOAuthFlow(
-        flow_id="flow-error",
+        flow_id="flow-cancel",
         server_name="asana",
         profile=None,
         hermes_home="/tmp/hermes-test",
-        redirect_uri="https://agent.example/mcp/oauth/callback/flow-error",
+        redirect_uri="https://agent.example/mcp/oauth/callback/flow-cancel",
     )
+    asyncio.run(flow.publish_authorization_url("https://idp.example/authorize?state=s1"))
 
-    flow.mark_error("dynamic client registration failed: 400 Bad Request")
+    entered_wait = threading.Event()
+    outcome: dict[str, BaseException] = {}
 
-    with pytest.raises(RuntimeError, match="dynamic client registration failed"):
-        asyncio.run(flow.wait_for_callback())
+    def worker() -> None:
+        async def run() -> None:
+            entered_wait.set()
+            await flow.wait_for_callback(timeout=5)
+
+        try:
+            asyncio.run(run())
+        except Exception as exc:  # captured for the assertion below
+            outcome["exc"] = exc
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert entered_wait.wait(timeout=5)
+    flow.mark_error("Cancelled by user")
+    thread.join(timeout=5)
+
+    assert isinstance(outcome.get("exc"), RuntimeError)
+    assert "Cancelled by user" in str(outcome["exc"])
 
 
 def test_dashboard_flow_accepts_only_one_concurrent_callback():
