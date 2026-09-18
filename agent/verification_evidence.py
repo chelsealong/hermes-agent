@@ -27,6 +27,7 @@ _AD_HOC_SCRIPT_NAME_PREFIXES = ("hermes-verify-", "hermes-ad-hoc-")
 _VERIFY_SCHEMA_VERSION = 1
 
 _INTERPRETERS = {"python", "python3", "node", "bash", "sh", "ruby", "perl"}
+_INTERPRETER_VERSION_RE = re.compile(r"^(.+?)\d+(?:\.\d+)*$")
 _TARGET_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".go", ".java")
 _TARGET_PREFIXES = ("test_", "tests", "spec", "__tests__")
 # Ordered: first matching keyword group wins; "check" only counts when the
@@ -230,9 +231,19 @@ def _canonical_tokens(canonical: str) -> list[str]:
         return []
 
 
+def _is_interpreter(token: str) -> bool:
+    """Whether ``token`` names one of ``_INTERPRETERS``, allowing an absolute
+    or versioned spelling (``python3.12``, ``/usr/bin/python3.12``)."""
+    name = Path(token).name
+    if name in _INTERPRETERS:
+        return True
+    match = _INTERPRETER_VERSION_RE.match(name)
+    return bool(match) and match.group(1) in _INTERPRETERS
+
+
 def _strip_command_prefix(tokens: list[str]) -> list[str]:
     """Remove harmless command prefixes (env, VAR=x, command/time/noglob)."""
-    i = 1 if tokens and tokens[0] == "env" else 0
+    i = 1 if tokens and Path(tokens[0]).name == "env" else 0
     while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
         i += 1
     while i < len(tokens) and tokens[i] in {"command", "time", "noglob"}:
@@ -309,7 +320,7 @@ def _ad_hoc_script_args(tokens: list[str], root: str | Path | None) -> Optional[
     command = candidate_tokens[0]
     if _is_temp_script_path(command, root):
         return candidate_tokens[1:]
-    if command in _INTERPRETERS:
+    if _is_interpreter(command):
         # Skip interpreter flags; the first positional must be the script.
         for idx, token in enumerate(candidate_tokens[1:], start=1):
             if _is_temp_script_path(token, root):

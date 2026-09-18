@@ -253,6 +253,34 @@ def test_temp_script_records_ad_hoc_evidence_without_canonical_suite(tmp_path, m
     assert evidence.status == "passed"
 
 
+@pytest.mark.parametrize(
+    "interpreter",
+    ["python3", "python3.12", "/usr/bin/python3.12", "/usr/bin/env python3"],
+)
+def test_versioned_absolute_and_env_prefixed_interpreters_record_ad_hoc_evidence(
+    tmp_path, monkeypatch, interpreter
+):
+    """A versioned (python3.12), absolute (/usr/bin/python3.12), or
+    env-prefixed (/usr/bin/env python3) interpreter is the same interpreter
+    as the bare ``python3`` spelling and must record the same evidence (#115075)."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    script = Path(tempfile.gettempdir()) / f"hermes-ad-hoc-{tmp_path.name}.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    try:
+        evidence = classify_verification_command(
+            f"{interpreter} {script}",
+            cwd=tmp_path,
+            session_id="s1",
+            exit_code=0,
+            output="ok",
+        )
+    finally:
+        script.unlink(missing_ok=True)
+
+    assert evidence is not None
+    assert evidence.kind == "ad_hoc"
+    assert evidence.status == "passed"
 
 
 
