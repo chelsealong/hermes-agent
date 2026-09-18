@@ -278,13 +278,26 @@ def _register_plugin_provider(pp: Any) -> None:
         PROVIDER_REGISTRY.setdefault(alias, pconfig)
 
 
-try:
-    from providers import list_providers as _list_providers_for_registry
-    for _pp in _list_providers_for_registry():
-        if _pp.name not in PROVIDER_REGISTRY:
-            _register_plugin_provider(_pp)
-except Exception:
-    pass
+def _seed_plugin_providers() -> None:
+    """Register every discoverable providers/ profile into PROVIDER_REGISTRY.
+
+    Idempotent (skips names already present) and safe to re-run. Provider discovery
+    (``providers._discover_providers``) latches its re-entrancy flag *before* its
+    filesystem steps run, so a module that imports ``hermes_cli.auth`` while discovery
+    is in progress — e.g. a bundled plugin pulling auth in at import time — seeds this
+    registry from a partial ``list_providers()`` snapshot and never sees profiles a
+    later discovery step registers. Re-running on demand (see ``resolve_provider``)
+    repairs that without depending on import order. See #114548."""
+    try:
+        from providers import list_providers as _list_providers_for_registry
+        for _pp in _list_providers_for_registry():
+            if _pp.name not in PROVIDER_REGISTRY:
+                _register_plugin_provider(_pp)
+    except Exception:
+        pass
+
+
+_seed_plugin_providers()
 
 
 def get_anthropic_key() -> str:
@@ -1347,6 +1360,15 @@ def resolve_provider(
     if normalized in ("openrouter", "custom") or normalized in PROVIDER_REGISTRY:
         return normalized
     if normalized != "auto":
+        # PROVIDER_REGISTRY may have been seeded from a partial provider-discovery
+        # snapshot at import time (a consumer that imports this module *during*
+        # discovery captures only the profiles registered so far), leaving an
+        # out-of-tree profile in providers._REGISTRY but absent here. Re-seed once
+        # and re-check before declaring the provider unknown — mirrors the fresh
+        # read _plugin_aliases() already does for aliases. See #114548.
+        _seed_plugin_providers()
+        if normalized in PROVIDER_REGISTRY:
+            return normalized
         hint = _get_config_hint_for_unknown_provider(normalized)
         tail = (f"\n\n{hint}" if hint else " Check 'hermes model' for available providers, "
                 "or run 'hermes doctor' to diagnose config issues.")
