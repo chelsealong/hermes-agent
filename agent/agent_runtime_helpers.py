@@ -2066,6 +2066,11 @@ def _update_switch_compressor(agent, custom_providers, effective_context_length,
             provider=agent.provider,
             api_mode=agent.api_mode,
         )
+        # A model switch changes the input the feasibility probe depends on (the main model's
+        # derived threshold). The probe is a one-shot latch per instance; without clearing it here
+        # a switch away from the model that was live at the FIRST compaction never gets re-checked
+        # against the auxiliary compression model's window for the rest of the instance's life (#114707).
+        agent._compression_feasibility_checked = False
     except Exception:
         _restore_switch_snapshot(agent, snapshot)
         raise

@@ -2371,11 +2371,15 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
     _coerce_threshold_tokens_cap = _coerce_max_tokens
 
     def _apply_threshold_tokens_cap(self) -> None:
-        """Clamp threshold_tokens to the configured cap (itself clamped to the context length)."""
+        """Clamp threshold_tokens to the configured cap (itself clamped to the context length) and
+        to the auxiliary-model ceiling, if one is installed (#114707)."""
         if self.threshold_tokens_cap is not None and self.threshold_tokens_cap > 0:
             _effective_cap = min(self.threshold_tokens_cap, self.context_length)
             if _effective_cap < self.threshold_tokens:
                 self.threshold_tokens = _effective_cap
+        aux_ceiling = getattr(self, "_aux_context_ceiling", None)
+        if aux_ceiling and aux_ceiling < self.threshold_tokens:
+            self.threshold_tokens = aux_ceiling
 
     @staticmethod
     def _effective_threshold_percent(context_length: int, threshold_percent: float) -> float:
@@ -2445,6 +2449,11 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         self.threshold_percent = self._base_threshold_percent
         # Effective trigger = min(ratio threshold, cap); re-applied in update_model().
         self.threshold_tokens_cap = self._coerce_threshold_tokens_cap(threshold_tokens_cap)
+        # Durable ceiling installed by check_compression_model_feasibility() when the auxiliary
+        # compression model's window is smaller than the derived trigger. Re-applied by
+        # _apply_threshold_tokens_cap() on every recomputation (incl. update_model()) so a
+        # main-model switch cannot silently hand the summarizer a region it cannot ingest (#114707).
+        self._aux_context_ceiling: int | None = None
         self.protect_first_n, self.protect_last_n = protect_first_n, protect_last_n
         # Proactive prune runs independently of the full-compression trigger. 0 = disabled.
         self.proactive_prune_tokens = int(proactive_prune_tokens or 0)

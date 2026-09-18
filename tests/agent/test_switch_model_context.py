@@ -133,6 +133,30 @@ def test_switch_model_without_config_context_length():
         assert call_kwargs.get("config_context_length") is None
 
 
+@patch("agent.model_metadata.get_model_context_length", return_value=900_000)
+def test_switch_model_reapplies_aux_context_ceiling(mock_ctx_len):
+    """A durable auxiliary-window clamp must survive a switch to a larger main model (#114707).
+
+    Without the fix, ``update_model()`` recomputes ``threshold_tokens`` purely from the new
+    model's window and silently drops any ceiling a prior feasibility probe installed, handing
+    the pinned auxiliary summarizer a transcript region it cannot ingest.
+    """
+    agent = _make_agent_with_compressor(config_context_length=None)
+    # Simulate a feasibility probe that already clamped the compressor to a small
+    # auxiliary compression model's window.
+    agent.context_compressor._aux_context_ceiling = 272_000
+    agent.context_compressor.threshold_tokens = 272_000
+    agent._compression_feasibility_checked = True
+
+    agent.switch_model("big-model", "openrouter", api_key="sk-new", base_url="https://openrouter.ai/api/v1")
+
+    assert agent.context_compressor.context_length == 900_000
+    assert agent.context_compressor.threshold_tokens == 272_000
+    # The one-shot feasibility latch must be cleared so the next compaction attempt
+    # re-validates against the (possibly still-small) auxiliary model.
+    assert agent._compression_feasibility_checked is False
+
+
 def test_switch_model_omitted_base_url_preserves_direct_openai_capability():
     """A same-provider switch resolves capabilities from the retained URL."""
     agent = _make_agent_with_compressor(config_context_length=None)

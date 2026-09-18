@@ -1789,6 +1789,10 @@ def _lower_threshold_to_aux_context(
     compressor = agent.context_compressor
     old_threshold = compressor.threshold_tokens
     new_threshold = compressor.threshold_tokens = aux_context
+    # Durable, unlike the plain assignment above: _apply_threshold_tokens_cap() re-applies this
+    # ceiling on every later recomputation (incl. update_model() on a model switch), so the clamp
+    # survives instead of being silently discarded (#114707).
+    compressor._aux_context_ceiling = aux_context
     summary_target_ratio = getattr(compressor, "summary_target_ratio", None)
     if getattr(compressor, "tail_mode", None) == "lean":
         # Keep the window-relative policy owned by the compressor property.
