@@ -1877,6 +1877,42 @@ class TestWebServerEndpoints:
         assert "2070" not in providers
 
 
+    def test_punctuated_provider_key_can_be_activated_and_deleted(self):
+        """A stored provider key with dots/colons (legacy or hand-migrated) must
+        activate/delete using the id the list route actually returned for it.
+
+        ``_custom_endpoint_id`` slugifies dots/colons to dashes, so re-slugifying
+        an id like ``local-127.0.0.1:8283`` on the way into ``activate``/``delete``
+        produces a different string than the stored key and 404s (#114572).
+        """
+        from hermes_cli.config import get_config_path, load_config
+
+        get_config_path().write_text(
+            "providers:\n"
+            "  local-127.0.0.1:8283:\n"
+            "    name: Local\n"
+            "    base_url: http://127.0.0.1:8283/v1\n"
+            "    model: local-model\n",
+            encoding="utf-8",
+        )
+
+        listed = self.client.get("/api/providers/custom-endpoints")
+        assert listed.status_code == 200
+        assert "local-127.0.0.1:8283" in [e["id"] for e in listed.json()["endpoints"]]
+
+        activate = self.client.post(
+            "/api/providers/custom-endpoints/local-127.0.0.1:8283/activate", json={}
+        )
+        assert activate.status_code == 200, activate.text
+        assert activate.json()["provider"] == "local-127.0.0.1:8283"
+
+        deleted = self.client.request(
+            "DELETE", "/api/providers/custom-endpoints/local-127.0.0.1:8283"
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert "local-127.0.0.1:8283" not in (load_config().get("providers") or {})
+
+
     def test_custom_endpoint_save_scopes_to_the_requested_profile(self):
         """``?profile=<name>`` must write into that profile's config.yaml.
 

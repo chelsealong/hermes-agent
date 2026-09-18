@@ -565,10 +565,16 @@ def activate_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
     ):
         with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:  # RMW span
             cfg = load_config()
-            provider_key = _custom_endpoint_id(endpoint_id)
-            _stored, entry = find_provider_entry(cfg.get("providers"), provider_key)
+            # Try the id as stored first (what /custom-endpoints returns as ``id``); only
+            # fall back to the slug for callers that still send an unslugged name. A stored
+            # key containing punctuation (e.g. "local-127.0.0.1:8283") would otherwise never
+            # match its own re-slugified id. See #114572.
+            provider_key, entry = find_provider_entry(cfg.get("providers"), endpoint_id)
+            if entry is None:
+                provider_key, entry = find_provider_entry(cfg.get("providers"), _custom_endpoint_id(endpoint_id))
             if entry is None:
                 raise HTTPException(status_code=404, detail="custom endpoint not found")
+            provider_key = coerce_provider_id(provider_key)
 
             models = _models_from_custom_endpoint_entry(entry)
             model = str(entry.get("model") or (models[0] if models else "")).strip()
@@ -606,14 +612,20 @@ def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
     ):
         with _config_profile_scope(profile), _CONFIG_MUTATION_LOCK:  # RMW span
             cfg = load_config()
-            provider_key = _custom_endpoint_id(endpoint_id)
             providers = cfg.get("providers")
-            stored_key, entry = find_provider_entry(providers, provider_key)
+            # Try the id as stored first (what /custom-endpoints returns as ``id``); only
+            # fall back to the slug for callers that still send an unslugged name. A stored
+            # key containing punctuation (e.g. "local-127.0.0.1:8283") would otherwise never
+            # match its own re-slugified id. See #114572.
+            stored_key, entry = find_provider_entry(providers, endpoint_id)
+            if entry is None:
+                stored_key, entry = find_provider_entry(providers, _custom_endpoint_id(endpoint_id))
             if entry is None or not isinstance(providers, dict):
                 raise HTTPException(status_code=404, detail="custom endpoint not found")
             providers.pop(stored_key, None)
             cfg["providers"] = providers
-            _detach_main_model_from_provider(cfg, provider_key)
+            provider_key = coerce_provider_id(stored_key)
+            _detach_main_model_from_provider(cfg, provider_key.lower())
             remove_env_value(custom_endpoint_key_env(provider_key))
             save_config(cfg)
             response = _custom_endpoint_response(cfg)
