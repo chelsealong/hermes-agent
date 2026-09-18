@@ -19,6 +19,17 @@ const ATTACHED_CONTEXT_MARKER_RE = /(?:^|\n)--- Attached Context ---\s*\n/
 const CONTEXT_WARNINGS_MARKER_RE = /(?:^|\n)--- Context Warnings ---[\s\S]*$/
 const CONTEXT_REF_RE = /@(file|folder|url|image|tool|terminal):(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|\S+)/g
 
+// The Discord adapter prepends a model-facing routing envelope to the per-turn
+// user text (gateway/run_inbound.py::_prepend_inbound_reply_context) and that
+// wrapped text is what gets persisted as the row's display content, so the
+// desktop transcript renders the envelope instead of what the user typed
+// (#114719). Strip it for display only. Match the exact routing phrase — not a
+// leading position — so it is removed even when the separate `[Replying to:
+// "…"]` quote pointer (built alongside it) precedes it, and never swallow that
+// pointer, which is authored context rather than routing instruction.
+const DISCORD_TRIGGERING_ENVELOPE_RE =
+  /\[Triggering message id: `[^`]+` — use as `message_id` for reply\/react\/pin via the discord tools\.\]\n*/
+
 /**
  * Reply text from a Responses-API `codex_message_items` sidecar (#68321), for rows
  * whose `content` persisted empty. `commentary` / `analysis` items are mid-turn
@@ -94,23 +105,28 @@ function displayContentForMessage(role: SessionMessage['role'], content: unknown
     return textContent
   }
 
+  // Drop the Discord triggering-message routing envelope before any further
+  // user-turn projection, so a Discord-origin row shows the authored text —
+  // this also heals rows persisted before the gateway-side fix (#71309/#71304).
+  const authoredText = textContent.replace(DISCORD_TRIGGERING_ENVELOPE_RE, '')
+
   // A `/skill` turn is stored expanded (the whole skill body). Current
   // gateways project it to the invocation before it ever reaches us; this is
   // the fallback for an older backend that still ships the raw payload.
-  const invocation = skillInvocationText(textContent)
+  const invocation = skillInvocationText(authoredText)
 
   if (invocation) {
     return invocation
   }
 
-  const marker = textContent.match(ATTACHED_CONTEXT_MARKER_RE)
+  const marker = authoredText.match(ATTACHED_CONTEXT_MARKER_RE)
 
   if (!marker || marker.index === undefined) {
-    return textContent.replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
+    return authoredText.replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
   }
 
-  const visibleText = textContent.slice(0, marker.index).replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
-  const attachedContext = textContent.slice(marker.index + marker[0].length)
+  const visibleText = authoredText.slice(0, marker.index).replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
+  const attachedContext = authoredText.slice(marker.index + marker[0].length)
   const refs = [...new Set(Array.from(attachedContext.matchAll(CONTEXT_REF_RE)).map(match => match[0]))]
 
   // The prose keeps the `@file:` token the user typed, so it already chips in
