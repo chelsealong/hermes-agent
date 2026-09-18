@@ -93,8 +93,8 @@ class DashboardOAuthFlow:
     async def wait_for_callback(self, timeout: float = 300.0) -> tuple[str, str | None, str | None]:
         if not await asyncio.to_thread(self._callback_ready.wait, timeout):
             raise TimeoutError("Timed out waiting for MCP OAuth callback")
-        if self._callback_error:
-            raise RuntimeError(f"OAuth authorization failed: {self._callback_error}")
+        if self._callback_error is not None:
+            raise RuntimeError(f"OAuth authorization failed: {self._callback_error or 'unknown error'}")
         if self._callback is None:
             raise RuntimeError("OAuth callback did not include an authorization code")
         return self._callback
@@ -112,6 +112,8 @@ class DashboardOAuthFlow:
                 return
             self.status = "error"
             self.error = error
+            if self._callback is None:
+                self._callback_error = error
             self._authorization_ready.set()
             self._callback_ready.set()
 

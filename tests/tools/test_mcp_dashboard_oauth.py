@@ -48,6 +48,26 @@ def test_dashboard_flow_preserves_rfc9207_iss():
     assert asyncio.run(flow.wait_for_callback()) == ("code-1", "s1", "https://mcp.cloudflare.com")
 
 
+def test_wait_for_callback_reports_mark_error_reason():
+    """A worker that fails before the browser callback arrives (e.g. discovery or
+    client-registration errors) must surface via wait_for_callback(), not the
+    generic 'did not include an authorization code' message (#114727)."""
+    from tools.mcp_dashboard_oauth import DashboardOAuthFlow
+
+    flow = DashboardOAuthFlow(
+        flow_id="flow-error",
+        server_name="asana",
+        profile=None,
+        hermes_home="/tmp/hermes-test",
+        redirect_uri="https://agent.example/mcp/oauth/callback/flow-error",
+    )
+
+    flow.mark_error("dynamic client registration failed: 400 Bad Request")
+
+    with pytest.raises(RuntimeError, match="dynamic client registration failed"):
+        asyncio.run(flow.wait_for_callback())
+
+
 def test_dashboard_flow_accepts_only_one_concurrent_callback():
     from tools.mcp_dashboard_oauth import DashboardOAuthFlow
 
