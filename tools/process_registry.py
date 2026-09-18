@@ -325,6 +325,26 @@ class GatewayChildDispatch(NamedTuple):
     argv: List[str]
 
 
+# Stable prefix of the ``RuntimeError`` raised by ``restart_safe_gateway_child_argv``
+# when ``require_restart_safe_scope=True`` and no user systemd scope can be created
+# (unreachable user D-Bus). It names the host remedy and is surfaced verbatim as the
+# failing job/run's error. Callers key off it to tell a host-level spawn refusal —
+# the workload never started — from a fault of the workload itself.
+RESTART_SAFE_SCOPE_UNAVAILABLE_PREFIX = (
+    "cannot create restart-safe systemd scope for gateway child: "
+)
+
+
+def is_restart_safe_scope_unavailable(error: object) -> bool:
+    """True when *error* is the host-level restart-safe-scope failure.
+
+    A spawn refused because the host has no reachable user D-Bus says nothing
+    about whatever was being spawned; callers use this to avoid charging the
+    failure to the workload's retry budget (see kanban #114720).
+    """
+    return RESTART_SAFE_SCOPE_UNAVAILABLE_PREFIX in str(error)
+
+
 def scoped_spawn_lost_user_bus(spawn_env: Dict[str, str]) -> bool:
     """After a ``systemd-run --user --scope`` wrapper exits before its child could start: True
     when the user bus is gone (:func:`systemd_user_bus_env` derives nothing), in which case the
@@ -367,7 +387,7 @@ def restart_safe_gateway_child_argv(
     def _degrade(detail: str) -> GatewayChildDispatch:
         if require_restart_safe_scope:
             # Stored as the cron execution's error and shown on the job row: name the remedy.
-            raise RuntimeError(f"cannot create restart-safe systemd scope for gateway child: {detail}")
+            raise RuntimeError(f"{RESTART_SAFE_SCOPE_UNAVAILABLE_PREFIX}{detail}")
         _warn_scope_degraded_once(detail)
         return GatewayChildDispatch("degraded", command)
 

@@ -1226,6 +1226,7 @@ def _record_task_failure(
     force_trip: bool = False,
     release_claim: bool = False,
     end_run: bool = False,
+    infrastructure: bool = False,
     event_payload_extra: Optional[dict] = None,
 ) -> bool:
     """Record a non-success outcome and maybe trip the circuit breaker; every
@@ -1239,6 +1240,14 @@ def _record_task_failure(
     ``blocked`` + ``gave_up``). Threshold: per-task ``max_retries`` >
     ``failure_limit`` > ``DEFAULT_FAILURE_LIMIT``. ``force_trip`` trips
     unconditionally (caller applied its own bounded-retry policy).
+
+    ``infrastructure=True``: the spawn was refused by the host (e.g. no reachable
+    user D-Bus, so no restart-safe systemd scope could be created), not by
+    anything about the card — the worker never started and the same card spawns
+    fine once the host recovers. Such a failure is stamped and self-reported
+    (``metadata["infrastructure"] = True``) but NEVER consumes
+    ``consecutive_failures`` and NEVER trips the breaker: the card is restored to
+    its source phase so a later tick retries. See #114720.
     """
     if failure_limit is None:
         failure_limit = DEFAULT_FAILURE_LIMIT
@@ -1255,7 +1264,9 @@ def _record_task_failure(
             if release_claim
             else ("review" if row["status"] == "review" else "ready")
         )
-        failures = int(row["consecutive_failures"]) + 1
+        # An infrastructure failure is neutral: it must not consume the budget,
+        # so the counter neither increments nor resets.
+        failures = int(row["consecutive_failures"]) + (0 if infrastructure else 1)
 
         # Per-task override wins over caller-supplied and default thresholds.
         task_override = _kb._row_get(row, "max_retries")
@@ -1264,7 +1275,7 @@ def _record_task_failure(
         else:
             effective_limit, limit_source = int(failure_limit), "dispatcher"
 
-        if not (force_trip or failures >= effective_limit):
+        if infrastructure or not (force_trip or failures >= effective_limit):
             if release_claim:
                 # Spawn path: restore the claimed source phase + clear claim.
                 conn.execute(
@@ -1282,15 +1293,20 @@ def _record_task_failure(
                 )
             # Timeout/crash path's caller already emitted its own event.
             if end_run:
+                metadata = {"failures": failures, "retry_status": retry_status}
+                event_payload = {
+                    "error": error, "failures": failures, "retry_status": retry_status,
+                }
+                if infrastructure:
+                    # Self-report so a sweep/board can tell a host blip from a
+                    # two-strike card failure and retry it (#114720).
+                    metadata["infrastructure"] = True
+                    event_payload["infrastructure"] = True
                 run_id = _kb._end_run(
                     conn, task_id, outcome=outcome, status=outcome, error=error,
-                    metadata={"failures": failures, "retry_status": retry_status},
+                    metadata=metadata,
                 )
-                _kb._append_event(
-                    conn, task_id, outcome,
-                    {"error": error, "failures": failures, "retry_status": retry_status},
-                    run_id=run_id,
-                )
+                _kb._append_event(conn, task_id, outcome, event_payload, run_id=run_id)
             return False
 
         # Spawn path (release_claim) is still running and also clears claim
@@ -1909,6 +1925,19 @@ def _dispatch_lane_task(
         _count_spawn(claimed.assignee)
         return True
     except Exception as exc:
+        from tools.process_registry import is_restart_safe_scope_unavailable
+
+        if is_restart_safe_scope_unavailable(exc):
+            # Host-level spawn refusal (no reachable user D-Bus → no restart-safe
+            # scope). The card never ran and spawns fine once the host recovers,
+            # so classify it, leave the retry budget untouched, and keep the card
+            # retryable rather than parking it as a bare ``blocked`` (#114720).
+            _record_task_failure(
+                conn, claimed.id, str(exc),
+                outcome="spawn_failed", failure_limit=failure_limit,
+                release_claim=True, end_run=True, infrastructure=True,
+            )
+            return False
         if _record_task_failure(
             conn, claimed.id, str(exc),
             outcome="spawn_failed", failure_limit=failure_limit, release_claim=True, end_run=True,
