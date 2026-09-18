@@ -111,6 +111,41 @@ def test_add_list_get_delete_attachment(kanban_home, tmp_path):
         conn.close()
 
 
+def test_delete_attachment_keeps_blob_while_another_row_references_it(kanban_home):
+    """Two rows can point at one ``stored_path`` (same filename attached twice
+    via a direct stored_path, e.g. two runs staging the same artifact).
+    Deleting one must not unlink the blob the other still references (#114564)."""
+    conn = kbc.connect()
+    try:
+        task_id = _make_task(conn)
+        dest_dir = kb.task_attachments_dir(task_id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        blob = dest_dir / "shared_deliverable.sh"
+        blob.write_bytes(b"#!/bin/sh\n")
+
+        first_id = kb.add_attachment(
+            conn, task_id, filename="shared_deliverable.sh", stored_path=str(blob),
+            content_type="text/plain", size=blob.stat().st_size, uploaded_by="tester",
+        )
+        second_id = kb.add_attachment(
+            conn, task_id, filename="shared_deliverable.sh", stored_path=str(blob),
+            content_type="text/plain", size=blob.stat().st_size, uploaded_by="tester",
+        )
+
+        removed = kb.delete_attachment(conn, first_id)
+        assert removed is not None and removed.id == first_id
+        assert blob.exists(), "blob still referenced by the surviving row must not be unlinked"
+
+        remaining = kb.list_attachments(conn, task_id)
+        assert [a.id for a in remaining] == [second_id]
+
+        removed = kb.delete_attachment(conn, second_id)
+        assert removed is not None and removed.id == second_id
+        assert not blob.exists(), "blob should be unlinked once the last referencing row is gone"
+    finally:
+        conn.close()
+
+
 def test_delete_attachment_missing_returns_none(kanban_home):
     conn = kbc.connect()
     try:

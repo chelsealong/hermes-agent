@@ -1874,17 +1874,25 @@ def get_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Att
 
 
 def delete_attachment(conn: sqlite3.Connection, attachment_id: int) -> Optional[Attachment]:
-    """Delete the row (source of truth) and best-effort its blob; None when no row matched."""
+    """Delete the row (source of truth) and, only when no remaining row still
+    references the same ``stored_path``, best-effort unlink the blob. Two rows
+    can share a blob (same filename attached twice via a direct ``stored_path``,
+    or a raw-SQL edit), so unlinking on every delete would destroy a file a
+    surviving row still points at. None when no row matched."""
     with write_txn(conn):
         att = get_attachment(conn, attachment_id)
         if att is None:
             return None
         conn.execute("DELETE FROM task_attachments WHERE id = ?", (attachment_id,))
+        still_referenced = conn.execute(
+            "SELECT 1 FROM task_attachments WHERE stored_path = ? LIMIT 1", (att.stored_path,),
+        ).fetchone() is not None
         _append_event(conn, att.task_id, "attachment_removed", {"filename": att.filename})
-    with contextlib.suppress(OSError):
-        p = Path(att.stored_path)
-        if p.is_file():
-            p.unlink()
+    if not still_referenced:
+        with contextlib.suppress(OSError):
+            p = Path(att.stored_path)
+            if p.is_file():
+                p.unlink()
     return att
 
 
