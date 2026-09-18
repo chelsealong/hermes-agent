@@ -290,6 +290,38 @@ class TestTrackForgetQuick:
         assert dg.forget(str(p)) == 1
         assert p.exists()  # forget does NOT delete the file
 
+    def test_quick_does_not_rmtree_protected_top_level_dir(self, _isolate_env):
+        """Regression test for #114552: a tracked *directory* entry rooted at a
+        protected top-level name (e.g. "cache") must never be rmtree'd, even
+        once it is old enough to pass the "temp" auto-delete age threshold.
+        _EMPTY_DIR_PROTECTED_TOP_LEVEL must be consulted by the tracked-item
+        delete path, not just the empty-dir sweep.
+        """
+        dg = _load_lib()
+        cache_dir = _isolate_env / "cache"
+        terminal_dir = cache_dir / "terminal"
+        terminal_dir.mkdir(parents=True)
+        (terminal_dir / "snapshot.sh").write_text("x")
+
+        from datetime import datetime, timezone, timedelta
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+
+        tracked_file = _isolate_env / "disk-cleanup" / "tracked.json"
+        tracked_file.parent.mkdir(parents=True, exist_ok=True)
+        tracked_file.write_text(json.dumps([{
+            "path": str(cache_dir),
+            "category": "temp",
+            "timestamp": old_ts,
+            "size": 0,
+        }]))
+
+        summary = dg.quick()
+        assert summary["deleted"] == 0, "protected top-level dir must not be deleted"
+        assert summary["errors"] == []
+        assert cache_dir.exists(), "$HERMES_HOME/cache must survive cleanup"
+        assert terminal_dir.exists(), "cache/terminal must survive cleanup"
+        assert (terminal_dir / "snapshot.sh").exists()
+
 
 class TestStatus:
     def test_empty_status(self, _isolate_env):

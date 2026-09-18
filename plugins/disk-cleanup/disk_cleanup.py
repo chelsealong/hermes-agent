@@ -190,6 +190,17 @@ def _prompt_group(item: Dict, age: int) -> Optional[str]:
     return "large" if item["size"] > _LARGE_FILE_BYTES else None
 
 
+def _is_protected_top_level_dir(p: Path) -> bool:
+    """True if *p* is a directory whose top-level component under HERMES_HOME is durable
+    (``_EMPTY_DIR_PROTECTED_TOP_LEVEL``). Otherwise that set is only consulted by the empty-dir
+    sweep, so a tracked directory entry (e.g. a misclassified top-level ``cache``) bypasses it
+    and gets rmtree'd by the path below (#114552)."""
+    with contextlib.suppress(ValueError, OSError):
+        rel = p.resolve().relative_to(get_hermes_home())
+        return bool(rel.parts) and rel.parts[0] in _EMPTY_DIR_PROTECTED_TOP_LEVEL
+    return False
+
+
 def _delete_item(item: Dict) -> Optional[str]:
     """Delete a tracked file/dir and audit-log it. Returns an error string on OSError, else None."""
     p = Path(item["path"])
@@ -239,6 +250,9 @@ def quick() -> Dict[str, Any]:
         # Hard safety net even if re-validation above somehow let it through.
         if _is_protected_cron_path(p):
             _log(f"SKIP protected cron path: {p}")
+            continue
+        if p.is_dir() and _is_protected_top_level_dir(p):
+            _log(f"SKIPPED: {p} (protected top-level dir)")
             continue
         if not _is_auto_delete(cat, age):
             new_tracked.append(item)
