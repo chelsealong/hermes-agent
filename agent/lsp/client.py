@@ -208,7 +208,11 @@ class LSPClient:
             self._state = "running"
         except Exception:
             self._state = "error"
-            await self._cleanup_process()
+            # The manager's per-call outer timeout (``_BackgroundLoop.run``) cancels this very
+            # coroutine on a slow spawn/initialize, and that cancellation must not truncate the
+            # SIGTERM->SIGKILL escalation below — shield it so a server that ignores SIGTERM still
+            # dies even though ``start()`` itself is being torn down (#116065).
+            await asyncio.shield(self._cleanup_process())
             raise
 
     async def _spawn(self) -> None:
