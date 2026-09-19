@@ -1118,6 +1118,11 @@ def _log_safe_path(path: str) -> str:
     return _LOG_UNSAFE_CHARS.sub("?", str(path))[:200]
 
 
+def _delivery_drop_reason(raw: str) -> str:
+    """Why a delivery path was rejected: not present, or present but policy-denied."""
+    return "not found on this host" if not _existing_regular_file(raw) else "denied by the delivery policy"
+
+
 def _validated_delivery_path(raw_path, session_key: str, label: str) -> Optional[str]:
     """``validate_media_delivery_path`` plus the shared "Skipping unsafe ..." warning. A path the
     host cannot see is retried against the active remote sandbox (ssh/modal/...; #466)."""
@@ -1129,8 +1134,7 @@ def _validated_delivery_path(raw_path, session_key: str, label: str) -> Optional
     if not safe_path:
         # Say WHY: a path that does not exist on the host is the common case (a model hallucinated or
         # a sandbox path failed to translate) and is not a security rejection.
-        reason = "not found on this host" if not _existing_regular_file(raw) else "denied by the delivery policy"
-        logger.warning("Skipping %s (%s): %s", label, reason, _log_safe_path(raw))
+        logger.warning("Skipping %s (%s): %s", label, _delivery_drop_reason(raw), _log_safe_path(raw))
     return safe_path
 
 
@@ -3072,11 +3076,19 @@ class BasePlatformAdapter(ABC):
         return validate_media_delivery_path(path, session_key=session_key)
 
     @staticmethod
-    def filter_media_delivery_paths(media_files, session_key: str = "") -> List[Tuple[str, bool]]:
-        """Drop unsafe MEDIA paths and normalize accepted paths."""
-        return [
-            (safe_path, bool(is_voice)) for media_path, is_voice in media_files or []
-            if (safe_path := _validated_delivery_path(media_path, session_key, "MEDIA directive path"))]
+    def filter_media_delivery_paths(media_files, session_key: str = "",
+                                    dropped: Optional[list] = None) -> List[Tuple[str, bool]]:
+        """Drop unsafe MEDIA paths and normalize accepted paths. When ``dropped`` is passed, each
+        rejected entry's raw path and reason are appended as ``(path, reason)`` (#115908 — callers
+        that need to tell a caller what got silently skipped)."""
+        kept = []
+        for media_path, is_voice in media_files or []:
+            safe_path = _validated_delivery_path(media_path, session_key, "MEDIA directive path")
+            if safe_path:
+                kept.append((safe_path, bool(is_voice)))
+            elif dropped is not None:
+                dropped.append((str(media_path), _delivery_drop_reason(str(media_path))))
+        return kept
 
     @staticmethod
     def filter_local_delivery_paths(file_paths, session_key: str = "") -> List[str]:

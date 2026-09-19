@@ -230,7 +230,8 @@ def _handle_send(args):
     # Capture [[as_document]] before extract_media strips it (images keep original bytes via send_document).
     force_document_attachments = "[[as_document]]" in message
     media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
-    media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
+    dropped_media = []
+    media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files, dropped=dropped_media)
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
     used_home_channel = not chat_id
     if used_home_channel:
@@ -277,6 +278,10 @@ def _handle_send(args):
                 result["note"] = f"Sent to {platform_name} home channel (chat_id: {chat_id})"
             if mirror_text and _mirror_sent_message(platform_name, chat_id, mirror_text, thread_id):
                 result["mirrored"] = True
+        if isinstance(result, dict) and dropped_media:
+            # A caller reading `success`/exit code alone has no other way to learn an attachment
+            # it asked for never made it out (#115908).
+            result["media_dropped"] = [{"path": path, "reason": reason} for path, reason in dropped_media]
         if isinstance(result, dict) and "error" in result:
             result["error"] = _sanitize_error_text(result["error"])
         return json.dumps(result)
