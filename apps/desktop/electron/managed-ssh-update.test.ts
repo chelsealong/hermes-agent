@@ -313,6 +313,56 @@ test('POSIX managed launcher executes the updater command and atomically publish
   }
 })
 
+test('the launch umask does not leak into the detached updater', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-umask-'))
+  const hermesPath = path.join(directory, 'hermes')
+  const reportPath = path.join(directory, 'umask-report')
+  const home = path.join(directory, 'home')
+  await mkdir(home)
+
+  const originalUmask = process.umask(0o022)
+
+  try {
+    await writeFile(hermesPath, `#!/bin/sh\numask > '${reportPath}'\n`, { mode: 0o700 })
+
+    const command = buildPosixManagedUpdateLaunch(
+      {
+        ssh: { exec: async () => '' },
+        platform: 'Linux',
+        hermesPath,
+        hermesHome: home
+      },
+      CORRELATION
+    )
+
+    await exec(command, { shell: '/bin/sh' })
+
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        const report = (await readFile(reportPath, 'utf8')).trim()
+
+        assert.ok(
+          !/077$/.test(report),
+          `the updater must run at the host umask, not the launch reservation umask (got "${report}")`
+        )
+
+        return
+      } catch (error: any) {
+        if (error?.code !== 'ENOENT') {
+          throw error
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+    }
+
+    assert.fail('the updater did not write its umask report')
+  } finally {
+    process.umask(originalUmask)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('Windows managed launcher starts a hidden child and leaves exit 75 to the external coordinator', () => {
   const command = buildWindowsManagedUpdateLaunch(
     {

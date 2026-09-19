@@ -243,7 +243,12 @@ function buildPosixManagedUpdateLaunch(target: RemoteUpdateTarget, correlationId
     'exit "$rc"'
 
   return (
-    `umask 077 && mkdir -p "$(dirname ${outputWord})" && rm -f ${statusWord} ${intentWord} && ` +
+    // The umask must stay scoped to this mkdir: it runs in the same shell
+    // that later forks the detached updater (setsid/nohup below), and an
+    // unscoped `umask 077` would leak into that process and the `hermes
+    // update` it execs, creating owner-only files for the whole update
+    // (#115512, same bug class as buildSpawnCommand's reservation mkdir).
+    `(umask 077 && mkdir -p "$(dirname ${outputWord})") && rm -f ${statusWord} ${intentWord} && ` +
     `if command -v setsid >/dev/null 2>&1; then ` +
     `setsid sh -c ${shq(inner)} </dev/null >>${outputWord} 2>&1 & ` +
     `else nohup sh -c ${shq(inner)} </dev/null >>${outputWord} 2>&1 & fi; child=$!; ` +
