@@ -122,6 +122,18 @@ describe("createPtyCompositionForwarder", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("ignores a duplicate compositionend carrying the same pending text", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    forwarder.onCompositionEnd("word");
+    vi.runAllTimers();
+
+    expect(send).toHaveBeenCalledExactlyOnceWith("word");
+  });
+
   it("does not send an empty cancelled composition", () => {
     vi.useFakeTimers();
     const send = vi.fn();

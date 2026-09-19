@@ -23,6 +23,10 @@ export function createPtyCompositionForwarder(send: (data: string) => void) {
   return {
     onCompositionEnd(data: string | null) {
       if (!data) return;
+      // Some IME/keyboard combinations (observed with Android Gboard) fire
+      // compositionend twice for the same commit. Treat a repeat of the
+      // still-pending text as the same event, not a second composition.
+      if (data === pending) return;
       // Preserve rapid consecutive commits instead of discarding the first.
       const previous = pending;
       clearPending();
