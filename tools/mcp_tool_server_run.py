@@ -161,6 +161,23 @@ class MCPServerRunMixin:
         self._reconnect_event.clear()
         return "reconnect"
 
+    def _park_log(self, msg: str, *args) -> None:
+        """Log a parking-transition message: WARNING the first time this server parks, then DEBOUNCED
+        to DEBUG for every further failed self-probe on the same park (a still-dead dependency, e.g.
+        an addon that was never launched, re-parks every ``_PARKED_RETRY_INTERVAL`` forever) with a
+        periodic WARNING summary so the condition stays visible without flooding the log (#115713)."""
+        if not self._was_parked:
+            self._park_probe_count = 0
+            logger.warning(msg, *args)
+            return
+        self._park_probe_count += 1
+        if self._park_probe_count % _core._PARK_LOG_SUMMARY_EVERY == 0:
+            logger.warning(
+                "MCP server '%s': still parked, %d failed self-probes since it first parked",
+                self.name, self._park_probe_count)
+        else:
+            logger.debug(msg, *args)
+
     async def _park(self, revival_reason: str) -> bool:
         """Drop this server's tools and wait for a reconnect request; True when shutdown came instead.
         The run task must NOT exit (it is the only ``_reconnect_event`` listener, so returning
@@ -328,7 +345,7 @@ class MCPServerRunMixin:
         else:
             self._reconnect_retries += 1
             if self._reconnect_retries > _core._MAX_RECONNECT_RETRIES:
-                logger.warning(
+                self._park_log(
                     "MCP server '%s': %d consecutive reconnects without a healthy session (rapid-drop budget "
                     "exhausted), parking; will self-probe every %ds until it recovers (state: degraded → parked)",
                     self.name, _core._MAX_RECONNECT_RETRIES, _core._PARKED_RETRY_INTERVAL)
@@ -389,7 +406,7 @@ class MCPServerRunMixin:
             return await self._on_permanent_error(root, budget)
         self._reconnect_retries += 1
         if self._reconnect_retries > _core._MAX_RECONNECT_RETRIES:
-            logger.warning(
+            self._park_log(
                 "MCP server '%s' failed after %d reconnection attempts, parking; will self-probe every %ds "
                 "until it recovers (state: degraded → parked): %s: %s",
                 self.name, _core._MAX_RECONNECT_RETRIES, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)
@@ -408,12 +425,12 @@ class MCPServerRunMixin:
             detail = (f"authentication, parking until credentials change; re-authenticate with "
                       f"`hermes mcp login {self.name}`" if _errors._is_auth_error(root)
                       else "connection with a permanent error, parking without retries")
-            logger.warning("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
+            self._park_log("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
                            self.name, detail, type(root).__name__, root)
             return await self._park_initial_failure(exc, "after permanent initial failure", budget)
         budget.initial_retries += 1
         if budget.initial_retries > _core._MAX_INITIAL_CONNECT_RETRIES:
-            logger.warning(
+            self._park_log(
                 "MCP server '%s' failed initial connection after %d attempts, parking until a reconnect is "
                 "requested (state: connecting → parked): %s: %s",
                 self.name, _core._MAX_INITIAL_CONNECT_RETRIES, type(root).__name__, root)
@@ -441,7 +458,7 @@ class MCPServerRunMixin:
             await asyncio.sleep(_jittered(1.0))
             return not self._shutdown_event.is_set()
         # Deterministic failure on a working server: park now.
-        logger.warning(
+        self._park_log(
             "MCP server '%s' hit a permanent error, parking without retries; will self-probe every %ds "
             "(state: connected → parked): %s: %s", self.name, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)
         return await self._park_and_rearm("from parked state (permanent error)", budget)
