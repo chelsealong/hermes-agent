@@ -112,6 +112,22 @@ def test_json_list_string_is_not_silently_replaced_by_platform_default():
     assert enabled != default_enabled
 
 
+def test_json_list_string_does_not_trigger_invalid_toolsets_warning(caplog):
+    """#115866: coercing the JSON-array string into a list must not leak the raw
+    string into ``_warn_all_invalid_platform_toolsets``, which would iterate its
+    characters as bogus 1-char toolset names and falsely warn that the platform
+    has no valid toolsets configured (#38798) even though resolution succeeded."""
+    import hermes_cli.tools_config as _tc
+    _tc._warned_invalid_platform_toolsets.discard("telegram")
+    config = {"platform_toolsets": {"telegram": '["browser", "terminal", "video", "video_gen"]'}}
+
+    with caplog.at_level(logging.WARNING, logger="hermes_cli.tools_config"):
+        _get_platform_tools(config, "telegram", include_default_mcp_servers=False)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not any("no valid toolsets configured" in m for m in warnings), warnings
+
+
 def test_reader_does_not_treat_json_list_string_as_unconfigured():
     """A JSON-list string must be treated as an explicit save, so the platform's
     native default-off toolsets stay off unless the string lists them (mirrors
