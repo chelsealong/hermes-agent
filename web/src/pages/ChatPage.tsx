@@ -1550,8 +1550,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // normal onData path.
       sendComposedText = (data) => forwardPtyData(data, false);
       onDataDisposable = term.onData((data) => {
-        if (!SGR_MOUSE_RE.test(data)) {
-          compositionForwarder.noteTerminalData(data);
+        if (!SGR_MOUSE_RE.test(data) && !compositionForwarder.noteTerminalData(data)) {
+          // Already forwarded by the composition path — an onData echo of
+          // it would duplicate the word in the PTY (#115505).
+          return;
         }
         forwardPtyData(data);
       });

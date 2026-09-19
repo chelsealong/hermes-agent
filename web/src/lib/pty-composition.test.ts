@@ -144,4 +144,76 @@ describe("createPtyCompositionForwarder", () => {
 
     expect(send).not.toHaveBeenCalled();
   });
+
+  it("suppresses an onData echo of text the fallback timer already sent", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    vi.advanceTimersByTime(16);
+    expect(send).toHaveBeenCalledExactlyOnceWith("word");
+
+    expect(forwarder.noteTerminalData("word")).toBe(false);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses an onData echo of a rapidly-flushed earlier composition", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("a");
+    forwarder.onCompositionEnd("ä");
+    expect(send).toHaveBeenCalledExactlyOnceWith("a");
+
+    expect(forwarder.noteTerminalData("a")).toBe(false);
+  });
+
+  it("forwards onData text that does not match anything just sent", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    vi.advanceTimersByTime(16);
+
+    expect(forwarder.noteTerminalData("x")).toBe(true);
+  });
+
+  it("only suppresses one onData echo per send, not a genuine retype", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    vi.advanceTimersByTime(16);
+
+    expect(forwarder.noteTerminalData("word")).toBe(false);
+    expect(forwarder.noteTerminalData("word")).toBe(true);
+  });
+
+  it("stops suppressing once the just-sent window elapses", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    vi.advanceTimersByTime(16);
+    vi.advanceTimersByTime(101);
+
+    expect(forwarder.noteTerminalData("word")).toBe(true);
+  });
+
+  it("clears the just-sent suppression window on disposal", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const forwarder = createPtyCompositionForwarder(send);
+
+    forwarder.onCompositionEnd("word");
+    vi.advanceTimersByTime(16);
+    forwarder.dispose();
+
+    expect(forwarder.noteTerminalData("word")).toBe(true);
+  });
 });
