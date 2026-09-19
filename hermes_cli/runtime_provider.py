@@ -897,6 +897,8 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     """Resolve runtime provider credentials for agent execution. Ladder (order is behavior — each
     rung returns or raises, else falls to the next):
       1. disabled-provider guard (``providers.<name>.enabled: false``)
+      1.5. direct-API alias expansion (``openai`` → ``custom`` + api.openai.com, unless a named
+           ``providers.openai`` entry overrides it)
       2. requested-name shortcuts: moa, anthropic@azure, azure-foundry, vertex
       3. named custom provider / llamacpp alias / bare-custom direct alias
       4. local-endpoint bypass (no explicit creds, config base_url at a non-cloud host)
@@ -910,6 +912,14 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
     _raise_if_provider_disabled(requested_provider)
+    # ``provider: openai`` has no PROVIDER_REGISTRY entry (only openai-api/openai-codex do) and
+    # would otherwise dead-end below as "Unknown provider" — expand it to a working custom +
+    # api.openai.com endpoint, same as the auxiliary_client (compression/vision/title_generation)
+    # resolution path, so background_review/curator/moa stop silently falling back to the main
+    # model on this alias (#116055).
+    from agent.auxiliary_client import _expand_direct_api_alias
+    expanded_provider, explicit_base_url = _expand_direct_api_alias(requested_provider, explicit_base_url)
+    requested_provider = expanded_provider or requested_provider
     _raise_if_local_alias_missing_endpoint(requested_provider, explicit_base_url)
     runtime = next(r for r in _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, target_model) if r)
     _raise_for_credentialless_bare_custom(requested_provider, runtime)

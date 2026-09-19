@@ -947,6 +947,27 @@ def test_named_custom_provider_falls_back_to_openai_api_key(monkeypatch):
 
 
 
+def test_aux_provider_openai_alias_resolves_instead_of_raising(monkeypatch):
+    """#116055: ``resolve_runtime_provider(requested="openai")`` (the background_review/curator/moa
+    path) must expand the ``openai`` direct-API alias the same way
+    ``agent.auxiliary_client._resolve_task_provider_model`` (the compression/vision/title_generation
+    path) already does, instead of dead-ending as "Unknown provider 'openai'" — PROVIDER_REGISTRY
+    only has ``openai-api``/``openai-codex``, never bare ``openai``. Before the fix this raised
+    AuthError and background_review silently fell back to the main model."""
+    monkeypatch.setattr(rp, "load_config", lambda: {})
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {"provider": "custom:mylocal", "default": "some-model"})
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    resolved = rp.resolve_runtime_provider(
+        requested="openai", target_model="gpt-4o",
+        explicit_api_key="task-key", explicit_base_url="https://gateway.example.com/v1",
+    )
+
+    assert resolved["provider"] == "custom"
+    assert resolved["base_url"] == "https://gateway.example.com/v1"
+    assert resolved["api_key"] == "task-key"
+
+
 def test_named_custom_provider_wins_over_builtin_alias(monkeypatch):
     """A custom_providers entry named after a built-in *alias* (not a canonical
     provider name) must win over the built-in.  Regression guard for #15743:
