@@ -1437,11 +1437,12 @@ _PROVIDER_CATALOG_FETCHERS: dict[str, Any] = {
     "bedrock": _bedrock_catalog}
 
 
-# ``-free`` slugs the relay still LISTS but no longer serves: the Go-only twin (``ox-alpha-free``)
-# and the promo it delisted without removing from ``/models`` (``deepseek-v4-flash-free``). The
-# live-first keyed Zen/Go pickers filter through this so a stale live listing can never route
-# into a 400/403 (#111749).
-_OPENCODE_FREE_EXCLUDED_MODELS = frozenset({"ox-alpha-free", "deepseek-v4-flash-free"})
+# ``-free`` slugs the relay still LISTS but no longer serves: the Go-only twin (``ox-alpha-free``),
+# the promo it delisted without removing from ``/models`` (``deepseek-v4-flash-free``), and the
+# Zen stealth model retired from the live catalog but still seeded as the curated floor
+# (``x-preview-f-free``, #115496). The live-first keyed Zen/Go pickers filter through this so a
+# stale live or curated listing can never route into a 400/401 (#111749).
+_OPENCODE_FREE_EXCLUDED_MODELS = frozenset({"ox-alpha-free", "deepseek-v4-flash-free", "x-preview-f-free"})
 
 
 def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
@@ -1467,6 +1468,10 @@ def _profile_live_catalog(normalized: str) -> Optional[list[str]]:
     if not live:
         return list(profile.fallback_models) if profile.fallback_models else None
     curated = list(_PROVIDER_MODELS.get(normalized, [])) or list(profile.fallback_models or ())
+    if curated and normalized in _LIVE_FIRST_PICKER_PROVIDERS:
+        # The curated floor can seed a delisted id too (#115496); apply the same guard here so
+        # merging it back in afterward cannot reintroduce what the live filter above just removed.
+        curated = [m for m in curated if str(m).lower() not in _OPENCODE_FREE_EXCLUDED_MODELS]
     if not curated:
         return live
     primary, secondary = (live, curated) if normalized in _LIVE_FIRST_PICKER_PROVIDERS else (curated, live)

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 from hermes_cli.models import (
     _LIVE_FIRST_PICKER_PROVIDERS,
+    _PROVIDER_MODELS,
     provider_model_ids,
 )
 
@@ -104,5 +105,26 @@ class TestGenericProviderLiveCuratedMerge:
             result = provider_model_ids("opencode-go")
 
         assert "ox-alpha-free" not in result
+        assert {"deepseek-v4-flash", "kimi-k3", "omen-alpha"} <= set(result)
+
+    def test_opencode_zen_curated_floor_does_not_resurrect_delisted_model(self):
+        """#115496: the Zen relay retired ``x-preview-f-free`` from its live catalog, but the
+        curated floor (``_PROVIDER_MODELS["opencode-zen"]``) still seeds it as its first entry.
+        Filtering only the live half is not sufficient while the curated half is merged back in
+        live-first (REVERT-PROOF: filtering just ``live`` and not ``curated`` lets this resurface)."""
+        assert "opencode-zen" in _LIVE_FIRST_PICKER_PROVIDERS
+        assert "x-preview-f-free" in _PROVIDER_MODELS.get("opencode-zen", [])  # the real curated floor
+        live = ["deepseek-v4-flash", "kimi-k3", "omen-alpha"]  # current Zen relay (no x-preview-f-free)
+
+        with (
+            patch("providers.get_provider_profile", return_value=self._make_profile(live)),
+            patch(
+                "hermes_cli.auth.resolve_api_key_provider_credentials",
+                return_value={"api_key": "k", "base_url": ""},
+            ),
+        ):
+            result = provider_model_ids("opencode-zen")
+
+        assert "x-preview-f-free" not in result
         assert {"deepseek-v4-flash", "kimi-k3", "omen-alpha"} <= set(result)
 
