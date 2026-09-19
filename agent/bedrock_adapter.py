@@ -632,7 +632,9 @@ def _replay_ordered_blocks(ordered_blocks: List) -> List[Dict]:
             reasoning = block["reasoningContent"]
             if not isinstance(reasoning, dict):
                 continue
-            replay = {"text": reasoning["text"]} if isinstance(reasoning.get("text"), str) else {}
+            # Converse's ReasoningContentBlock union only accepts "reasoningText" (a {text[, signature]}
+            # structure) or "redactedContent" — a bare "text" key is rejected with a ParamValidationError.
+            replay = {"reasoningText": {"text": reasoning["text"]}} if isinstance(reasoning.get("text"), str) else {}
             encoded = reasoning.get("redactedContentBase64")
             if isinstance(encoded, str) and encoded:
                 redacted = _decode_redacted(encoded)

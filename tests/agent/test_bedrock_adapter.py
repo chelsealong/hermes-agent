@@ -415,6 +415,30 @@ class TestNormalizeConverseResponse:
         assert blocks[0]["reasoningContent"]["redactedContent"] == b"r1"
         assert blocks[2]["reasoningContent"]["redactedContent"] == b"r2"
 
+    def test_plaintext_reasoning_replays_with_valid_converse_schema(self):
+        """Bedrock's ReasoningContentBlock union only accepts "reasoningText" (a {text[, signature]}
+        structure) or "redactedContent" for a message being sent to Converse. A bare "text" key —
+        the shape a streamed reasoning delta naturally captures into ``bedrock_content_blocks`` —
+        is rejected by Bedrock with: 'Unknown parameter in ...reasoningContent: "text", must be one
+        of: reasoningText, redactedContent' (#115865)."""
+        from agent.bedrock_adapter import convert_messages_to_converse
+
+        _system, messages = convert_messages_to_converse([
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "bedrock_content_blocks": [
+                    {"reasoningContent": {"text": "Let me think about this."}},
+                    {"text": "The answer is 42."},
+                ],
+            },
+        ])
+        assistant = next(m for m in messages if m["role"] == "assistant")
+        assert assistant["content"][0] == {
+            "reasoningContent": {"reasoningText": {"text": "Let me think about this."}}
+        }
+
 
 # ---------------------------------------------------------------------------
 # Streaming response normalization
