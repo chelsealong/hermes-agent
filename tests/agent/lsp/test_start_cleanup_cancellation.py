@@ -1,13 +1,15 @@
-"""Regression for #116065: a language-server process leaked forever when
-spawn/initialize failed and the caller's outer timeout then cancelled the
-failure-cleanup coroutine before it could escalate from SIGTERM to SIGKILL.
+"""Regression for #116065: a language-server process leaked forever when the
+caller's outer timeout cancelled a cleanup coroutine before it could escalate
+from SIGTERM to SIGKILL.
 
 ``LSPService`` runs every client call through ``_BackgroundLoop.run(coro,
 timeout=...)`` (agent/lsp/manager.py), which cancels the in-flight coroutine
-on timeout. If that coroutine is inside ``start()``'s except block awaiting
-``_cleanup_process()``, cancellation used to abort the SIGTERM->SIGKILL
-escalation mid-flight, leaving a SIGTERM-ignoring server (e.g.
-kotlin-language-server) running indefinitely.
+on timeout. Two call sites end in an ``await self._cleanup_process()`` that
+must survive that cancellation: ``start()``'s except block, and
+``shutdown()``'s finally block (reachable with a particularly tight 1.0s
+budget via ``LSPService._mark_broken_for_file()``). Without shielding,
+cancellation aborts the SIGTERM->SIGKILL escalation mid-flight, leaving a
+SIGTERM-ignoring server (e.g. kotlin-language-server) running indefinitely.
 """
 from __future__ import annotations
 
@@ -90,6 +92,39 @@ async def test_start_failure_cleanup_survives_outer_cancellation(monkeypatch):
         assert await _has_exited(proc, timeout=_CLEANUP_WAIT), (
             "process ignoring SIGTERM survived: cancelling the caller cut the "
             "SIGTERM->SIGKILL escalation short"
+        )
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+@pytest.mark.linux_only
+@pytest.mark.asyncio
+async def test_shutdown_cleanup_survives_outer_cancellation(monkeypatch):
+    """Sibling of the above for shutdown()'s own ``finally: await self._cleanup_process()``,
+    reached through LSPService._mark_broken_for_file()'s tight 1.0s _loop.run() budget."""
+    monkeypatch.setattr(client_module, "SHUTDOWN_GRACE", 3.0)
+    client = _make_client()
+    proc = await _spawn_ignoring_sigterm()
+    client._proc = proc
+    # Not a live state: shutdown()'s "if self.is_running" body is skipped entirely, so the only
+    # thing running is the finally block's cleanup -- isolating that call site from the other test.
+    client._state = "error"
+
+    task = asyncio.ensure_future(client.shutdown())
+    # Let shutdown() reach terminate() and settle into its post-SIGTERM wait inside _cleanup_process().
+    await asyncio.sleep(0.5)
+    assert not task.done()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    try:
+        assert await _has_exited(proc, timeout=_CLEANUP_WAIT), (
+            "process ignoring SIGTERM survived: cancelling the caller cut "
+            "shutdown()'s SIGTERM->SIGKILL escalation short"
         )
     finally:
         if proc.returncode is None:

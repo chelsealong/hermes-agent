@@ -341,7 +341,11 @@ class LSPClient:
                         await asyncio.wait_for(proc.wait(), timeout=SHUTDOWN_GRACE)
         finally:
             self._state = "stopped"
-            await self._cleanup_process()
+            # Same outer-cancellation hazard as start()'s except block (#116065): callers run
+            # shutdown() through the manager's per-call timeout (e.g. _mark_broken_for_file's
+            # 1.0s budget), which can cancel this very coroutine while it's mid SIGTERM->SIGKILL
+            # escalation. Shield so a server that ignores SIGTERM still dies.
+            await asyncio.shield(self._cleanup_process())
 
     async def _cleanup_process(self) -> None:
         async with self._cleanup_lock:
