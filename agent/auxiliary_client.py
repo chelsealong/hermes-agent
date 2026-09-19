@@ -5321,6 +5321,17 @@ def resolve_provider_client(
     )
     branch = _EXPLICIT_PROVIDER_BRANCHES.get(provider)
     if branch is not None:
+        if provider == "custom" and original_provider != provider:
+            # original_provider was rewritten to "custom" by a _LOCAL_SERVER_ALIASES entry
+            # (e.g. "llamacpp"). A providers:/custom_providers: entry saved under that exact
+            # alias name is the user's target and must win over the generic custom branch,
+            # which has no way to recover the entry's base_url/api_key once the name is lost.
+            try:
+                named_result = _resolve_named_custom_branch(req)
+            except ImportError:
+                named_result = None
+            if named_result is not None:
+                return named_result
         return branch(req)
     # Named custom providers; an ImportError anywhere in the arm falls through to the built-ins.
     try:

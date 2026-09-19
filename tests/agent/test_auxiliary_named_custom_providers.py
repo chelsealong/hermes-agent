@@ -415,6 +415,35 @@ class TestCustomProviderAliasCollision:
         assert client.api_key == "override-key"
 
 
+class TestNamedProviderCollidesWithLocalServerAlias:
+    """Regression guard for #115990: a ``providers:`` entry named after a
+    local-server alias (``llamacpp``/``ollama``/``vllm``) is unreachable by
+    name, because ``_normalize_aux_provider`` rewrites it to "custom" and
+    "custom" is dispatched straight to ``_resolve_custom_branch`` — which has
+    no ``explicit_base_url``/``main_runtime`` to work with and falls through
+    to the API-key discovery chain instead of consulting the named entry."""
+
+    def test_named_llamacpp_provider_resolves_to_its_own_base_url(self, tmp_path, monkeypatch):
+        for var in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                    "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
+        _write_config(tmp_path, {
+            "model": {"provider": "opencode-bp", "default": "opencode/big-pickle"},
+            "providers": {
+                "llamacpp": {
+                    "base_url": "http://127.0.0.1:8081/v1",
+                    "name": "Llama-server qwen3.8 v1.1",
+                    "model": "qwen3.8-27b-gsq-rco-v1.1",
+                },
+            },
+        })
+        from agent.auxiliary_client import resolve_provider_client
+        client, model = resolve_provider_client("llamacpp", model="qwen3.8-27b-gsq-rco-v1.1")
+        assert client is not None
+        assert "127.0.0.1:8081" in str(client.base_url)
+        assert model == "qwen3.8-27b-gsq-rco-v1.1"
+
+
 class TestResolveProviderClientMainRuntimeCustom:
     """When the main agent uses a named custom provider (custom:<name>),
     resolve_provider_client('custom', ..., main_runtime=...) must reuse the
