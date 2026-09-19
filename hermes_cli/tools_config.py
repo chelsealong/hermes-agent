@@ -552,6 +552,18 @@ def _get_platform_tools(config: dict, platform: str, *, include_default_mcp_serv
     """Resolve which individual toolset names are enabled for a platform."""
     platform_toolsets = config.get("platform_toolsets") or {}
     toolset_names = platform_toolsets.get(platform)
+    # ``hermes config set`` cannot express a native YAML list, so it stores a JSON-array
+    # string instead. Coerce that shape back into a list before the explicitly_configured
+    # check below, or the saved selection is discarded as "unconfigured" and silently
+    # replaced by the platform default. A string that doesn't look like a JSON array (or
+    # fails to parse as one) is left alone and still degrades to the default. See #115866.
+    if isinstance(toolset_names, str) and toolset_names.strip().startswith("["):
+        try:
+            parsed = _json.loads(toolset_names.strip())
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, list):
+            toolset_names = parsed
     # An explicitly saved list (even a composite like ``hermes-discord``) is an opt-in to the platform's
     # native default-off toolsets — see _default_off_toolsets.
     # Track whether the user explicitly saved a toolset list for this platform (vs. falling back to the

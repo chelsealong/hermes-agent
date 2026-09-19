@@ -98,6 +98,56 @@ def test_scalar_platform_toolsets_fall_back_to_platform_default():
     assert enabled == default_enabled
 
 
+def test_json_list_string_is_not_silently_replaced_by_platform_default():
+    """#115866: ``hermes config set`` stores a saved list as a JSON-array string,
+    not a native YAML list. The resolved set must reflect that string's contents,
+    not the platform default."""
+    config = {"platform_toolsets": {"telegram": '["browser", "terminal", "video", "video_gen"]'}}
+
+    enabled = _get_platform_tools(config, "telegram", include_default_mcp_servers=False)
+    default_enabled = _get_platform_tools({}, "telegram", include_default_mcp_servers=False)
+
+    assert "video" in enabled
+    assert "video_gen" in enabled
+    assert enabled != default_enabled
+
+
+def test_reader_does_not_treat_json_list_string_as_unconfigured():
+    """A JSON-list string must be treated as an explicit save, so the platform's
+    native default-off toolsets stay off unless the string lists them (mirrors
+    the semantics a native YAML list already gets)."""
+    config = {"platform_toolsets": {"telegram": '["browser", "terminal"]'}}
+
+    enabled = _get_platform_tools(config, "telegram", include_default_mcp_servers=False)
+
+    assert "video" not in enabled
+    assert "video_gen" not in enabled
+
+
+def test_enable_preserves_the_listed_toolsets_of_a_string_value():
+    """#115866: enabling a toolset against a string-typed saved list must keep the
+    other entries that string already listed, not overwrite them with the default."""
+    config = {"platform_toolsets": {"telegram": '["browser", "terminal", "video", "video_gen"]'}}
+
+    _apply_toolset_change(config, "telegram", ["computer_use"], "enable")
+
+    saved = config["platform_toolsets"]["telegram"]
+    assert "video" in saved
+    assert "video_gen" in saved
+    assert "computer_use" in saved
+
+
+def test_junk_string_platform_toolsets_still_falls_back_to_platform_default():
+    """A non-JSON string is not a saved list either; it must keep degrading to
+    the platform default rather than being treated as a single toolset name."""
+    config = {"platform_toolsets": {"cli": "[not valid json"}}
+
+    enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
+    default_enabled = _get_platform_tools({}, "cli", include_default_mcp_servers=False)
+
+    assert enabled == default_enabled
+
+
 
 
 
