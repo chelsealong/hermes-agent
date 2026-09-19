@@ -1859,6 +1859,22 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         return (cls._clean_runtime_id(requested.get("model")),
                 cls._clean_runtime_id(requested.get("provider"), max_len=80))
 
+    @staticmethod
+    def _confirmed_lock_provider_matches(expected: str, actual: str) -> bool:
+        """Whether ``actual`` satisfies a confirmed lock's ``expected`` provider identity.
+
+        A lock persists the caller's literal ``custom:<key>`` spelling (the config `providers:`
+        identity), but the runtime it drives may report the resolved family name (``custom``) or,
+        once a same-named profile plugin takes over resolution, the bare key alone (#116070) — same
+        endpoint, different spelling. Only ``custom:<key>`` expectations get this leniency; every
+        other provider identity still requires an exact match."""
+        if not expected or expected == actual:
+            return True
+        if expected.startswith("custom:"):
+            key = expected.split(":", 1)[1]
+            return actual == "custom" or (bool(key) and actual == key)
+        return False
+
     def _runtime_lock_error(self, runtime_request: Dict[str, Any]) -> Optional["web.Response"]:
         if not runtime_request.get("require_model_lock"):
             return None
@@ -3685,7 +3701,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             expected_provider = self._clean_runtime_id(
                 route.get("provider") or requested_runtime.get("provider"), max_len=80)
             expected_model = self._clean_runtime_id(route.get("model") or requested_runtime.get("model"))
-            if (expected_provider and actual_provider != expected_provider) or (
+            if (expected_provider and not self._confirmed_lock_provider_matches(expected_provider, actual_provider)) or (
                 expected_model and actual_model != expected_model):
                 raise RuntimeError(
                     "confirmed model lock runtime mismatch: "

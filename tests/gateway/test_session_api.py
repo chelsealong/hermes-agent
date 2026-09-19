@@ -857,6 +857,38 @@ async def test_confirmed_runtime_lock_rejects_actual_runtime_mismatch(adapter, m
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actual_provider", ["custom", "my-endpoint"])
+async def test_confirmed_runtime_lock_allows_custom_family_spelling(adapter, monkeypatch, actual_provider):
+    """A lock stored as the caller's literal ``custom:<key>`` (#116070) must not mismatch
+    against the runtime's resolved bare family name (``custom``) or bare key spelling of the
+    same endpoint — only a genuinely different provider should still raise."""
+    class FakeAgent:
+        session_prompt_tokens = 0
+        session_completion_tokens = 0
+        session_total_tokens = 0
+        session_id = "custom-lock-session"
+        provider = actual_provider
+        model = "some-model"
+
+        def run_conversation(self, user_message, conversation_history, task_id):
+            return {"final_response": "ok", "session_id": self.session_id}
+
+    monkeypatch.setattr(adapter, "_create_agent", lambda **kwargs: FakeAgent())
+
+    result, _usage = await adapter._run_agent(
+        user_message="hello",
+        conversation_history=[],
+        session_id="custom-lock-session",
+        route={"provider": "custom:my-endpoint", "model": "some-model"},
+        requested_runtime={"provider": "custom:my-endpoint", "model": "some-model"},
+        route_source="session_model_lock",
+        confirmed_runtime_lock=True,
+    )
+
+    assert result["runtime"]["provider"] == actual_provider
+
+
 def test_confirmed_runtime_lock_disables_global_fallback_model(adapter, monkeypatch):
     _patch_api_server_runtime(monkeypatch)
     monkeypatch.setattr(
