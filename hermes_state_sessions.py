@@ -817,9 +817,29 @@ class SessionSessionsMixin:
             (stamp,),
         ) or 0)
 
-    def _set_lineage_column(self, column: str, session_id: str, value: Any) -> bool:
+    def _set_lineage_column(self, column: str, session_id: str, value: Any, *,
+                            protect_open_cascade: bool = False) -> bool:
         """Set one ``sessions`` column across a whole compression lineage: Desktop projects roots
-        forward to their tip, so updating only the tip would let the root resurrect it on refresh."""
+        forward to their tip, so updating only the tip would let the root resurrect it on refresh
+        (and the default listing seeds only from the root, so a non-uniform flag across a lineage
+        would make it disappear from every view regardless of any single row's own value).
+
+        ``protect_open_cascade`` makes the whole flip a no-op when some OTHER member of the
+        lineage is still open (``ended_at IS NULL``): an automatic close on one ancestor (reaper,
+        idle sweep, bulk prune) must never archive away a lineage whose tip is still live and
+        receiving messages (#115489). A direct, deliberate call on the live tip itself
+        (``session_id`` IS that open row) still flips the whole lineage as before."""
+        live_guard = ""
+        params: tuple = (session_id, session_id, value)
+        if protect_open_cascade:
+            live_guard = """
+              AND NOT EXISTS (
+                  SELECT 1 FROM lineage l
+                  JOIN sessions other ON other.id = l.id
+                  WHERE l.id != ? AND other.ended_at IS NULL
+              )
+            """
+            params = (session_id, session_id, value, session_id)
         return self._write_rowcount(
             f"""
             WITH RECURSIVE
@@ -849,13 +869,18 @@ class SessionSessionsMixin:
             UPDATE sessions
             SET {column} = ?
             WHERE id IN (SELECT id FROM lineage)
+            {live_guard}
             """,
-            (session_id, session_id, value),
+            params,
         ) > 0
 
     def set_session_archived(self, session_id: str, archived: bool) -> bool:
-        """Soft-hide (or unhide) a session and its compression lineage; messages are kept."""
-        return self._set_lineage_column("archived", session_id, int(archived))
+        """Soft-hide (or unhide) a session and its compression lineage; messages are kept.
+        Archiving a lineage is skipped entirely (no partial flip) when it has a live member
+        other than the one requested, so an automatic close elsewhere in the chain can never
+        hide a still-open tip from the Desktop (see #115489)."""
+        return self._set_lineage_column(
+            "archived", session_id, int(archived), protect_open_cascade=archived)
 
     # Accidental end reasons recovery treats as resumable (also interpolated into
     # the recovery/promotion SQL so literals cannot drift).

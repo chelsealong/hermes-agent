@@ -40,6 +40,32 @@ def test_archiving_compression_tip_archives_projected_root(db):
     assert [s["id"] for s in db.list_sessions_rich(order_by_last_active=True, archived_only=True)] == ["tip"]
 
 
+def test_archiving_ended_ancestor_is_a_noop_while_tip_is_live(db):
+    """Regression for #115489: an automatic close on an ancestor (e.g. a reaper-driven
+    end_reason far up a compression chain) must not archive the lineage at all while its
+    tip is still open — a partial flip would make the live tip disappear from every
+    listing (default AND archived-only), since the default view seeds only from an
+    unarchived root."""
+    _compression_pair(db)
+
+    assert db.set_session_archived("root", True) is False
+
+    assert db.get_session("root")["archived"] == 0
+    assert db.get_session("tip")["archived"] == 0
+    assert [s["id"] for s in db.list_sessions_rich(order_by_last_active=True)] == ["tip"]
+
+
+def test_archiving_live_tip_directly_still_archives_whole_lineage(db):
+    """A deliberate archive of the live tip itself (the id the Desktop actually shows) is not
+    an automatic accident, so it still archives the whole lineage, same as before #115489."""
+    _compression_pair(db)
+
+    assert db.set_session_archived("tip", True) is True
+
+    assert db.get_session("root")["archived"] == 1
+    assert db.get_session("tip")["archived"] == 1
+
+
 def test_unarchiving_compression_tip_unarchives_projected_root(db):
     _compression_pair(db)
     db.set_session_archived("tip", True)
