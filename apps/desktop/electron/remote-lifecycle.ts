@@ -1125,7 +1125,12 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
   const reservationNonce = validateSpawnNonce(opts.reservationNonce || crypto.randomBytes(8).toString('hex'))
 
   return withRemoteUpdateMutex(
-    `umask 077 && mkdir -p "$(dirname ${reservation})"; ` +
+    // The umask must stay scoped to this mkdir: it runs in the same shell
+    // that later execs the detached backend (`detachedSpawn` below), and an
+    // unscoped `umask 077` would leak into that process and every subprocess
+    // it spawns, creating owner-only files for every terminal-tool command
+    // that shell serves (#115512).
+    `(umask 077 && mkdir -p "$(dirname ${reservation})"); ` +
       // reservation/lockPath/ownerPath are expandRemotePath() output — already
       // shell-quoted fragments ("$HOME"'/…'). Embed raw so the assignment
       // expands $HOME; shq() here would store the quote characters literally

@@ -1518,6 +1518,63 @@ test('buildSpawnCommand lockfile publication is POSIX sh (no bash substitution)'
   assert.ok(cmd.includes('sed "s/__PID__/${child}/"'), 'pid substitution must use sed')
 })
 
+// #115512: the reservation directory is created under `umask 077` (to keep
+// the lockfile owner-only), but that same shell later execs the detached
+// backend. An unscoped umask leaked 077 into the backend and therefore into
+// every subprocess the terminal tool spawns from it.
+test.skipIf(process.platform === 'win32')(
+  'the reservation umask does not leak into the spawned backend',
+  async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'hermes-umask-'))
+    const hermesPath = path.join(directory, 'hermes')
+    const reportPath = path.join(directory, 'umask-report')
+    const fakeHome = path.join(directory, 'home')
+    await mkdir(fakeHome)
+
+    const originalUmask = process.umask(0o022)
+
+    try {
+      await writeFile(hermesPath, `#!/bin/sh\numask > '${reportPath}'\n`, { mode: 0o700 })
+
+      const command = buildSpawnCommand(hermesPath, 'work', {
+        hermesHome: '~/.hermes',
+        logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE),
+        ownershipId: OWNERSHIP_ID,
+        reservationNonce: SPAWN_NONCE,
+        spawnNonce: SPAWN_NONCE,
+        tokenFilePath: spawnTokenPath(OWNERSHIP_ID, SPAWN_NONCE),
+        lockMetadata: { ownershipId: OWNERSHIP_ID, spawnNonce: SPAWN_NONCE }
+      })
+
+      await exec(command, { shell: '/bin/bash', env: { ...process.env, HOME: fakeHome } })
+
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          const report = (await readFile(reportPath, 'utf8')).trim()
+
+          assert.ok(
+            !/077$/.test(report),
+            `backend subprocesses must run at the host umask, not the reservation lockfile umask (got "${report}")`
+          )
+
+          return
+        } catch (error: any) {
+          if (error?.code !== 'ENOENT') {
+            throw error
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+      }
+
+      assert.fail('the backend did not write its umask report')
+    } finally {
+      process.umask(originalUmask)
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+)
+
 test('spawnRemoteDashboard removes a token file when upload reporting fails', async () => {
   const failure = new Error('channel closed')
 
