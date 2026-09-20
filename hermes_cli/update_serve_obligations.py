@@ -30,6 +30,13 @@ def defer_manual_serve(runtime: dict, *, require_alive: bool = False) -> bool:
         # No creation time available (e.g. EACCES on /proc). A durable per-incarnation reminder
         # needs one to build its filename, but a pid psutil confirms is gone needs no reminder at
         # all — discharge it instead of re-flagging it as unsaveable on every startup forever.
+        # require_alive callers (fleet reconciliation) want "deferred" to mean a durable
+        # per-incarnation reminder was actually recorded, same as the known-create_time branch
+        # below; without a create_time we can never build that record, so a require_alive caller
+        # must keep treating the row as unaccounted regardless of liveness — never confuse
+        # "confirmed dead, nothing to remind about" with "successfully deferred".
+        if require_alive:
+            return False
         return _pid_alive_matches(pid, None) is False
     if type(created) not in (int, float) or not math.isfinite(created) or created <= 0:
         return False

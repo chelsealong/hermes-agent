@@ -150,6 +150,22 @@ def test_manual_deferral_with_unreadable_create_time(monkeypatch, capsys, alive)
     assert ("900" in capsys.readouterr().out) is (alive is not False)
 
 
+@pytest.mark.parametrize("alive", [True, None, False])
+@pytest.mark.parametrize("require_alive", [True, False])
+def test_defer_manual_serve_unreadable_create_time_honors_require_alive(monkeypatch, require_alive, alive):
+    """defer_manual_serve(created=None) must never report "deferred" to a require_alive caller
+    (update_cmd_fleet.py:1642's post-update reconciliation) since it can never build the durable
+    per-incarnation reminder file that "deferred" is supposed to mean without a create_time —
+    including for a confirmed-DEAD pid, which must stay unaccounted rather than silently pass."""
+    from hermes_cli.update_serve_obligations import defer_manual_serve
+
+    runtime = asdict(RuntimeRecord(kind="serve", profile="work", pid=900, supervisor="manual-serve", restart_via="respawn-argv", detail={"create_time": None}))
+    monkeypatch.setattr(process_identity, "_pid_alive_matches", lambda *a: alive)
+    result = defer_manual_serve(runtime, require_alive=require_alive)
+    expected = False if require_alive else (alive is False)
+    assert result is expected
+
+
 @pytest.mark.parametrize("failure", ["mkdir", "write", "replace"])
 @pytest.mark.parametrize("gateway_state", ["current", "stale"])
 def test_historical_retention_failure_warns_and_survives_rotation(monkeypatch, capsys, failure, gateway_state):
