@@ -84,7 +84,8 @@ import {
   detectRemoteDisplay,
   isWindowsBinaryPathInWsl,
   isWslEnvironment,
-  resolveLinuxPasswordStore
+  resolveLinuxPasswordStore,
+  shouldSkipEmergencyStateDbBackup
 } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
@@ -4609,43 +4610,47 @@ function preflightStateDb(hermesHome, rememberLog) {
         )
       }
 
-      // Emergency timestamped backup, separate from the Python-level snapshot.
-      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      if (shouldSkipEmergencyStateDbBackup()) {
+        rememberLog('[updates] emergency state.db backup skipped (updates.pre_update_backup: off)')
+      } else {
+        // Emergency timestamped backup, separate from the Python-level snapshot.
+        const ts = new Date().toISOString().replace(/[:.]/g, '-')
 
-      const emergencyPath = path.join(hermesHome, `state.db.pre-update-emergency-${ts}.bak`)
+        const emergencyPath = path.join(hermesHome, `state.db.pre-update-emergency-${ts}.bak`)
 
-      try {
-        fs.copyFileSync(stateDbPath, emergencyPath)
-        const emergStat = fs.statSync(emergencyPath)
-
-        rememberLog(`[updates] emergency state.db backup: ${emergencyPath} ` + `(${emergStat.size} bytes)`)
-
-        // Prune to the 2 most recent emergency backups.
         try {
-          const homeDir = fs.readdirSync(hermesHome)
+          fs.copyFileSync(stateDbPath, emergencyPath)
+          const emergStat = fs.statSync(emergencyPath)
 
-          const backups = homeDir
-            .filter(
-              f =>
-                f.startsWith('state.db.pre-update-emergency-') &&
-                f.endsWith('.bak') &&
-                f !== path.basename(emergencyPath)
-            )
-            .sort()
-            .reverse()
+          rememberLog(`[updates] emergency state.db backup: ${emergencyPath} ` + `(${emergStat.size} bytes)`)
 
-          for (const old of backups.slice(2)) {
-            try {
-              fs.unlinkSync(path.join(hermesHome, old))
-            } catch {
-              void 0
+          // Prune to the 2 most recent emergency backups.
+          try {
+            const homeDir = fs.readdirSync(hermesHome)
+
+            const backups = homeDir
+              .filter(
+                f =>
+                  f.startsWith('state.db.pre-update-emergency-') &&
+                  f.endsWith('.bak') &&
+                  f !== path.basename(emergencyPath)
+              )
+              .sort()
+              .reverse()
+
+            for (const old of backups.slice(2)) {
+              try {
+                fs.unlinkSync(path.join(hermesHome, old))
+              } catch {
+                void 0
+              }
             }
+          } catch {
+            void 0
           }
-        } catch {
-          void 0
+        } catch (copyErr) {
+          rememberLog(`[updates] emergency state.db backup failed: ${copyErr.message}`)
         }
-      } catch (copyErr) {
-        rememberLog(`[updates] emergency state.db backup failed: ${copyErr.message}`)
       }
     } else {
       rememberLog(`[updates] state.db too small (${stat.size} bytes) for a valid SQLite database`)

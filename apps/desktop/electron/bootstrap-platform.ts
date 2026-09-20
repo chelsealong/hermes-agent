@@ -141,10 +141,23 @@ function resolveLinuxPasswordStore(options: { env?: NodeJS.ProcessEnv; platform?
   return { store: requested, warning: null }
 }
 
+/**
+ * Whether the desktop's emergency pre-update `state.db` snapshot (#68474) should be
+ * skipped. `preflightStateDb` in main.ts runs before `config.yaml` is even readable in
+ * this process, so the `hermes desktop` launcher resolves `updates.pre_update_backup`
+ * itself and bridges an explicit "off" via `HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP` —
+ * mirroring how `desktop.password_store` and `desktop.ozone_platform_hint` are bridged.
+ * Pure + dependency-free so it can be unit-tested and called before app ready.
+ */
+function shouldSkipEmergencyStateDbBackup(env: NodeJS.ProcessEnv = process.env) {
+  return env.HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP === '1'
+}
+
 export {
   bundledRuntimeImportCheck,
   detectRemoteDisplay,
   isWindowsBinaryPathInWsl,
   isWslEnvironment,
-  resolveLinuxPasswordStore
+  resolveLinuxPasswordStore,
+  shouldSkipEmergencyStateDbBackup
 }

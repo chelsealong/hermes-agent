@@ -1374,6 +1374,23 @@ def _desktop_launch_options() -> tuple[list[str], str, str, str]:
     return flags, disable_gpu, password_store, ozone_hint
 
 
+def _pre_update_backup_disabled() -> bool:
+    """True when ``updates.pre_update_backup`` resolves to "off" (documented mode string, its
+    aliases, or the legacy boolean ``false``). Bridged to Electron via
+    ``HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP`` so `preflightStateDb`'s emergency `state.db` copy
+    (#68474) honors the same switch as `hermes update`'s own pre-update snapshot instead of
+    running unconditionally (#116731). Config errors default to "on" — never silently drop a
+    safety net over a read failure."""
+    try:
+        from hermes_cli.update_cmd_maint import _BACKUP_MODE_ALIASES, _load_updates_cfg
+        raw = _load_updates_cfg().get("pre_update_backup", "quick")
+    except Exception:
+        return False
+    if isinstance(raw, bool):
+        return raw is False
+    return _BACKUP_MODE_ALIASES.get(str(raw).strip().lower()) == "off"
+
+
 def _register_linux_desktop_entry(defer: bool = False):
     """Install the XDG desktop entry for Hermes Desktop (Linux only, best-effort).
 
@@ -1636,6 +1653,9 @@ def _desktop_launch_env(args: argparse.Namespace) -> tuple[dict, list[str]]:
         )
         if password_store:
             env["HERMES_DESKTOP_PASSWORD_STORE"] = password_store
+
+    if "HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP" not in os.environ and _pre_update_backup_disabled():
+        env["HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP"] = "1"
     return env, config_electron_flags
 
 

@@ -7,7 +7,8 @@ import {
   detectRemoteDisplay,
   isWindowsBinaryPathInWsl,
   isWslEnvironment,
-  resolveLinuxPasswordStore
+  resolveLinuxPasswordStore,
+  shouldSkipEmergencyStateDbBackup
 } from './bootstrap-platform'
 
 test('isWslEnvironment detects WSL2 env vars on linux', () => {
@@ -122,4 +123,11 @@ test('resolveLinuxPasswordStore warns on unknown values instead of applying them
 
   assert.equal(result.store, null)
   assert.match(String(result.warning), /keychain-of-wonders/)
+})
+
+test('shouldSkipEmergencyStateDbBackup only honors the exact launcher-bridged value', () => {
+  assert.equal(shouldSkipEmergencyStateDbBackup({ HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP: '1' }), true)
+  assert.equal(shouldSkipEmergencyStateDbBackup({}), false)
+  assert.equal(shouldSkipEmergencyStateDbBackup({ HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP: 'true' }), false)
+  assert.equal(shouldSkipEmergencyStateDbBackup({ HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP: '0' }), false)
 })

@@ -1649,3 +1649,61 @@ def test_gui_zero_exit_pack_without_artifact_keeps_previous_app(tmp_path, monkey
     assert live_exe.read_text(encoding="utf-8") == "good build"
     assert not list(desktop_dir.glob(".staging-*"))
     assert "produced no launchable app" in capsys.readouterr().out
+
+
+# --- updates.pre_update_backup bridge to Electron's emergency backup (#116731) ---
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("off", True),
+        ("OFF", True),
+        ("false", True),
+        ("none", True),
+        ("disabled", True),
+        (False, True),
+        ("quick", False),
+        ("full", False),
+        ("true", False),
+        (True, False),
+        ("bogus", False),
+    ],
+)
+def test_pre_update_backup_disabled_matches_backup_mode_aliases(raw, expected):
+    cfg = {"updates": {"pre_update_backup": raw}}
+    with patch("hermes_cli.config.load_config", return_value=cfg):
+        assert main_desktop._pre_update_backup_disabled() is expected
+
+
+def test_pre_update_backup_disabled_defaults_on_when_config_unset():
+    with patch("hermes_cli.config.load_config", return_value={}):
+        assert main_desktop._pre_update_backup_disabled() is False
+
+
+def test_pre_update_backup_disabled_defaults_on_when_config_errors():
+    with patch("hermes_cli.config.load_config", side_effect=OSError("boom")):
+        assert main_desktop._pre_update_backup_disabled() is False
+
+
+def test_desktop_launch_env_bridges_backup_off_to_electron(monkeypatch):
+    monkeypatch.delenv("HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP", raising=False)
+    cfg = {"updates": {"pre_update_backup": "off"}}
+    with patch("hermes_cli.config.load_config", return_value=cfg):
+        env, _ = main_desktop._desktop_launch_env(_ns())
+    assert env["HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP"] == "1"
+
+
+def test_desktop_launch_env_leaves_emergency_backup_on_by_default(monkeypatch):
+    monkeypatch.delenv("HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP", raising=False)
+    with patch("hermes_cli.config.load_config", return_value={}):
+        env, _ = main_desktop._desktop_launch_env(_ns())
+    assert "HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP" not in env
+
+
+def test_desktop_launch_env_explicit_env_wins_over_config(monkeypatch):
+    monkeypatch.setenv("HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP", "0")
+    cfg = {"updates": {"pre_update_backup": "off"}}
+    with patch("hermes_cli.config.load_config", return_value=cfg):
+        env, _ = main_desktop._desktop_launch_env(_ns())
+    assert env["HERMES_DESKTOP_SKIP_EMERGENCY_BACKUP"] == "0"
