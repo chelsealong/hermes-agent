@@ -1643,7 +1643,10 @@ def _current_max_iterations() -> int:
     return _resolve_turn_limit(os.getenv("HERMES_MAX_ITERATIONS"))
 
 
-from contextlib import asynccontextmanager as _asynccontextmanager, contextmanager as _contextmanager, suppress
+from contextlib import (
+    asynccontextmanager as _asynccontextmanager, contextmanager as _contextmanager, nullcontext as _nullcontext,
+    suppress,
+)
 
 
 class MultiplexConfigError(RuntimeError):
@@ -4546,22 +4549,41 @@ def _housekeeping_misfire_catch_up(cron_provider, adapters, loop) -> None:
         logger.info("Misfire catch-up: fired %d overdue job(s)", caught_up)
 
 
-def _housekeeping_curator() -> None:
+def _housekeeping_profile_scopes(runner) -> list:
+    """Context managers a per-profile housekeeping chore should run each tick under: a single inert
+    no-op scope for a single-profile gateway (byte-for-byte the historical behavior), or one
+    ``_profile_runtime_scope`` per served profile under multiplex — mirroring ``_mcp_config_reconciler``,
+    the sibling chore that already does this. Without it, a multiplexed gateway's Curator/Sync/Org-sync
+    ticks resolve credentials and read skills state under the launch profile's home for every served
+    profile, instead of each profile's own (#116700)."""
+    config = getattr(runner, "config", None)
+    if not getattr(config, "multiplex_profiles", False):
+        return [_nullcontext()]
+    return [_profile_runtime_scope(Path(profile_home)) for _name, profile_home in _multiplex_profile_homes(config)]
+
+
+def _housekeeping_curator(runner=None) -> None:
     """maybe_run_curator() is gated by config.interval_hours (7 days default); this is the poll."""
     from agent.curator import maybe_run_curator
-    maybe_run_curator(idle_for_seconds=float("inf"), on_summary=lambda msg: logger.info("curator: %s", msg))
+    for scope in _housekeeping_profile_scopes(runner):
+        with scope:
+            maybe_run_curator(idle_for_seconds=float("inf"), on_summary=lambda msg: logger.info("curator: %s", msg))
 
 
-def _housekeeping_skill_sync() -> None:
+def _housekeeping_skill_sync(runner=None) -> None:
     """Inert unless the access gate is open and a sync base URL is configured."""
     from tools.skills_sync_client import maybe_pull_skills
-    maybe_pull_skills()
+    for scope in _housekeeping_profile_scopes(runner):
+        with scope:
+            maybe_pull_skills()
 
 
-def _housekeeping_org_skill_sync() -> None:
+def _housekeeping_org_skill_sync(runner=None) -> None:
     """Gated on real org membership (the token must carry an org role): solo accounts never reach the network."""
     from tools.skills_sync_client_org import maybe_pull_org_skills
-    maybe_pull_org_skills()
+    for scope in _housekeeping_profile_scopes(runner):
+        with scope:
+            maybe_pull_org_skills()
 
 
 def _housekeeping_auto_archive() -> None:
@@ -4665,9 +4687,9 @@ def _start_gateway_housekeeping(
         # already ended (#111010). Runs every tick so the outage is bounded by one housekeeping interval.
         chores.append((1, "Cron ticker supervisor", cron_thread.restart_if_dead))
     chores += [
-        (60, "Curator tick", _housekeeping_curator),
-        (60, "Sync pull tick", _housekeeping_skill_sync),
-        (60, "Org sync pull tick", _housekeeping_org_skill_sync),
+        (60, "Curator tick", lambda: _housekeeping_curator(runner)),
+        (60, "Sync pull tick", lambda: _housekeeping_skill_sync(runner)),
+        (60, "Org sync pull tick", lambda: _housekeeping_org_skill_sync(runner)),
         (60, "Auto-archive tick", _housekeeping_auto_archive),
         (1, "Deferred FTS retry tick", _housekeeping_deferred_fts_retry),
         (1, "gateway housekeeping memory trim", _housekeeping_memory_trim),
