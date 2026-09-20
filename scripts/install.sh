@@ -1323,6 +1323,21 @@ check_network_prerequisites() {
     fi
 }
 
+# Resolve a command even when it isn't on PATH yet: this runs before
+# setup_path has appended the command link dir, so a binary pre-staged there
+# (e.g. a static ffmpeg dropped into ~/.local/bin) is otherwise invisible to
+# `command -v` and gets reported missing. Echoes the resolved path, or
+# nothing if the command can't be found either way.
+_resolve_cmd_path() {
+    if command -v "$1" &> /dev/null; then
+        command -v "$1"
+    else
+        local link_dir
+        link_dir="$(get_command_link_dir)/$1"
+        [ -x "$link_dir" ] && echo "$link_dir"
+    fi
+}
+
 install_system_packages() {
     # Detect what's missing
     HAS_RIPGREP=false
@@ -1331,16 +1346,20 @@ install_system_packages() {
     local need_ffmpeg=false
 
     log_info "Checking ripgrep (fast file search)..."
-    if command -v rg &> /dev/null; then
-        log_success "$(rg --version | head -1) found"
+    local rg_bin
+    rg_bin="$(_resolve_cmd_path rg)"
+    if [ -n "$rg_bin" ]; then
+        log_success "$("$rg_bin" --version | head -1) found"
         HAS_RIPGREP=true
     else
         need_ripgrep=true
     fi
 
     log_info "Checking ffmpeg (TTS voice messages)..."
-    if command -v ffmpeg &> /dev/null; then
-        local ffmpeg_ver=$(ffmpeg -version 2>/dev/null | head -1 | awk '{print $3}')
+    local ffmpeg_bin
+    ffmpeg_bin="$(_resolve_cmd_path ffmpeg)"
+    if [ -n "$ffmpeg_bin" ]; then
+        local ffmpeg_ver=$("$ffmpeg_bin" -version 2>/dev/null | head -1 | awk '{print $3}')
         log_success "ffmpeg $ffmpeg_ver found"
         HAS_FFMPEG=true
     else
