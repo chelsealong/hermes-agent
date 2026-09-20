@@ -18,6 +18,7 @@ import { $backdrop, setBackdrop } from '@/store/backdrop'
 import { $composerPopoutGesturesEnabled, setComposerPopoutGesturesEnabled } from '@/store/composer-popout'
 import { $embedAllowed, $embedMode, clearEmbedAllowed, type EmbedMode, setEmbedMode } from '@/store/embed-consent'
 import { $introSplash, setIntroSplash } from '@/store/intro-splash'
+import { $convertLargePastesToAttachment, setConvertLargePastesToAttachment } from '@/store/large-paste-attachment'
 import { notifyError } from '@/store/notifications'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
 import { $reactionsEnabled, setReactionsEnabled } from '@/store/reactions-enabled'
@@ -410,6 +411,7 @@ export function AppearanceSettings({ subpage }: AppearanceSettingsProps = {}) {
   const hideCodeDiffs = useStore($hideCodeDiffs)
   const hideThreadTimeline = useStore($hideThreadTimeline)
   const reasoningCollapsedByDefault = useStore($reasoningCollapsedByDefault)
+  const convertLargePastesToAttachment = useStore($convertLargePastesToAttachment)
   const sessionListDensity = useStore($sessionListDensity)
   const tabStripDefault = useStore($tabStripDefault)
   const titlebarAppActionsSide = useStore($titlebarAppActionsSide)
@@ -1056,6 +1058,26 @@ export function AppearanceSettings({ subpage }: AppearanceSettingsProps = {}) {
               }
               description={a.reasoningCollapsedDesc}
               title={a.reasoningCollapsedTitle}
+            />
+          )}
+
+          {show('chat-display') && (
+            <ListRow
+              action={
+                <SegmentedControl
+                  onChange={id => {
+                    triggerHaptic('selection')
+                    setConvertLargePastesToAttachment(id === 'on')
+                  }}
+                  options={[
+                    { id: 'off', label: t.common.off },
+                    { id: 'on', label: t.common.on }
+                  ]}
+                  value={convertLargePastesToAttachment ? 'on' : 'off'}
+                />
+              }
+              description={a.convertLargePastesDesc}
+              title={a.convertLargePastesTitle}
             />
           )}
 

@@ -24,6 +24,7 @@ import { browseBackward, browseForward, deriveUserHistory, isBrowsingHistory } f
 import { POPOUT_WIDTH_REM } from '@/store/composer-popout'
 import { parkQueuedPrompts, removeQueuedPrompt, unparkQueuedPrompts } from '@/store/composer-queue'
 import { $hudMode } from '@/store/hud'
+import { $convertLargePastesToAttachment } from '@/store/large-paste-attachment'
 import { sessionBlockingPrompt } from '@/store/prompts'
 import { toggleReview } from '@/store/review'
 import { $gatewayState } from '@/store/session'
@@ -184,6 +185,7 @@ export function ChatBar({
   )
 
   const autoSpeak = useStore($autoSpeakReplies)
+  const convertLargePastes = useStore($convertLargePastesToAttachment)
   // The turn is parked on the user (clarify / approval / sudo / secret). Esc must
   // not interrupt it — there's nothing actively running to stop, and stopping
   // would discard a question the user may want to come back to. The blocking
@@ -613,7 +615,7 @@ export function ChatBar({
     // material rides along as a file. Falls back to inline insertion if the
     // attachment can't be created (missing bridge, write failure) so the
     // paste is never lost.
-    if (onAttachPastedText && shouldConvertPasteToAttachment(pastedText)) {
+    if (onAttachPastedText && convertLargePastes && shouldConvertPasteToAttachment(pastedText)) {
       const editor = event.currentTarget
 
       void Promise.resolve(onAttachPastedText(pastedText)).then(attached => {

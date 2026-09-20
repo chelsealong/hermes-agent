@@ -786,6 +786,9 @@ export const en: Translations = {
       hideThreadTimelineDesc: 'Hide the navigation bars along the right edge of each conversation.',
       reasoningCollapsedTitle: 'Collapse thinking by default',
       reasoningCollapsedDesc: 'Keep streamed reasoning available without expanding it until you open it.',
+      convertLargePastesTitle: 'Convert large pastes to attachments',
+      convertLargePastesDesc:
+        'Pasting a large block of text becomes a .txt attachment instead of inline content. Turn off to always paste as plain text.',
       uiScaleTitle: 'UI Scale',
       uiScaleDesc: (percent: number) =>
         `Scales text and controls across the whole app. Cmd/Ctrl with +, - and 0 also works. Current: ${percent}%.`,
