@@ -529,6 +529,8 @@ export const zhHant = defineLocale({
       hideThreadTimelineDesc: '隱藏每個對話右側邊緣的導覽列。',
       reasoningCollapsedTitle: '預設摺疊推理過程',
       reasoningCollapsedDesc: '保留串流推理內容，但在您開啟前維持摺疊。',
+      convertLargePastesTitle: '將大量貼上內容轉換為附件',
+      convertLargePastesDesc: '貼上大量文字時會轉換為 .txt 附件，而非內嵌內容。關閉後將一律以純文字形式貼上。',
       uiScaleTitle: '介面縮放',
       uiScaleDesc: (percent: number) =>
         `縮放整個應用程式的文字與介面。也可使用 Cmd/Ctrl 加 +、- 或 0 調整。目前：${percent}%`,
