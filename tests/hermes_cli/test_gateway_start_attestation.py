@@ -121,6 +121,26 @@ def test_success_report_writes_attestation(monkeypatch, attest_home, capsys):
     assert data["via"] == "direct spawn (PID 321)"
 
 
+def test_report_gateway_start_prints_the_spawned_pid_once(monkeypatch, attest_home, capsys):
+    """#117051: ``start()``/``_start_or_report_running()`` used to build ``via`` as
+    ``f"direct spawn (PID {pid})"`` and hand it to ``_report_gateway_start``, which then
+    appended the confirmed-ready PIDs on top — ``"Gateway started via direct spawn
+    (PID 43560) (PID: 53320)"`` — instead of replacing. A caller now passes the spawned
+    PID out-of-band via ``spawned_pid``, which the success line must not echo at all: the
+    confirmed-ready PIDs (which is not always the same list, e.g. a stale sibling gateway
+    still visible under the same profile) are the only PIDs printed.
+    """
+    monkeypatch.setattr(gateway_windows, "_wait_for_gateway_ready", lambda *a, **k: [53320])
+    gateway_windows._LAST_SPAWN_BREAKAWAY_FALLBACK["fallback"] = False
+
+    gateway_windows._report_gateway_start("direct spawn", spawned_pid=43560)
+
+    out = capsys.readouterr().out
+    assert out.count("PID") == 1
+    assert "53320" in out
+    assert "43560" not in out
+
+
 def test_attestation_reports_silent_death(attest_home):
     """Attested PIDs gone + no clean-exit record ⇒ warning, marker consumed."""
     gateway_windows._write_start_attestation([555], "direct spawn (PID 555)")

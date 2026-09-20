@@ -764,7 +764,7 @@ def _start_or_report_running(running_pids: list[int] | None = None) -> None:
         _report_already_running(running_pids)
     else:
         pid = _spawn_detached()
-        _report_gateway_start(f"direct spawn (PID {pid})")
+        _report_gateway_start("direct spawn", spawned_pid=pid)
 
 
 def _install_startup_fallback(script_path: Path, start_now: bool, detail: str) -> None:
@@ -1168,7 +1168,12 @@ def _print_start_attestation_warning() -> None:
         print(warning)
 
 
-def _report_gateway_start(via: str) -> None:
+def _report_gateway_start(via: str, *, spawned_pid: int | None = None) -> None:
+    """``via`` must not embed a PID: the success line always reports the
+    confirmed-ready PIDs, which is not always ``spawned_pid`` verbatim (a
+    stale sibling from the same profile can still be visible), and printing
+    both produced a "(PID 1) (PID: 2)" line (#117051). ``spawned_pid`` is
+    used only on the failure branch, where no PID was ever confirmed."""
     pids = _wait_for_gateway_ready()
     if pids:
         print(f"✓ Gateway started via {via} (PID: {', '.join(map(str, pids))})")
@@ -1177,7 +1182,8 @@ def _report_gateway_start(via: str) -> None:
             _print_task_run_hint("  If it dies, start it with: schtasks /Run /TN {}")
         _write_start_attestation(pids, via)
     else:
-        print(f"✗ Gateway start via {via} FAILED — no stable gateway process detected within the verification window.")
+        pid_note = f" (spawned PID {spawned_pid})" if spawned_pid else ""
+        print(f"✗ Gateway start via {via}{pid_note} FAILED — no stable gateway process detected within the verification window.")
         print("  (The process may have been created and then killed — e.g. by a parent Job Object, #91675.)")
         print(f"  Check the log for startup errors:\n    type {_hermes_home()}\\logs\\gateway.log\n    type {_hermes_home()}\\logs\\gateway-stdio.log")
         _print_task_run_hint("  Recovery: schtasks /Run /TN {}   (starts the gateway outside any Job Object)")
@@ -1558,7 +1564,7 @@ def start() -> None:
     # Manual starts use the same console-less direct spawn as restart() and install --start-now;
     # Scheduled Task / Startup entries are only login persistence.
     pid = _spawn_detached()
-    _report_gateway_start(f"direct spawn (PID {pid})")
+    _report_gateway_start("direct spawn", spawned_pid=pid)
 
 
 def _drain_gateway_pid(pid: int, drain_timeout: float) -> bool:
