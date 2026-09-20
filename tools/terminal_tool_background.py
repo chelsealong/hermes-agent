@@ -8,6 +8,7 @@ monkeypatch points authoritative.
 import json
 import logging
 import sys
+import threading
 from typing import Any, List, Optional
 
 logger = logging.getLogger("tools.terminal_tool")
@@ -138,16 +139,47 @@ def _register_completion_watcher(process_registry, proc_session, session_key) ->
     process_registry.pending_watchers.append(watcher)
 
 
+def _watch_background_lifetime(process_registry, proc_session, timeout_seconds: float) -> None:
+    """Kill *proc_session* if it is still running ``timeout_seconds`` after spawn.
+
+    Waits on ``_completion_event`` instead of a plain sleep so a process that exits
+    on its own wakes this thread immediately rather than lingering until the
+    deadline. ``kill_process`` is a no-op (returns ``already_exited``) if the
+    process finished in the race between the wait timing out and this check, so no
+    pre-check is needed. ``consume_output=False`` matches ``kill_all``'s bulk-kill
+    semantics: an armed ``notify_on_complete`` watcher still fires so the agent
+    learns the process was killed instead of finishing silently."""
+    if proc_session._completion_event.wait(timeout=timeout_seconds):
+        return
+    logger.warning(
+        "background proc %s: killing after exceeding its %.0fs timeout",
+        proc_session.id, timeout_seconds)
+    process_registry.kill_process(
+        proc_session.id, source="terminal.background_timeout", consume_output=False)
+
+
+def _start_lifetime_watchdog(process_registry, proc_session, timeout_seconds: float) -> None:
+    threading.Thread(
+        target=_watch_background_lifetime, args=(process_registry, proc_session, timeout_seconds),
+        daemon=True, name=f"bg-timeout-{proc_session.id}",
+    ).start()
+
+
 def spawn_background_process(
     *, command: str, env: Any, env_type: str, effective_task_id: str, task_id: Optional[str],
     session_key: str, workdir: Optional[str], cwd: str, effective_pty: bool,
     notify_on_complete: bool, watch_patterns: Optional[List[str]], approval_note: Optional[str],
-    pty_disabled_reason: Optional[str],
+    pty_disabled_reason: Optional[str], timeout: Optional[int] = None,
 ) -> str:
     """Spawn *command* as a tracked background process and return the JSON result.
 
     Never inline-polls ``is_interrupted()``: the spawn detaches and returns
     exit_code 0 immediately, so the stale-interrupt kill cannot occur here.
+
+    ``timeout``, when given, bounds the process's lifetime (not just how long this
+    call waits): a watchdog kills its whole process tree if it is still running
+    after ``timeout`` seconds. Omit it for servers/daemons that must outlive the
+    turn (#116936 — background commands previously had no lifetime cap at all).
     """
     from tools.process_registry import process_registry
     from tools.terminal_tool import (
@@ -165,6 +197,9 @@ def spawn_background_process(
         )
         result_data = {"output": "Background process started", "session_id": proc_session.id,
                        "pid": proc_session.pid, "exit_code": 0, "error": None}
+        if timeout:
+            _start_lifetime_watchdog(process_registry, proc_session, timeout)
+            result_data["lifetime_timeout_seconds"] = timeout
         if approval_note:
             result_data["approval"] = approval_note
         if pty_disabled_reason:
