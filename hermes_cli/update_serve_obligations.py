@@ -24,7 +24,14 @@ def defer_manual_serve(runtime: dict, *, require_alive: bool = False) -> bool:
     if not isinstance(detail, dict):
         return False
     created = detail.get("create_time")
-    if type(pid) is not int or pid <= 0 or type(created) not in (int, float) or not math.isfinite(created) or created <= 0:
+    if type(pid) is not int or pid <= 0:
+        return False
+    if created is None:
+        # No creation time available (e.g. EACCES on /proc). A durable per-incarnation reminder
+        # needs one to build its filename, but a pid psutil confirms is gone needs no reminder at
+        # all — discharge it instead of re-flagging it as unsaveable on every startup forever.
+        return _pid_alive_matches(pid, None) is False
+    if type(created) not in (int, float) or not math.isfinite(created) or created <= 0:
         return False
     try:
         alive = _pid_alive_matches(pid, created)

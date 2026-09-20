@@ -136,6 +136,20 @@ def test_historical_retention_is_independent_of_plan_order(monkeypatch, capsys, 
     assert "serve [work] pid 900" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("alive", [True, None, False])
+def test_manual_deferral_with_unreadable_create_time(monkeypatch, capsys, alive):
+    """A row with create_time=None (unreadable /proc, #116507) must be discharged once its pid is provably dead, not re-flagged on every startup forever."""
+    from hermes_cli.update_serve_obligations import retain_receipt_manual_serves, warn_pending_manual_serves
+
+    runtime = asdict(RuntimeRecord(kind="serve", profile="work", pid=900, supervisor="manual-serve", restart_via="respawn-argv", detail={"create_time": None}))
+    receipt = {"plan": {"runtimes": [runtime]}}
+    monkeypatch.setattr(process_identity, "_pid_alive_matches", lambda *a: alive)
+    pending = retain_receipt_manual_serves(receipt)
+    assert (pending == []) is (alive is False)
+    warn_pending_manual_serves(pending_manual=pending)
+    assert ("900" in capsys.readouterr().out) is (alive is not False)
+
+
 @pytest.mark.parametrize("failure", ["mkdir", "write", "replace"])
 @pytest.mark.parametrize("gateway_state", ["current", "stale"])
 def test_historical_retention_failure_warns_and_survives_rotation(monkeypatch, capsys, failure, gateway_state):
