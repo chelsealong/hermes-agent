@@ -51,6 +51,29 @@ def test_unarchiving_compression_tip_unarchives_projected_root(db):
     assert [s["id"] for s in db.list_sessions_rich(order_by_last_active=True)] == ["tip"]
 
 
+def test_resume_after_sweep_unarchives_lineage(db):
+    """#117713: the idle-archive sweep archives a whole lineage (root=1, tip=1) while its tip is
+    genuinely idle. A later resume publishes a new compression child under that archived lineage;
+    the new tip proves the conversation is live again, so the listing's projected root must come
+    back too, not just the fresh child row."""
+    _compression_pair(db)
+    assert db.set_session_archived("tip", True) is True
+    assert db.get_session("root")["archived"] == 1
+
+    db.publish_compression_child(
+        parent_session_id="tip",
+        child_session_id="tip2",
+        source="cli",
+        messages=[{"role": "user", "content": "hello again"}],
+        require_compression_lease=False,
+    )
+
+    assert db.get_session("root")["archived"] == 0
+    assert db.get_session("tip")["archived"] == 0
+    assert db.get_session("tip2")["archived"] == 0
+    assert [s["id"] for s in db.list_sessions_rich(order_by_last_active=True)] == ["tip2"]
+
+
 def test_archived_only_view_includes_hidden_archived_sessions(db):
     """The archived-only view is the recovery surface: a session that is both
     archived and hidden (Bot Mode marks its sessions hidden) must appear

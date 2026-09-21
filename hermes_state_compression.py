@@ -306,6 +306,27 @@ class SessionCompressionMixin:
                 "WHERE id = ? AND ended_at IS NULL", (time.time(), parent_session_id))
             if updated.rowcount != 1:
                 raise RuntimeError(f"Compression parent changed during publication: {parent_session_id}")
+            # A resume can publish a new tip under a lineage the idle-archive sweep archived while it
+            # was quiet (root/ancestors archived=1); the new child row defaults to archived=0, but
+            # listings filter on the ancestor root, not the tip, so the lineage would stay hidden
+            # forever despite actively receiving messages again (#117713). Un-archive the ancestor
+            # chain in the same transaction as the publish that proves the lineage is live again.
+            conn.execute(
+                """
+                WITH RECURSIVE ancestors(id) AS (
+                    SELECT ?
+                    UNION
+                    SELECT parent.id
+                    FROM ancestors a
+                    JOIN sessions child ON child.id = a.id
+                    JOIN sessions parent ON parent.id = child.parent_session_id
+                    WHERE parent.end_reason = 'compression'
+                )
+                UPDATE sessions SET archived = 0
+                WHERE id IN (SELECT id FROM ancestors) AND archived = 1
+                """,
+                (parent_session_id,),
+            )
         self._execute_write(_do)
 
     def _write_sql_logged(self, op: str, session_id: str, sql: str, params) -> None:
