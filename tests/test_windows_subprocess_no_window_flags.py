@@ -436,3 +436,106 @@ def test_suppress_platform_ver_console_stubs_syscmd_ver(monkeypatch):
     # Idempotent + never raises on repeat calls.
     _subprocess_compat.suppress_platform_ver_console()
     assert platform._syscmd_ver() == ("", "", "")
+
+
+# ── #117781 console-less desktop backend flashes git/tasklist/powershell
+# consoles at startup ──────────────────────────────────────────────────────
+#
+# Four call sites spawn console helpers without windows_hide_flags(), so a
+# console-less parent (pythonw desktop backend) gets a fresh visible console
+# per child. All are hide-only (creationflags); wiring is checked on every
+# host by pinning windows_hide_flags() to a sentinel, since the numeric value
+# only differs on real Windows.
+
+
+def test_gitlock_git_proc_running_hides_console_window(monkeypatch):
+    from hermes_cli import gitlock
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(stdout="")
+
+    monkeypatch.setattr(gitlock, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(gitlock.os, "name", "nt")
+    monkeypatch.setattr(gitlock.subprocess, "run", fake_run)
+
+    assert gitlock._git_proc_running() is False
+    assert len(captured) == 1, captured
+    cmd, kwargs = captured[0]
+    assert cmd[0] == "tasklist"
+    assert kwargs["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_gitlock_is_ancestor_of_head_hides_console_window(monkeypatch, tmp_path):
+    from hermes_cli import gitlock
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(returncode=0)
+
+    monkeypatch.setattr(gitlock, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(gitlock.subprocess, "run", fake_run)
+
+    assert gitlock.is_ancestor_of_head(tmp_path, "HEAD~1") is True
+    assert len(captured) == 1, captured
+    assert captured[0][1]["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_gateway_windows_scheduled_task_state_hides_console_window(monkeypatch):
+    from hermes_cli import gateway
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(stdout="Ready\n", returncode=0)
+
+    monkeypatch.setattr(gateway, "is_windows", lambda: True)
+    monkeypatch.setattr(gateway.shutil, "which", lambda name: "powershell" if name == "powershell" else None)
+    _patch_hide_flags(monkeypatch)
+    monkeypatch.setattr(gateway.subprocess, "run", fake_run)
+
+    assert gateway._windows_scheduled_task_state("hermes-gateway") == "Ready"
+    assert len(captured) == 1, captured
+    cmd, kwargs = captured[0]
+    assert cmd[0] == "powershell"
+    assert kwargs["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_update_cmd_git_run_hides_console_window(monkeypatch):
+    from hermes_cli import update_cmd
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(stdout="ok\n", returncode=0)
+
+    _patch_hide_flags(monkeypatch)
+    monkeypatch.setattr(update_cmd.subprocess, "run", fake_run)
+
+    update_cmd._git_run(["git"], ["status"], cwd="/repo")
+
+    assert len(captured) == 1, captured
+    assert captured[0][1]["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_update_cmd_git_text_kw_wires_hide_flags(monkeypatch):
+    """``_GIT_TEXT_KW`` bakes ``windows_hide_flags()`` in at import time, so the
+    wiring is checked by reloading the module with the helper pinned."""
+    import importlib
+
+    import hermes_cli._subprocess_compat as subprocess_compat
+
+    monkeypatch.setattr(subprocess_compat, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    from hermes_cli import update_cmd_git
+
+    try:
+        reloaded = importlib.reload(update_cmd_git)
+        assert reloaded._GIT_TEXT_KW["creationflags"] == _CREATE_NO_WINDOW
+    finally:
+        importlib.reload(update_cmd_git)
