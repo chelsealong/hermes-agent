@@ -158,6 +158,24 @@ def _response_finish_reason(response: Any) -> str:
 # into every subsequent iterative-update prompt. (Ported from earendil-works/pi#7048 / commit 97fa14e39.)
 _TRUNCATED_SUMMARY_MARKER = "finish_reason=length"
 
+# Marker for a refused summary; the except-branch classifier keys on this exact substring.
+# A non-empty, non-truncated response can still carry zero summary content: the model declines the
+# summarization request instead of complying (#118363). The prompt forbids any preamble ("Write only
+# the summary body"), so a compliant response never opens with prose like this — only a refusal does.
+_REFUSED_SUMMARY_MARKER = "summary_refused"
+_SUMMARY_REFUSAL_OPENING = re.compile(
+    r"^\s*i\s*(?:'m|\sam)?\s*(?:can'?t|cannot|won'?t|will\s*not|unable|not\s+able|sorry)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_summary_refusal(content: str) -> bool:
+    """True when *content* opens with a refusal ("I can't...", "I'm unable to...") rather than the
+    structured summary body the prompt requires. Anchored to the start only — the summarizer prompt
+    explicitly forbids any preamble, so a refusal there is a strong, low-false-positive signal that
+    the model declined instead of summarizing."""
+    return bool(_SUMMARY_REFUSAL_OPENING.match(content))
+
 
 def _is_summary_access_or_quota_error(exc: Exception) -> bool:
     """Return True for non-retryable summary auth, permission, or quota errors."""
@@ -625,12 +643,14 @@ class _SummaryFailureKind:
     streaming_closed: bool
     empty_content: bool
     truncated: bool
+    refused: bool
     overloaded: bool
 
     def fallback_reason(self) -> str:
         """Reason string for the one-shot main-model retry log line, most specific first."""
         reasons = (
             (self.json_decode, "returned invalid JSON"), (self.truncated, "returned a truncated summary (output token cap)"),
+            (self.refused, "refused the summarization request"),
             (self.empty_content, "returned empty content"), (self.overloaded, "was overloaded"),
             (self.model_not_found, "unavailable"),
             (self.streaming_closed, "closed stream prematurely"), (self.timeout, "timed out"),
@@ -659,6 +679,9 @@ def _classify_summary_failure(e: Exception) -> _SummaryFailureKind:
         ),
         # Truncated summary: one main-model retry, then ABORT preserving the session.
         truncated=isinstance(e, RuntimeError) and _TRUNCATED_SUMMARY_MARKER in err,
+        # Refused summary: same treatment as truncated — one main-model retry, then ABORT preserving
+        # the session rather than committing a content-free checkpoint.
+        refused=isinstance(e, RuntimeError) and _REFUSED_SUMMARY_MARKER in err,
         overloaded=classify_api_error(e).reason is FailoverReason.overloaded
         or any(marker in err for marker in ("overloaded", "at capacity", "over capacity")),
     )
@@ -694,6 +717,13 @@ _TERMINAL_SUMMARY_FAILURES = (
         "Summary generation failed (LLM returned empty content) — aborting compression. %d message(s) "
         "preserved unchanged; the session was NOT rotated. This indicates upstream provider degradation: "
         "retry with /compress once the provider recovers, or continue the conversation as-is.",
+    ),
+    (
+        "_last_summary_refused_failure",
+        "summary_refused_failure",
+        "Summary generation failed (the model declined the summarization request instead of producing a "
+        "summary) — aborting compression. %d message(s) preserved unchanged; the session was NOT rotated. "
+        "Retry with /compress, or continue the conversation as-is.",
     ),
     (
         "_last_summary_overload_failure",
@@ -3598,6 +3628,17 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 f"Context compression summary was truncated ({_TRUNCATED_SUMMARY_MARKER}): generation hit the output "
                 f"token cap and the summary is incomplete {where}"
             )
+        # A non-empty, non-truncated response can still carry no summary at all: the model declines the
+        # request ("I can't produce this summary as requested...") instead of complying. That passes every
+        # check above — finish_reason=stop, real content — and would otherwise be committed as the compaction
+        # checkpoint, silently discarding the compacted turns with nothing to show for it (#118363). Treat it
+        # as a failure so it routes through the same main-model fallback + abort machinery as other degraded
+        # responses instead of becoming a content-free checkpoint.
+        if _looks_like_summary_refusal(content):
+            raise RuntimeError(
+                f"Context compression summary was refused ({_REFUSED_SUMMARY_MARKER}): the model declined the "
+                f"summarization request instead of producing a summary {where}"
+            )
         return content
 
     def _generate_summary(
@@ -3857,7 +3898,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         elif kind.truncated:
             _transient_cooldown = _next_timeout_cooldown(self, "_consecutive_truncation_failures")
         else:
-            _transient_cooldown = 30 if (kind.json_decode or kind.streaming_closed or kind.empty_content) else 60
+            _transient_cooldown = 30 if (kind.json_decode or kind.streaming_closed or kind.empty_content or kind.refused) else 60
         err_text = _short_error_text(e)
         self._record_compression_failure_cooldown(_transient_cooldown, err_text)
         self._last_summary_error = err_text
@@ -3872,6 +3913,8 @@ Write only the summary body. Do not include any preamble or prefix."""
             self._last_summary_network_failure = True
         elif kind.truncated:
             self._last_summary_truncated_failure = True
+        elif kind.refused:
+            self._last_summary_refused_failure = True
         elif kind.empty_content:
             self._last_summary_empty_content_failure = True
         elif kind.overloaded:
