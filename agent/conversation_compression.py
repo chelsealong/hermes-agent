@@ -1454,6 +1454,11 @@ def _emit_compression_attempt_telemetry(
         payload.update(
             total_duration_ms=int((time.monotonic() - started_at) * 1000), commit_status=commit_status,
             split_status=split_status,
+            # Background-review forks share the parent's session_id for cache warmth (see
+            # background_review._detach_fork_compression) but are _persist_disabled, so a
+            # "committed" compaction here never reaches state.db. Without this field the log
+            # line is indistinguishable from a real, persisted compaction on the live session.
+            persisted=not getattr(agent, "_persist_disabled", False),
         )
         if commit_started_at is not None:
             telemetry["commit_ms"] = payload["commit_ms"] = max(0, int((time.monotonic() - commit_started_at) * 1000))

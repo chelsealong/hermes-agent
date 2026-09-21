@@ -102,6 +102,7 @@ def test_compression_attempt_telemetry_is_metadata_only(caplog):
     assert payload["chunk_count"] in {0, 1}
     assert payload["commit_status"] == "committed"
     assert payload["split_status"] == "not_applicable"
+    assert payload["persisted"] is True
     assert payload["fallback_used"] is False
     assert isinstance(payload["total_duration_ms"], int)
     assert isinstance(payload["commit_ms"], int)
@@ -115,6 +116,37 @@ def test_compression_attempt_telemetry_is_metadata_only(caplog):
     assert "SANITIZED SUMMARY" not in raw_log
     assert "user message" not in raw_log
     assert "assistant reply" not in raw_log
+
+
+def test_compression_attempt_telemetry_marks_detached_fork_unpersisted(caplog):
+    """A background-review fork shares the parent's session_id (cache warmth) but sets
+    _persist_disabled=True, so its "committed" in-memory compaction never reaches state.db
+    (issue #118361). The telemetry line must say so instead of looking like a real commit."""
+    with patch("agent.context_compressor.get_model_context_length", return_value=100_000):
+        compressor = ContextCompressor(
+            model="test/main-model",
+            provider="test-provider",
+            threshold_percent=0.50,
+            quiet_mode=True,
+            config_context_length=100_000,
+        )
+    compressor.tail_token_budget = 10
+    agent = _Agent(compressor)
+    agent._persist_disabled = True
+
+    with patch.object(compressor, "_generate_summary", return_value="SANITIZED SUMMARY"):
+        with caplog.at_level(logging.INFO, logger="agent.conversation_compression"):
+            compress_context(
+                agent,
+                _messages(),
+                "system prompt",
+                approx_tokens=75_000,
+                force=True,
+            )
+
+    payload = _extract_telemetry(caplog)
+    assert payload["commit_status"] == "committed"
+    assert payload["persisted"] is False
 
 
 def test_aux_call_telemetry_records_durations_without_content(caplog):
