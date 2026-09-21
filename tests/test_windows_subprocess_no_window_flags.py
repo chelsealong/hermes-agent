@@ -543,3 +543,85 @@ def test_update_cmd_git_text_kw_wires_hide_flags(monkeypatch):
         assert reloaded._GIT_TEXT_KW["creationflags"] == _CREATE_NO_WINDOW
     finally:
         importlib.reload(update_cmd_git)
+
+
+# ── #117781 follow-up: three more update_cmd_git.py subprocess.run sites
+# that spawn `git` directly (bypassing _GIT_TEXT_KW / _git_run) and were
+# missed by the first pass ──────────────────────────────────────────────────
+
+
+def test_normalize_managed_eol_config_hides_console_window(monkeypatch):
+    """The final ``git config core.autocrlf false`` pin in
+    ``_normalize_managed_eol`` is a raw ``subprocess.run``, not routed through
+    ``_GIT_TEXT_KW``/``_probe_run``."""
+    from hermes_cli import update_cmd_git
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        if "--get" in cmd:
+            return _Completed(stdout="true\n", returncode=0)
+        if "diff" in cmd:
+            return _Completed(stdout="", returncode=0)
+        return _Completed(returncode=0)
+
+    monkeypatch.setattr(update_cmd_git, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(update_cmd_git.subprocess, "run", fake_run)
+
+    update_cmd_git._normalize_managed_eol(["git"], "/repo")
+
+    spawns = _spawns(captured, "config", "core.autocrlf", "false")
+    assert len(spawns) == 1, captured
+    assert spawns[0][1]["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_sync_with_upstream_fetch_hides_console_window(monkeypatch):
+    """The upstream ``git fetch`` in ``_sync_with_upstream_if_needed`` is a raw
+    ``subprocess.run`` reachable unconditionally once an ``upstream`` remote
+    already exists (a returning fork contributor)."""
+    from hermes_cli import update_cmd, update_cmd_git
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(returncode=0)
+
+    monkeypatch.setattr(update_cmd_git, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(update_cmd, "_has_upstream_remote", lambda git_cmd, cwd: True)
+    monkeypatch.setattr(update_cmd, "_count_commits_between", lambda *a, **k: -1)
+    monkeypatch.setattr(update_cmd_git.subprocess, "run", fake_run)
+
+    assert update_cmd_git._sync_with_upstream_if_needed(["git"], "/repo") is False
+
+    spawns = _spawns(captured, "fetch", "upstream", "main")
+    assert len(spawns) == 1, captured
+    assert spawns[0][1]["creationflags"] == _CREATE_NO_WINDOW
+
+
+def test_sync_with_upstream_pull_hides_console_window(monkeypatch):
+    """The ``git pull --ff-only upstream main`` in
+    ``_sync_with_upstream_if_needed`` is a raw ``subprocess.run``."""
+    from hermes_cli import update_cmd, update_cmd_git
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(returncode=0)
+
+    def fake_count(git_cmd, cwd, base, head):
+        return 0 if head == "origin/main" else 3
+
+    monkeypatch.setattr(update_cmd_git, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
+    monkeypatch.setattr(update_cmd, "_has_upstream_remote", lambda git_cmd, cwd: True)
+    monkeypatch.setattr(update_cmd, "_count_commits_between", fake_count)
+    monkeypatch.setattr(update_cmd_git, "_sync_fork_with_upstream", lambda *a, **k: True)
+    monkeypatch.setattr(update_cmd_git.subprocess, "run", fake_run)
+
+    assert update_cmd_git._sync_with_upstream_if_needed(["git"], "/repo") is True
+
+    spawns = _spawns(captured, "pull", "--ff-only", "upstream", "main")
+    assert len(spawns) == 1, captured
+    assert spawns[0][1]["creationflags"] == _CREATE_NO_WINDOW
