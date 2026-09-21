@@ -48,6 +48,23 @@ class TestMergeHelper:
         assert out == ["mimo-v2-pro", "kimi-k2.6"]
 
 
+    def test_opencode_go_curated_flash_id_matches_the_live_rename(self):
+        """opencode-go's curated floor must track the live catalog's current id for the DeepSeek
+        Flash model. A stale curated entry (the pre-rename ``deepseek-v4-flash``) survives the
+        live-first merge as a second, undeduplicated row for the same model once the live catalog
+        renames it to ``deepseek-v4.1-flash`` — the Desktop picker then shows the model twice
+        under one provider group with two different labels (#118083)."""
+        from hermes_cli.models import merge_profile_catalog
+
+        class FakeProfile:
+            fallback_models = ()
+
+        live = ["kimi-k3", "deepseek-v4.1-flash", "glm-5.3"]
+        out = merge_profile_catalog("opencode-go", FakeProfile(), live)
+
+        assert out.count("deepseek-v4.1-flash") == 1
+        assert "deepseek-v4-flash" not in out
+
     def test_merge_case_insensitive_dedup(self):
         """Dedup is case-insensitive but preserves the first occurrence's casing."""
         mdev = ["MiniMax-M2.7"]
