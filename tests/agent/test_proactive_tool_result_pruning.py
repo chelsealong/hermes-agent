@@ -9,6 +9,7 @@ the old tool outputs ride in history and are re-sent verbatim every turn.
 Mirrors the construction/patching conventions in test_context_compressor.py.
 """
 
+import json
 from unittest.mock import patch
 
 from agent.context_compressor import (
@@ -193,6 +194,33 @@ def test_successful_full_compression_resets_proactive_runway():
 
 
 
+
+
+def test_truncated_tool_call_args_count_toward_pruned():
+    """#118360: a pass that only shrinks oversized tool_call arguments (no
+    tool result large enough to summarize) must still report a non-zero
+    ``pruned`` count, and the truncated args must survive in the returned
+    messages — not get discarded because the caller mistook the zero count
+    for a genuine no-op."""
+    c = _compressor(
+        proactive_prune_tokens=48_000,
+        proactive_prune_min_result_chars=8_000,
+        proactive_prune_min_reclaim_tokens=0,
+    )
+    big_args = json.dumps({"payload": "x" * 20_000})
+    msgs = [{"role": "system", "content": "sys"}]
+    msgs.append(_assistant_call("call_0", args=big_args))
+    msgs.append(_tool_msg("call_0", "ok"))
+    for i in range(1, 8):
+        cid = f"call_{i}"
+        msgs.append(_assistant_call(cid))
+        msgs.append(_tool_msg(cid, "ok"))
+
+    result, pruned = c.prune_tool_results_only(msgs, current_tokens=120_000)
+    assert pruned >= 1
+    assert result is not msgs
+    truncated_args = result[1]["tool_calls"][0]["function"]["arguments"]
+    assert len(truncated_args) < len(big_args)
 
 
 def test_min_reclaim_gate_default_and_clamp():
