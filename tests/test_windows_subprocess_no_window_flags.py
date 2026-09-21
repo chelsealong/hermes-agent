@@ -468,19 +468,23 @@ def test_gitlock_git_proc_running_hides_console_window(monkeypatch):
     assert kwargs["creationflags"] == _CREATE_NO_WINDOW
 
 
-def test_gitlock_is_ancestor_of_head_hides_console_window(monkeypatch, tmp_path):
+def test_gitlock_git_stdout_lines_hides_console_window(monkeypatch, tmp_path):
+    # NOTE: is_ancestor_of_head is a PLUGIN-COMPAT shim (see COMPAT_MANIFEST.md)
+    # that in-tree code — including tests — must not reference directly
+    # (scripts/check_compat_pointers.py fails CI on it); _git_stdout_lines
+    # exercises the same subprocess.run wiring gitlock.py shares internally.
     from hermes_cli import gitlock
 
     captured = []
 
     def fake_run(cmd, **kwargs):
         captured.append((cmd, kwargs))
-        return _Completed(returncode=0)
+        return _Completed(stdout="main\n", returncode=0)
 
     monkeypatch.setattr(gitlock, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
     monkeypatch.setattr(gitlock.subprocess, "run", fake_run)
 
-    assert gitlock.is_ancestor_of_head(tmp_path, "HEAD~1") is True
+    assert gitlock._git_stdout_lines(tmp_path, ["branch", "--show-current"]) == ["main"]
     assert len(captured) == 1, captured
     assert captured[0][1]["creationflags"] == _CREATE_NO_WINDOW
 
