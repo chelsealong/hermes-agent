@@ -388,6 +388,11 @@ kanban:
 #   - Gateway/messaging/cron: Uses terminal.cwd here; legacy .env cwd values are deprecated
 cron:
   catch_up_missed: true  # False skips past-grace recurring misses after planned downtime.
+  # min_response_chars: 0  # 0 = off (default). A delivered response shorter than this (after
+  #   stripping) is treated as empty: suppressed and recorded as a soft failure instead of
+  #   `last_status: ok`. Catches a degenerate finish_reason=stop completion that isn't a [SILENT]
+  #   or [CRON_FAILURE] marker. Also settable via HERMES_CRON_MIN_RESPONSE_CHARS (env wins).
+  #   Tune per fleet: some jobs' shortest legitimate report is only a few characters.
 
 terminal:
   backend: "local"

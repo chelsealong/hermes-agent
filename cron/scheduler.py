@@ -2036,6 +2036,18 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
                 "Job '%s': abnormal empty turn (%s) — suppressing explainer for cron delivery",
                 job_id, turn_exit_reason)
             final_response = ""
+    # A degenerate near-empty completion (finish_reason=stop, no truncation/failure signal — none
+    # of the paths above catch it) would otherwise be delivered as the job's result with
+    # last_status: ok (#118367). Opt-in only ("too short" is fleet-specific): default 0 is a no-op.
+    _min_chars = _resolve_min_response_chars()
+    if (_min_chars > 0 and final_response.strip() and len(final_response.strip()) < _min_chars
+            and not _is_cron_silence_response(final_response)
+            and not _cron_failure_marker_error(final_response)):
+        logger.warning(
+            "Job '%s': response is %d char(s), below min_response_chars=%d — "
+            "treating as empty (suppressed, soft failure)",
+            job_id, len(final_response.strip()), _min_chars)
+        final_response = ""
     return final_response
 
 
@@ -3974,6 +3986,28 @@ def _resolve_max_parallel_workers() -> Optional[int]:
         if _cfg_par is not None:
             return int(_cfg_par) or None
     return None
+
+
+def _resolve_min_response_chars() -> int:
+    """Minimum stripped length a delivered cron response must clear: env > config.yaml > off (0).
+
+    A ``stop``-finished completion with a body under this length is treated the same as an empty
+    response (suppressed, soft failure) instead of being delivered with ``last_status: ok``
+    (#118367). Off by default: an operator opts in because "too short" is fleet-specific — a
+    monitor job's legitimate "No changes." is shorter than another job's shortest real report.
+    """
+    try:
+        _env_min = cron_env_setting("HERMES_CRON_MIN_RESPONSE_CHARS").strip()
+        if _env_min:
+            return max(0, int(_env_min))
+    except (ValueError, TypeError):
+        logger.warning("Invalid HERMES_CRON_MIN_RESPONSE_CHARS value; defaulting to off")
+    with contextlib.suppress(Exception):
+        _ucfg = load_config() or {}
+        _cfg_min = (_ucfg.get("cron", {}) if isinstance(_ucfg, dict) else {}).get("min_response_chars")
+        if _cfg_min is not None:
+            return max(0, int(_cfg_min))
+    return 0
 
 
 def _sweep_mcp_orphans() -> None:
