@@ -1528,6 +1528,46 @@ class TestCuaDriverSessionReconnect:
             ("call", "list_apps", {}),
         ]
 
+    def test_reconnect_mints_fresh_label_when_restore_is_rejected(self):
+        """cua-driver scopes a session to the transport that created it: a label from the
+        replaced transport is rejected with `session_unavailable`. When that happens, mint a
+        replacement via the registered factory and carry it on the replayed read (#118975)."""
+        from anyio import ClosedResourceError
+
+        class FakeBridge:
+            def __init__(self):
+                self.calls = []
+                self.effects = [
+                    ClosedResourceError(),
+                    {"isError": True, "structuredContent": {"code": "session_unavailable"}},
+                    {"isError": False},
+                    {"isError": False, "structuredContent": {"apps": []}},
+                ]
+
+            def run(self, value, timeout=None):
+                self.calls.append(value)
+                effect = self.effects.pop(0)
+                if isinstance(effect, Exception):
+                    raise effect
+                return effect
+
+        bridge = FakeBridge()
+        session = self._make_session(bridge)
+        session._declared_session_id = "hermes-old-label"
+        session._session_label_factory = lambda: "hermes-fresh-label"
+
+        result = session.call_tool("list_apps", {"session": "hermes-old-label"})
+
+        assert result["isError"] is False
+        assert result["structuredContent"] == {"apps": []}
+        assert bridge.calls == [
+            ("call", "list_apps", {"session": "hermes-old-label"}),
+            ("call", "start_session", {"session": "hermes-old-label"}),
+            ("call", "start_session", {"session": "hermes-fresh-label"}),
+            ("call", "list_apps", {"session": "hermes-fresh-label"}),
+        ]
+        # The dead label is dropped in favor of the one the fresh transport actually accepted.
+        assert session._declared_session_id == "hermes-fresh-label"
 
     def test_cli_fallback_reads_screenshot_from_file(self, tmp_path, monkeypatch):
         """_call_tool_via_cli must base64-read a screenshot written to disk

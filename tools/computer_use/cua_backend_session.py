@@ -206,6 +206,9 @@ class _CuaDriverSession:
         # rejection without recursive call_tool re-entry or backend-owned state (#71166).
         self._declared_session_id: Optional[str] = None
         self._transport_generation, self._transport_reset_callback = 0, None
+        # Mints a replacement public label when a swapped transport rejects restoring the old
+        # one (a label cannot outlive its transport) — registered by the owning backend. See #118975.
+        self._session_label_factory: Optional[Any] = None
 
     async def _lifecycle_coro(self) -> None:
         """Owns the stdio MCP contexts: open, signal ready, block on shutdown, clean up — all in one task."""
@@ -324,6 +327,11 @@ class _CuaDriverSession:
         """Register a synchronous cache invalidation hook for transport swaps."""
         self._transport_reset_callback = callback
 
+    def set_session_label_factory(self, factory: Any) -> None:
+        """Register a callback that mints (and adopts) a replacement public label when the
+        declared one is rejected on a swapped transport. See #118975."""
+        self._session_label_factory = factory
+
     def _notify_transport_reset(self) -> None:
         try:
             if (callback := getattr(self, "_transport_reset_callback", None)) is not None:
@@ -432,7 +440,43 @@ class _CuaDriverSession:
             if clear_timeout_suspect:
                 self._timeout_suspect = False
         if getattr(self, "_declared_session_id", None):
-            self._redeclare_session(timeout, "cua-driver public session label %s could not be restored: %s")
+            # cua-driver scopes a session to the transport that created it: a label from the
+            # replaced transport is rejected with `session_unavailable` outright. Restore it on
+            # the fresh transport first (it may be accepted if the transport did not actually
+            # change), and only mint a replacement when it is rejected. See #118975.
+            if not self._redeclare_session(timeout, "cua-driver public session label %s could not be restored: %s"):
+                self._adopt_fresh_label(timeout)
+
+    def _adopt_fresh_label(self, timeout: float) -> None:
+        """The declared label could not be restored on the swapped transport; mint a
+        replacement via the registered factory (which also updates the owning backend's
+        cached id) and declare it here so subsequent calls stop sending the dead one."""
+        factory = getattr(self, "_session_label_factory", None)
+        if factory is None:
+            self._declared_session_id = None
+            return
+        try:
+            new_id = factory()
+        except Exception as e:
+            logger.warning("cua-driver session label factory failed: %s", e)
+            self._declared_session_id = None
+            return
+        result = self._bridge.run(self._call_tool_async("start_session", {"session": new_id}), timeout=timeout)
+        if result.get("isError") is True:
+            logger.warning("cua-driver replacement session label %s could not be declared: %s",
+                           new_id, _logical_error_text(result))
+            self._declared_session_id = None
+            return
+        self._declared_session_id = new_id
+
+    def _live_label_args(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-point a non-lifecycle call's `session` at the live declared label. Needed because
+        `call_tool`'s replay after `_recreate_session` reuses args captured before the swap, and
+        a rejected restore may have adopted a different label since then. See #118975."""
+        label = self._declared_session_id
+        if label and isinstance(args.get("session"), str) and args["session"] != label:
+            return {**args, "session": label}
+        return args
 
     def _call_tool_via_cli(self, name: str, args: Dict[str, Any], timeout: float) -> Dict[str, Any]:
         """Fallback transport: ``cua-driver call <tool> <json>`` subprocess. The MCP stdio bridge can persistently
@@ -473,10 +517,12 @@ class _CuaDriverSession:
                 self._recreate_session(
                     name, timeout, "cua-driver session suspect after earlier MCP timeout; recreating before %s",
                     clear_timeout_suspect=True)
+                args = self._live_label_args(args)
             # A prior session may have died (MCP drop / driver crash) and reset _started.
             if not self._started:
                 self._recreate_session(
                     name, timeout, "cua-driver session not active on %s; (re)starting before call", restart=False)
+                args = self._live_label_args(args)
         if not self._started:
             raise RuntimeError("cua-driver session not started")
         try:
@@ -503,6 +549,7 @@ class _CuaDriverSession:
             self._recreate_session(name, timeout, "cua-driver MCP session closed during %s; reconnecting once")
             if name not in self._TRANSPORT_REPLAY_SAFE_TOOLS:
                 return _outcome_unknown(name, e, "transport_outcome_unknown")
+            args = self._live_label_args(args)
             result = self._bridge.run(self._call_tool_async(name, args), timeout=timeout)
         # Remember only a SUCCESSFULLY declared identity: no stale recovery state.
         declared_id, ok = args.get("session"), result.get("isError") is not True
