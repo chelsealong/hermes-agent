@@ -2160,6 +2160,7 @@ class TestConcurrentToolExecution:
                 session_id=agent.session_id,
                 turn_id="",
                 api_request_id="",
+                gateway_session_key="",
                 enabled_tools=list(agent.valid_tool_names),
                 skip_pre_tool_call_hook=True,
                 skip_tool_request_middleware=True,
