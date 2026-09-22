@@ -71,6 +71,31 @@ test('PowerShell transport uses UTF-16LE encoded commands and literal escaping',
   assert.match(powerShellCommand('Write-Output ok'), /^powershell\.exe -NoProfile -NonInteractive .* -EncodedCommand /)
 })
 
+test('Windows update-marker probe ships its script over stdin, not the SSH exec command line', async () => {
+  // Windows OpenSSH's exec transport truncates long command-line payloads
+  // (empirically ~2.5k chars of base64); the marker probe's script is well
+  // past that on its own, so it must travel over stdin instead of being
+  // embedded in the -EncodedCommand argument.
+  let seenCommand = ''
+  let seenStdinData = ''
+
+  await assertWindowsRemoteInstallUpdateClear(
+    sshWith(async (command, opts) => {
+      seenCommand = command
+      seenStdinData = opts?.stdinData || ''
+
+      return 'CLEAR'
+    }),
+    'C:\\Users\\alice\\.hermes'
+  )
+
+  assert.ok(seenCommand.length < 1000, `exec command line too long: ${seenCommand.length} chars`)
+  assert.ok(seenStdinData.length > 0, 'expected the probe script to be sent via stdin')
+
+  const script = Buffer.from(seenStdinData, 'base64').toString('utf16le')
+  assert.match(script, /\.hermes-update-in-progress/)
+})
+
 test('every emitted PowerShell script keeps try blocks attached to their catch/finally handlers', async () => {
   // `;` between `try{...}` and `catch`/`finally` is a PowerShell parse error
   // (MissingCatchOrFinally), so no probe may join a handler onto a separate
@@ -88,8 +113,8 @@ test('every emitted PowerShell script keeps try blocks attached to their catch/f
     })
   )
   await assertWindowsRemoteInstallUpdateClear(
-    sshWith(async command => {
-      scripts.push(decode(command))
+    sshWith(async (_command, opts) => {
+      scripts.push(Buffer.from(opts?.stdinData || '', 'base64').toString('utf16le'))
 
       return 'CLEAR'
     }),
@@ -119,7 +144,18 @@ test('Windows relaunch gate refuses live and uncertain markers before executing 
   for (const observation of ['LIVE:4242', 'UNCERTAIN']) {
     const scripts: string[] = []
 
-    const ssh = sshWith(async command => {
+    const ssh = sshWith(async (command, opts) => {
+      if (opts?.stdinData) {
+        const script = Buffer.from(opts.stdinData, 'base64').toString('utf16le')
+        scripts.push(script)
+
+        if (script.includes('.hermes-update-in-progress')) {
+          return observation
+        }
+
+        throw new Error(`unexpected stdin script after update gate: ${script}`)
+      }
+
       const script = Buffer.from(command.split(' ').at(-1) || '', 'base64').toString('utf16le')
       scripts.push(script)
 
@@ -131,10 +167,6 @@ test('Windows relaunch gate refuses live and uncertain markers before executing 
           hermesPath: 'C:\\Hermes\\hermes.exe',
           python: 'C:\\Hermes\\python.exe'
         })
-      }
-
-      if (script.includes('.hermes-update-in-progress')) {
-        return observation
       }
 
       throw new Error(`unexpected command after update gate: ${script}`)
@@ -163,8 +195,8 @@ test('Windows relaunch gate refuses live and uncertain markers before executing 
 test('Windows relaunch gate uses strict install-wide marker parsing and fail-closed PID probing', async () => {
   let script = ''
 
-  const ssh = sshWith(async command => {
-    script = Buffer.from(command.split(' ').at(-1) || '', 'base64').toString('utf16le')
+  const ssh = sshWith(async (_command, opts) => {
+    script = Buffer.from(opts?.stdinData || '', 'base64').toString('utf16le')
 
     return 'CLEAR'
   })

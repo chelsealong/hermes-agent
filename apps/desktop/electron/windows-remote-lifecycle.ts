@@ -19,6 +19,21 @@ function powerShellCommand(script) {
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encodedPowerShell(script)}`
 }
 
+// Windows OpenSSH's exec transport truncates long command-line payloads
+// (empirically ~2.5k chars of base64), so a large script must not be encoded
+// into the command line at all. This fixed, short stub decodes the real
+// script from stdin instead, keeping the exec command line size-independent
+// of the script it runs.
+const STDIN_SCRIPT_STUB = [
+  '$b=[Console]::In.ReadToEnd().Trim()',
+  '$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b))',
+  'Invoke-Expression $s'
+].join(';')
+
+function powerShellStdinCommand(script) {
+  return { command: powerShellCommand(STDIN_SCRIPT_STUB), stdinData: encodedPowerShell(script) }
+}
+
 async function probeWindowsRemote(ssh, explicitHermesPath = '') {
   const explicit = psLiteral(explicitHermesPath)
 
@@ -127,7 +142,7 @@ public static class HermesMarkerNoFollow {
     'Write-Output $result'
   ].join(';')
 
-  return powerShellCommand(script)
+  return powerShellStdinCommand(script)
 }
 
 /**
@@ -139,8 +154,10 @@ async function assertWindowsRemoteInstallUpdateClear(ssh, hermesHome) {
   let observation = ''
 
   try {
+    const { command, stdinData } = windowsUpdateMarkerProbeCommand(hermesHome)
+
     observation =
-      String(await ssh.exec(windowsUpdateMarkerProbeCommand(hermesHome)))
+      String(await ssh.exec(command, { stdinData }))
         .replace(/^\uFEFF/, '')
         .trim()
         .split(/\r?\n/)
