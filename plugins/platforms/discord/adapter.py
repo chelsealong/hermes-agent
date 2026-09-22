@@ -4677,6 +4677,10 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             user_id=str(interaction.user.id), user_name=interaction.user.display_name,
             thread_id=thread_id, chat_topic=chat_topic,
             guild_id=self._interaction_guild_id(interaction), parent_chat_id=parent_id or None,
+            # Mirrors _discord_message_admission: reached only after
+            # _check_slash_authorization passed, so a configured role
+            # allowlist means this invocation cleared it (#118958).
+            role_authorized=bool(getattr(self, "_allowed_role_ids", set())),
         )
         msg_type = MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
         channel_id = str(interaction.channel_id)

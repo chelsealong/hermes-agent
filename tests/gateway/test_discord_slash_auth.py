@@ -243,6 +243,40 @@ async def test_role_member_passes(adapter):
     assert await adapter._check_slash_authorization(interaction, "/help") is True
 
 
+def test_slash_event_role_authorized_reaches_gateway(adapter):
+    """Regression guard for #118958: a slash command from a role-only-
+    authorized user must carry ``role_authorized`` into the built
+    ``MessageEvent`` — mirroring on_message — so the gateway's own authz
+    layer (which only trusts ``source.role_authorized is True``) admits it
+    instead of falling through to the pairing flow."""
+    from gateway.run import GatewayRunner
+
+    adapter._allowed_role_ids = {1234}
+    interaction = _make_interaction("999999999")
+    interaction.user.roles = [SimpleNamespace(id=1234)]
+    interaction.user.display_name = "Jezza"
+    assert adapter._evaluate_slash_authorization(interaction) == (True, None)
+
+    event = adapter._build_slash_event(interaction, "/reset")
+    assert event.source.role_authorized is True
+
+    # End-to-end: feed the built source through the real gateway authz gate
+    # with no user-ID allowlist and no pairing grant — only the role signal
+    # can admit it.
+    runner = object.__new__(GatewayRunner)
+    runner.pairing_store = SimpleNamespace(is_approved=lambda *_a, **_kw: False)
+    assert runner._is_user_authorized(event.source) is True
+
+
+def test_slash_event_without_role_allowlist_stays_unauthorized(adapter):
+    """With no DISCORD_ALLOWED_ROLES configured, a built slash event must
+    not claim role_authorized — only a configured role allowlist grants it."""
+    interaction = _make_interaction("100200300")
+    interaction.user.display_name = "Alex"
+    event = adapter._build_slash_event(interaction, "/reset")
+    assert event.source.role_authorized is False
+
+
 # ---------------------------------------------------------------------------
 # Channel allowlist (DISCORD_ALLOWED_CHANNELS) parity — the gate prajer used
 # ---------------------------------------------------------------------------
