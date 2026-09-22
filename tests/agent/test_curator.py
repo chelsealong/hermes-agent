@@ -441,6 +441,36 @@ def test_prune_builtins_still_archives_bundled_via_deterministic_pass(
     assert "bundled-fixture" in u.read_suppressed_names()
 
 
+def test_kanban_swarm_referenced_skill_survives_prune_builtins(curator_env, monkeypatch):
+    """A skill ``kanban_swarm.py`` hardcodes as a verifier/synthesizer dependency
+    (``requesting-code-review``) must never be auto-archived, even idle with
+    ``prune_builtins`` on — it is consumed only via swarm dispatch, so it never
+    accrues direct-usage activity and would otherwise age out from under every
+    swarm run (#118753). Control: an unrelated idle bundled skill still archives."""
+    c = curator_env["curator"]
+    u = curator_env["usage"]
+    skills_dir = curator_env["home"] / "skills"
+    _write_skill(skills_dir, "requesting-code-review")
+    _write_skill(skills_dir, "bundled-fixture")
+    (skills_dir / ".bundled_manifest").write_text(
+        "requesting-code-review:deadbeef\nbundled-fixture:deadbeef\n", encoding="utf-8",
+    )
+    _enable_prune_builtins(curator_env, monkeypatch)
+
+    super_old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    data = u.load_usage()
+    for name in ("requesting-code-review", "bundled-fixture"):
+        data[name] = u._empty_record()
+        data[name]["last_used_at"] = super_old
+        data[name]["created_at"] = super_old
+        data[name]["use_count"] = 1
+    u.save_usage(data)
+
+    c.apply_automatic_transitions()
+
+    assert not (skills_dir / "bundled-fixture").exists()
+    assert (skills_dir / "requesting-code-review").exists()
+    assert u.load_usage()["requesting-code-review"]["state"] == u.STATE_ACTIVE
 
 
 

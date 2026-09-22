@@ -25,6 +25,11 @@ from hermes_cli import kanban_db as kb
 
 BLACKBOARD_PREFIX = "[swarm:blackboard] "
 
+# Skills hardcoded as swarm role dependencies. Read by agent.curator to exempt them from
+# inactivity archival — being consumed only via swarm dispatch never bumps their direct-usage
+# counters, so the deterministic prune would otherwise archive them out from under every swarm.
+_ROLE_SKILLS = ("requesting-code-review", "humanizer")
+
 
 @dataclass(frozen=True)
 class SwarmWorkerSpec:
@@ -235,7 +240,7 @@ def _create_swarm_uncommitted(
         assignee=verifier_assignee,
         parents=worker_ids,
         priority=priority,
-        skills=["requesting-code-review"],
+        skills=[_ROLE_SKILLS[0]],
         **common,
     )
     synthesizer = kb.create_task(
@@ -249,7 +254,7 @@ def _create_swarm_uncommitted(
         assignee=synthesizer_assignee,
         parents=[verifier],
         priority=priority,
-        skills=["humanizer"],
+        skills=[_ROLE_SKILLS[1]],
         **common,
     )
 

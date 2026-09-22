@@ -170,6 +170,19 @@ def _cron_referenced_skills() -> Set[str]:
         return set()
 
 
+def _kanban_swarm_referenced_skills() -> Set[str]:
+    """Skill names ``kanban swarm`` hardcodes as role dependencies (verifier/synthesizer). These are
+    in use by definition — consumed only via swarm dispatch, so direct-invocation usage never bumps
+    for them — the same rationale as ``_cron_referenced_skills``. Best-effort: an import error yields
+    an empty set, never a crash."""
+    try:
+        from hermes_cli.kanban_swarm import _ROLE_SKILLS as _refs
+        return set(_refs)
+    except Exception as e:
+        logger.debug("Curator could not read kanban swarm skill references: %s", e, exc_info=True)
+        return set()
+
+
 def _archive_as_curator(_u, name: str) -> bool:
     """Archive via skill_usage with the ledger actor tagged 'curator', so the ledger entry reads as an autonomous transition, not a foreground call."""
     try:
@@ -194,9 +207,10 @@ def apply_automatic_transitions(now: Optional[datetime] = None) -> Dict[str, int
     now = now or datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=get_stale_after_days())
     archive_cutoff = now - timedelta(days=get_archive_after_days())
-    # Cron-referenced skills are in use by definition (usage only bumps when a
-    # job fires, so paused/rare jobs would age them out). Treat as pinned.
-    protected = _cron_referenced_skills()
+    # Cron-referenced and kanban-swarm-role skills are in use by definition (usage only bumps when
+    # a job fires or a swarm dispatches, so paused jobs and swarm-only skills would age them out).
+    # Treat as pinned.
+    protected = _cron_referenced_skills() | _kanban_swarm_referenced_skills()
     counts = {"marked_stale": 0, "archived": 0, "reactivated": 0, "checked": 0, "seeded": 0}
 
     def _set(name: str, state: str, key: str) -> None:
