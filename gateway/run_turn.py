@@ -636,6 +636,17 @@ class GatewayTurnMixin:
             return
         hs.compression_enabled = str(_comp_cfg.get("enabled", True)).lower() in {"true", "1", "yes"}
 
+        # The net must never fire before the agent's own compressor: if the configured agent
+        # threshold is raised past the net's default, raise the net to match (never lower it).
+        _raw_agent_threshold = _comp_cfg.get("threshold")
+        if _raw_agent_threshold is not None:
+            try:
+                _agent_threshold = float(_raw_agent_threshold)
+            except (TypeError, ValueError):
+                _agent_threshold = None
+            if _agent_threshold is not None and _agent_threshold > hs.threshold_pct:
+                hs.threshold_pct = _agent_threshold
+
         def _knob(key, current, cast, allow_zero=False):
             raw = _comp_cfg.get(key)
             if raw is None:

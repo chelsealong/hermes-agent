@@ -150,6 +150,34 @@ class TestSessionHygieneThresholds:
         assert approx_tokens < huge_model_threshold
 
 
+class TestHygieneNetNeverFiresBeforeAgentCompressor:
+    """The hygiene net's threshold is a safety net for the agent's own compressor and must never
+    fire first (#118984): raising compression.threshold past the net's fixed 0.85 default must
+    raise the net's effective threshold too, not leave it stranded below the agent's."""
+
+    def _read_config(self, threshold):
+        import gateway.run as gateway_run
+
+        hs = gateway_run.GatewayRunner._HygieneSettings(
+            model="deepseek-v4-flash", threshold_pct=0.85, compression_enabled=True,
+            hard_msg_limit=5000, timeout_seconds=30.0, total_ceiling_seconds=600.0,
+            max_turn_hold_seconds=10.0, failure_cooldown_seconds=300.0, config_context_length=None,
+            provider="deepseek", base_url="https://api.deepseek.com/v1", api_key="", data={},
+        )
+        gateway_run.GatewayRunner._hmwa_hygiene_read_config(
+            hs, {"compression": {"enabled": True, "threshold": threshold}},
+        )
+        return hs
+
+    def test_agent_threshold_above_default_raises_the_net(self):
+        hs = self._read_config(0.95)
+        assert hs.threshold_pct >= 0.95
+
+    def test_agent_threshold_below_default_leaves_the_net_alone(self):
+        hs = self._read_config(0.50)
+        assert hs.threshold_pct == 0.85
+
+
 @pytest.mark.parametrize("total_exhausted", [True, False])
 def test_hygiene_timeout_warning_names_chat_commands_not_config(total_exhausted):
     """The chat user cannot edit model config or read second counts; the notice names the
