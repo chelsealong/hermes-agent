@@ -10,6 +10,7 @@ from agent.error_classifier import (
     PROVIDER_STREAM_NON_JSON_ERROR_CODE,
     classify_api_error,
     is_reasoning_field_rejection,
+    is_reasoning_required_rejection,
     _extract_status_code,
     _extract_error_body,
     _extract_error_code,
@@ -1000,6 +1001,20 @@ class TestClassifyApiError:
             provider="custom", model="m", approx_tokens=77, num_messages=3,
         )
         assert overflow.reason == FailoverReason.context_overflow and overflow.should_compress is True
+
+    def test_reasoning_vocabulary_rejection_is_reasoning_required(self):
+        """A relay that understands the field but rejects the level ("reasoning_effort must be
+        [low, high, max]", glm-5.3 behind a custom OpenAI-compatible endpoint, #118627) takes the
+        same floor-the-effort rung as the wording-based "mandatory ... cannot be disabled" case,
+        not the strip-the-field rung — the endpoint refused a value, not the field. An unrelated
+        bracketed validation nowhere near a reasoning field must not match."""
+        assert is_reasoning_required_rejection(
+            "Error code: 400 - request param validation error, Value error, "
+            "reasoning_effort must be [low, high, max] for glm-5.3"
+        )
+        assert not is_reasoning_required_rejection(
+            "Error code: 400 - Value error, temperature must be [0, 2]"
+        )
 
     def test_openai_unsupported_none_effort_body_is_reasoning_mandatory(self):
         """OpenAI's real 400 for ``reasoning.effort: none`` on a model whose ladder has no ``none`` (o3/o4-mini,

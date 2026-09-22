@@ -522,19 +522,28 @@ _REASONING_REQUIRED_MARKERS = (
     "always enabled", "cannot be turned off",
 )
 
+# Vocabulary rejection: the field is understood but the requested level isn't in the endpoint's
+# allowed set, published as a bracketed list next to the field name (e.g. glm-5.3 behind a custom
+# relay: "reasoning_effort must be [low, high, max]", #118627). Scoped by the same proximity
+# window as the wording markers, so unrelated bracketed validations ("temperature must be [0, 2]")
+# don't match.
+_REASONING_VOCABULARY_REJECTION = re.compile(r"must\s+be\s*\[")
+
 
 def is_reasoning_required_rejection(error_msg: str) -> bool:
     """Provider 400 saying the model's reasoning cannot be switched OFF ("Reasoning is mandatory for
-    this endpoint and cannot be disabled", the Nous Portal on gpt-6-astra). The opposite of
-    ``is_reasoning_field_rejection``: the field is understood, the *disable* is refused, so the right
-    reaction is to step the effort up to the lowest level rather than drop the field (a dropped field
-    also works, but tells the caller nothing about the next call)."""
+    this endpoint and cannot be disabled", the Nous Portal on gpt-6-astra) or the disabled level
+    ("none") simply isn't in the endpoint's allowed vocabulary ("reasoning_effort must be [low,
+    high, max]", glm-5.3, #118627). The opposite of ``is_reasoning_field_rejection``: the field is
+    understood, the *disable* is refused, so the right reaction is to step the effort up to the
+    lowest level rather than drop the field (a dropped field also works, but tells the caller
+    nothing about the next call)."""
     msg = (error_msg or "").lower()
     token = _REASONING_FIELD_TOKEN.search(msg)
     if token is None:
         return False
     near = msg[max(0, token.start() - 48):token.end() + 96]
-    return any(m in near for m in _REASONING_REQUIRED_MARKERS)
+    return any(m in near for m in _REASONING_REQUIRED_MARKERS) or bool(_REASONING_VOCABULARY_REJECTION.search(near))
 
 
 def is_reasoning_field_rejection(error_msg: str) -> bool:

@@ -20,6 +20,13 @@ _PORTAL_400 = (
     "other parameters. Additional info: Reasoning is mandatory for this endpoint and cannot be disabled.'}"
 )
 
+# glm-5.3 behind a custom OpenAI-compatible relay (Huawei ModelArts MaaS, #118627): the field is
+# understood, but its vocabulary is [low, high, max] — "none" simply isn't a member.
+_VOCABULARY_400 = (
+    "Error code: 400 - request param validation error, Value error, reasoning_effort must be "
+    "[low, high, max] for glm-5.3"
+)
+
 
 @pytest.fixture(autouse=True)
 def _fresh_memo():
@@ -60,6 +67,20 @@ def test_reasoning_required_400_steps_effort_up_to_the_floor_and_remembers_the_r
     assert client.chat.completions.create.call_count == 3
     upfront = client.chat.completions.create.call_args_list[2].kwargs
     assert upfront["reasoning_effort"] == auxiliary_reasoning_floor.REASONING_FLOOR_EFFORT
+
+
+def test_vocabulary_rejection_steps_effort_up_to_the_floor():
+    """A bracketed allowed-set next to the field name ("must be [low, high, max]") is the same
+    disable-refused case as the wording markers: step up to the floor instead of stripping the
+    field outright, which would resend a request the route never rejected in the first place."""
+    client = MagicMock()
+    client.base_url = "http://127.0.0.1:8765/v1"
+    client.chat.completions.create.side_effect = [RuntimeError(_VOCABULARY_400), {"ok": True}]
+
+    assert _call(client) == {"ok": True}
+    first, retry = (c.kwargs for c in client.chat.completions.create.call_args_list[:2])
+    assert first["reasoning_effort"] == "none"
+    assert retry["reasoning_effort"] == auxiliary_reasoning_floor.REASONING_FLOOR_EFFORT
 
 
 def test_field_rejection_still_strips_instead_of_stepping_up():
