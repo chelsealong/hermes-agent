@@ -69,8 +69,13 @@ export function directiveFrameHeight(raw: string | undefined): number | null {
 const SIZE_MESSAGE_TYPE = 'hermes-inline-preview-size'
 const INTENT_MESSAGE_TYPE = 'hermes-inline-preview-intent'
 
-/** Prompt length cap for a widget intent — a sentence, not a payload dump. */
-const MAX_INTENT_LENGTH = 500
+/** Length budget for a widget intent. This channel carries structured
+ *  machine payloads (e.g. a JSON batch a widget flushes back), not typed
+ *  prose, so the cap sits well above a sentence — a hard slice at a small
+ *  cap silently corrupts a truncated JSON payload rather than rejecting it,
+ *  and the sender has no way to detect that it happened. Still bounded, so a
+ *  hostile or broken widget can't flood the composer with unbounded text. */
+const MAX_INTENT_LENGTH = 8192
 /** One intent per frame per second; clicks are human-speed. */
 const INTENT_THROTTLE_MS = 1000
 

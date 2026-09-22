@@ -113,8 +113,27 @@ describe('intentFromMessage', () => {
     expect(intentFromMessage(msg({ prompt: '  hi  ' }), 'tok')).toBe('hi')
   })
 
-  it('caps runaway prompts to a sentence-sized budget', () => {
-    expect(intentFromMessage(msg({ prompt: 'x'.repeat(9000) }), 'tok')).toHaveLength(500)
+  it('caps runaway prompts, but well above a single structured payload', () => {
+    expect(intentFromMessage(msg({ prompt: 'x'.repeat(20000) }), 'tok')).toHaveLength(8192)
+  })
+
+  it('does not corrupt a structured JSON payload that exceeded the old 500-char cap', () => {
+    const ratings = Array.from({ length: 30 }, (_, i) => ({
+      id: i,
+      rating: i % 2 === 0 ? 'good' : 'again',
+      ts: 1735689600000 + i
+    }))
+
+    const payload = JSON.stringify({ ratings })
+    const prompt = `FC-FLUSH ${payload}`
+
+    // Sanity: the real-world repro from the issue is well past the old cap.
+    expect(prompt.length).toBeGreaterThan(500)
+
+    const delivered = intentFromMessage(msg({ prompt }), 'tok')
+
+    expect(delivered).toBe(prompt)
+    expect(() => JSON.parse(delivered!.slice('FC-FLUSH '.length))).not.toThrow()
   })
 
   it('rejects wrong token, wrong type, empty, and hostile shapes', () => {
