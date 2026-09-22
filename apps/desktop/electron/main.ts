@@ -486,6 +486,7 @@ import {
 import { isHermesOwnedVenvDaemon } from './venv-holder-select'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
+import { guardAgainstWatchStorm } from './watch-storm-guard'
 import { enumerateWindowsFrontToBack, enumerationFailed, readWindowBelow } from './window-below'
 import { bindWindowChromeEvents } from './window-chrome-events'
 import {
@@ -6702,27 +6703,30 @@ async function watchPreviewFile(rawUrl) {
   const id = crypto.randomBytes(12).toString('base64url')
   let timer = null
 
-  const watcher = fs.watch(watchDir, (_eventType, filename) => {
-    const changedName = filename ? path.basename(String(filename)) : ''
+  const watcher = guardAgainstWatchStorm(
+    onEvent => fs.watch(watchDir, onEvent),
+    (_eventType, filename) => {
+      const changedName = filename ? path.basename(String(filename)) : ''
 
-    if (changedName && changedName !== targetName) {
-      return
-    }
-
-    if (timer) {
-      clearTimeout(timer)
-    }
-
-    timer = setTimeout(() => {
-      timer = null
-
-      if (!fileExists(filePath)) {
+      if (changedName && changedName !== targetName) {
         return
       }
 
-      sendPreviewFileChanged({ id, path: filePath, url: pathToFileURL(filePath).toString() })
-    }, PREVIEW_WATCH_DEBOUNCE_MS)
-  })
+      if (timer) {
+        clearTimeout(timer)
+      }
+
+      timer = setTimeout(() => {
+        timer = null
+
+        if (!fileExists(filePath)) {
+          return
+        }
+
+        sendPreviewFileChanged({ id, path: filePath, url: pathToFileURL(filePath).toString() })
+      }, PREVIEW_WATCH_DEBOUNCE_MS)
+    }
+  )
 
   previewWatchers.set(id, {
     close: () => {
@@ -6781,16 +6785,19 @@ function watchDirectory(rawDir) {
   const id = crypto.randomBytes(12).toString('base64url')
   let timer = null
 
-  const watcher = fs.watch(watchDir, () => {
-    if (timer) {
-      clearTimeout(timer)
-    }
+  const watcher = guardAgainstWatchStorm(
+    onEvent => fs.watch(watchDir, onEvent),
+    () => {
+      if (timer) {
+        clearTimeout(timer)
+      }
 
-    timer = setTimeout(() => {
-      timer = null
-      sendPreviewFileChanged({ id, path: watchDir, url: pathToFileURL(watchDir).toString() })
-    }, PREVIEW_WATCH_DEBOUNCE_MS)
-  })
+      timer = setTimeout(() => {
+        timer = null
+        sendPreviewFileChanged({ id, path: watchDir, url: pathToFileURL(watchDir).toString() })
+      }, PREVIEW_WATCH_DEBOUNCE_MS)
+    }
+  )
 
   previewWatchers.set(id, {
     close: () => {
