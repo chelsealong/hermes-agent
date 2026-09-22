@@ -1898,9 +1898,26 @@ def test_doctor_reports_auxiliary_blocks_that_do_not_resolve(tmp_path, monkeypat
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(yaml.safe_dump({"auxiliary": {
-        "background_review": {"provider": "no-such-provider", "model": "m"},
+        "vision": {"provider": "no-such-provider", "model": "m"},
         "compression": {"provider": "openai", "model": "gpt-x", "base_url": "https://gateway.example/v1", "api_key": "gw"},
     }}))
     issues = []
     doctor_config._validate_auxiliary_config(cfg_file, issues)
-    assert len(issues) == 1 and "auxiliary.background_review" in issues[0] and "no-such-provider" in issues[0]
+    assert len(issues) == 1 and "auxiliary.vision" in issues[0] and "no-such-provider" in issues[0]
+
+
+def test_doctor_ignores_auxiliary_blocks_with_no_reader(tmp_path, monkeypatch, capsys):
+    """A routed auxiliary.<task> block for a task with no reader (e.g. a leftover from before that
+    task's aux routing was removed) can never be fixed by changing its provider, so it must not be
+    reported as a hard failure telling the user to fix a key nothing reads (#118720)."""
+    import yaml
+    from hermes_cli import doctor_config
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.safe_dump({"auxiliary": {
+        "web_extract": {"provider": "no-such-provider", "model": "m"},
+    }}))
+    issues = []
+    doctor_config._validate_auxiliary_config(cfg_file, issues)
+    assert issues == []
+    assert "auxiliary.web_extract has no reader" in capsys.readouterr().out

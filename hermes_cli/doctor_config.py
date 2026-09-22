@@ -269,13 +269,22 @@ def _validate_model_config(config_path, issues: list) -> None:
 
 def _validate_auxiliary_config(config_path, issues: list) -> None:
     """Resolve every routed ``auxiliary.<task>`` block through the real entry point the tasks use and report
-    the ones that fail — an unresolvable block otherwise silently runs the task on the main model (#116055)."""
+    the ones that fail — an unresolvable block otherwise silently runs the task on the main model (#116055).
+
+    Blocks for tasks with no reader (e.g. a leftover ``auxiliary.web_extract`` from before that task's aux
+    routing was removed) are reported informationally instead: no provider value can ever satisfy them, so
+    treating them as a hard failure sends the user to fix a key nothing reads (#118720)."""
     from hermes_cli.config import read_user_config_raw
+    from hermes_cli.main_provider_setup import _all_aux_tasks
     from hermes_cli.runtime_provider import resolve_runtime_provider
     from utils import base_url_hostname
     aux = read_user_config_raw(config_path).get("auxiliary")
-    routed = {name: block for name, block in (aux.items() if isinstance(aux, dict) else ())
-              if isinstance(block, dict) and str(block.get("provider") or "").strip().lower() not in ("", "auto")}
+    known_tasks = {key for key, _name, _desc in _all_aux_tasks()}
+    candidates = {name: block for name, block in (aux.items() if isinstance(aux, dict) else ())
+                  if isinstance(block, dict) and str(block.get("provider") or "").strip().lower() not in ("", "auto")}
+    routed = {name: block for name, block in candidates.items() if name in known_tasks}
+    for task in sorted(candidates.keys() - routed.keys()):
+        check_info(f"auxiliary.{task} has no reader and is ignored; delete with 'hermes config unset auxiliary.{task}'")
     ok = []
     for task, block in sorted(routed.items()):
         provider, model, base_url, api_key = (str(block.get(k) or "").strip() or None for k in ("provider", "model", "base_url", "api_key"))
