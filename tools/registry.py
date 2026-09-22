@@ -228,6 +228,10 @@ _check_fn_cache: Dict[tuple[Callable, Optional[str]], tuple[float, bool]] = {}
 _check_fn_last_good: Dict[tuple[Callable, Optional[str]], float] = {}
 _check_fn_ever_good: Set[tuple[Callable, Optional[str]]] = set()  # probes that admitted tools this process
 _check_fn_core_drop_warned: Set[tuple[Callable, Optional[str]]] = set()  # once-per-process WARNING gate
+# Probes currently gating a tool off, so a False->True flip (e.g. a check_fn's binary dependency
+# gets installed mid-process) can be noticed and bump registry._generation, invalidating the
+# memoized get_tool_definitions() result that would otherwise never be recomputed (#118752).
+_gated_off_check_fns: Set[tuple[Callable, Optional[str]]] = set()
 _check_fn_cache_lock = threading.Lock()
 CHECK_FN_CACHE_BYPASS = ""
 _NO_CACHE_CHECK_FNS: Set[Callable] = set()
@@ -351,6 +355,12 @@ def _check_fn_cached(fn: Callable) -> bool:
             _check_fn_last_good[cache_key] = now
             _check_fn_ever_good.add(cache_key)
             _check_fn_cache[cache_key] = (now, True)
+            if cache_key in _gated_off_check_fns:
+                # Was gating a tool off; now available. Bump the generation so the memoized
+                # get_tool_definitions() result (keyed on it) is recomputed instead of staying
+                # stale for the rest of the process (#118752).
+                _gated_off_check_fns.discard(cache_key)
+                registry._generation += 1
             return True
         last_good = _check_fn_last_good.get(cache_key)
         if last_good is not None and now - last_good < _CHECK_FN_FAILURE_GRACE_SECONDS:
@@ -381,6 +391,9 @@ def _check_fn_cached(fn: Callable) -> bool:
                 "check_fn %s %s; dependent tools will be unavailable this turn", _fn_label(fn), outcome,
                 exc_info=exc_info)
         _check_fn_cache[cache_key] = (now, False)
+        if len(_gated_off_check_fns) >= _CHECK_FN_CACHE_MAX:
+            _gated_off_check_fns.pop()
+        _gated_off_check_fns.add(cache_key)
         return False
 
 
@@ -408,6 +421,27 @@ def invalidate_check_fn_cache() -> None:
         _check_fn_last_good.clear()
         _check_fn_ever_good.clear()
         _check_fn_core_drop_warned.clear()
+        _gated_off_check_fns.clear()
+
+
+def recheck_gated_availability() -> None:
+    """Re-probe check_fns known to be gating a tool off for the caller's current scope.
+
+    Each probe reuses the normal TTL cache (``_check_fn_cached``), so this is a cheap dict
+    lookup except once per ``_CHECK_FN_TTL_SECONDS`` per gated-off check_fn. Without this, a
+    check_fn's dependency becoming available mid-process (e.g. installing ``cua-driver`` for
+    ``computer_use``) is never re-probed on a long-lived gateway: nothing else calls the
+    check_fn once ``get_tool_definitions()``'s outer memo is already caching the tool-less
+    result, so the False->True transition it needs to bump ``registry._generation`` on never
+    happens (#118752).
+    """
+    if not _gated_off_check_fns:
+        return
+    scope = check_fn_cache_scope()
+    with _check_fn_cache_lock:
+        candidates = [key for key in _gated_off_check_fns if key[1] == scope]
+    for fn, _scope in candidates:
+        _check_fn_cached(fn)
 
 
 def get_cached_check_fn_result(fn: Callable) -> Optional[bool]:

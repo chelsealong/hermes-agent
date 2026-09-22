@@ -18,7 +18,10 @@ import threading
 import time
 from typing import Dict, Any, List, Optional, Tuple
 
-from tools.registry import CHECK_FN_CACHE_BYPASS, check_fn_cache_scope, discover_builtin_tools, registry, tool_error
+from tools.registry import (
+    CHECK_FN_CACHE_BYPASS, check_fn_cache_scope, discover_builtin_tools, recheck_gated_availability, registry,
+    tool_error,
+)
 from tools.registry import _MAX_TOOL_ERROR_CHARS as _TOOL_ERROR_MAX_LEN
 from toolsets import resolve_toolset, validate_toolset
 from tools.arg_coercion import coerce_tool_args
@@ -224,6 +227,10 @@ def get_tool_definitions(enabled_toolsets: Optional[List[str]] = None, disabled_
                                          skip_tool_search_assembly=skip_tool_search_assembly)
     if not quiet_mode:
         return compute()
+    # Cheaply re-probe any check_fn known to be gating a tool off, so a dependency installed
+    # mid-process is noticed even though this call would otherwise only ever hit the memo below
+    # (#118752). Bumps registry._generation on a False->True flip, which the cache key covers.
+    recheck_gated_availability()
     cache_key = _tool_defs_cache_key(enabled_toolsets, disabled_toolsets, skip_tool_search_assembly)
     # Cache the freshly-computed list, but hand callers a shallow copy so downstream mutations (e.g.
     # run_agent appending memory/LCM tool schemas to self.tools) don't poison the cache. Without this, a

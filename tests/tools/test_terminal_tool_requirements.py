@@ -397,6 +397,55 @@ class TestCheckFnTransientFailureSuppression:
         assert "terminal" in names
         assert "execute_code" in names
 
+    def test_gated_tool_appears_after_dependency_install_without_config_touch(self, monkeypatch):
+        """Regression for #118752: a check_fn's dependency becoming available mid-process
+        (e.g. installing ``cua-driver`` for ``computer_use``) must be picked up by the very
+        next get_tool_definitions() call in this process, not require a config.yaml touch or
+        a process restart."""
+        import tools.registry as reg
+        from model_tools import _clear_tool_defs_cache
+
+        tool_name = "gated_dependency_probe"
+        state = {"installed": False}
+
+        def dependency_ready():
+            return state["installed"]
+
+        reg.registry.register(
+            name=tool_name,
+            toolset="gated-dependency-test",
+            schema={
+                "name": tool_name,
+                "description": "test-only gated dependency probe",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            handler=lambda **kw: None,
+            check_fn=dependency_ready,
+        )
+        t = {"now": 9000.0}
+        monkeypatch.setattr(reg.time, "monotonic", lambda: t["now"])
+        try:
+            before = get_tool_definitions(
+                enabled_toolsets=["gated-dependency-test"], quiet_mode=True,
+                skip_tool_search_assembly=True,
+            )
+            assert tool_name not in {x["function"]["name"] for x in before}
+
+            # Dependency gets installed; advance past the check_fn TTL so the next probe
+            # actually runs instead of serving the stale cached False.
+            state["installed"] = True
+            t["now"] += reg._CHECK_FN_TTL_SECONDS + 1
+
+            after = get_tool_definitions(
+                enabled_toolsets=["gated-dependency-test"], quiet_mode=True,
+                skip_tool_search_assembly=True,
+            )
+            assert tool_name in {x["function"]["name"] for x in after}
+        finally:
+            reg.registry.deregister(tool_name)
+            reg.invalidate_check_fn_cache()
+            _clear_tool_defs_cache()
+
     def test_terminal_and_execute_code_tools_hide_for_unsupported_vercel_runtime(self, monkeypatch):
         monkeypatch.setenv("VERCEL_OIDC_TOKEN", "oidc-token")
         monkeypatch.setattr(
