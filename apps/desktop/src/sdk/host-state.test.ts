@@ -279,3 +279,52 @@ describe('host.state busy vs gateway', () => {
     expect(host.state.gateway.get()).toBe('open')
   })
 })
+
+describe('host.state.allProfiles (#118797)', () => {
+  async function setup() {
+    const { host } = await import('@/sdk/index')
+    const profile = await import('@/store/profile')
+
+    return { host, profile }
+  }
+
+  afterEach(async () => {
+    const { profile } = await setup()
+    profile.$profiles.set([])
+    profile.setShowAllProfiles(false)
+  })
+
+  it('is false when the preference is enabled but only one profile exists', async () => {
+    const { host, profile } = await setup()
+
+    profile.$profiles.set([{ name: 'default' } as never])
+    profile.setShowAllProfiles(true)
+
+    expect(host.state.allProfiles.get()).toBe(false)
+  })
+
+  it('is true only once the preference is on AND multiple profiles exist', async () => {
+    const { host, profile } = await setup()
+
+    profile.$profiles.set([{ name: 'default' } as never, { name: 'work' } as never])
+    profile.setShowAllProfiles(false)
+    expect(host.state.allProfiles.get()).toBe(false)
+
+    profile.setShowAllProfiles(true)
+    expect(host.state.allProfiles.get()).toBe(true)
+  })
+
+  it('setAllProfiles delegates to setShowAllProfiles, preserving persistence', async () => {
+    const { host, profile } = await setup()
+
+    profile.$profiles.set([{ name: 'default' } as never, { name: 'work' } as never])
+    host.setAllProfiles(true)
+
+    expect(profile.$showAllProfiles.get()).toBe(true)
+    expect(host.state.allProfiles.get()).toBe(true)
+
+    host.setAllProfiles(false)
+    expect(profile.$showAllProfiles.get()).toBe(false)
+    expect(host.state.allProfiles.get()).toBe(false)
+  })
+})

@@ -63,6 +63,7 @@ import {
 import { notify, notifyError } from '@/store/notifications'
 import {
   $activeGatewayProfile,
+  $effectiveAllProfiles,
   $gatewaySwapTarget,
   $hydrationSyncProfile,
   $profiles,
@@ -647,6 +648,12 @@ export const host = {
   state: {
     /** Runtime id of the active chat session (null on a fresh draft). */
     activeSessionId: readonlyAtom<null | string>($activeSessionId),
+    /** True only when the "All profiles" preference is enabled AND more than
+     *  one profile exists — the same effective predicate ChatSidebar renders
+     *  from, not the raw persisted preference or the internal `__all__` scope
+     *  sentinel. A persisted enabled preference with one profile reports
+     *  false. Set it with `host.setAllProfiles()`. */
+    allProfiles: readonlyAtom<boolean>($effectiveAllProfiles),
     /** True from send until the first assistant payload on the focused chat. */
     awaitingResponse: readonlyAtom<boolean>($focusedAwaitingResponse),
     /**
@@ -758,6 +765,14 @@ export const host = {
     }
 
     prewarmProfileBackend(name)
+  },
+
+  /** Enter or leave the sidebar's "All profiles" preference — the same
+   *  persisted setter the core profile switcher calls. Reflected back through
+   *  `host.state.allProfiles`, which also requires more than one profile to
+   *  read true. */
+  setAllProfiles: (value: boolean): void => {
+    setShowAllProfiles(value)
   },
 
   /** Delete a profile THROUGH the desktop's teardown-routed REST path — the

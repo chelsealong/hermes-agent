@@ -487,6 +487,7 @@ components.
 
 ```ts
 host.state.activeSessionId  // ReadableAtom<string | null>
+host.state.allProfiles      // ReadableAtom<boolean>  effective "All profiles" sidebar mode
 host.state.awaitingResponse // ReadableAtom<boolean>  true until the first assistant payload
 host.state.busy             // ReadableAtom<boolean>  focused chat is working after a send
 host.state.busyBySession    // ReadableAtom<Record<string, boolean>>  runtime id → mid-turn
@@ -508,6 +509,16 @@ can be idle at the same time. Disable composer or plugin actions from the
 session's `view.$busy`) — never from `gateway`, and never from a process-global
 busy flag.
 
+`host.state.allProfiles` is `true` only while the sidebar is actually showing
+its grouped, multi-profile view: the "All profiles" preference is on **and**
+more than one profile exists. A persisted preference left on from a prior
+multi-profile setup reads `false` once the user is back down to one profile —
+read this atom rather than re-deriving the predicate, since core and plugins
+must agree on when the grouped view is showing. Call `host.setAllProfiles(true
+| false)` to enter or leave the preference; it does not force multi-profile
+presentation on a single-profile install. Feature-detect on older desktop
+builds (`typeof host.setAllProfiles === 'function'`) before calling it.
+
 ```ts
 host.notify({ kind, message, title?, detail?, action? })  // toast; returns id
 host.notifyError(error, fallbackMessage)                   // toast an error
@@ -521,6 +532,7 @@ host.openSession(id, { profile?, intent? }) // open a stored session core-style;
                                            //   profile: soft-swap to that profile's backend first
                                            //   intent: 'in-place' (default) | 'stack' | 'tab' | 'window'
 host.newChat(profile?)                     // fresh chat draft, optionally in another profile
+host.setAllProfiles(value)                 // enter/leave the sidebar's "All profiles" preference
 host.openWorkspace(id, { render, title?, minWidth?, onClose? })
                                            // dock a plugin-rendered tab into the MAIN
                                            //   workspace zone and reveal it; returns a disposer

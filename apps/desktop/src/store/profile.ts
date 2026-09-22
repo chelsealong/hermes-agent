@@ -932,6 +932,16 @@ export const $showAllProfiles = atom<boolean>(storedBoolean(SHOW_ALL_PROFILES_ST
 
 $showAllProfiles.subscribe(value => persistBoolean(SHOW_ALL_PROFILES_STORAGE_KEY, value))
 
+// Effective "All profiles" presentation: the persisted preference is on AND
+// more than one profile exists. A single-profile user who left the preference
+// enabled from a prior multi-profile setup must not see the grouped view, so
+// this — not the raw preference — is the core predicate ChatSidebar renders
+// from and the plugin SDK exposes (#118797).
+export const $effectiveAllProfiles = computed(
+  [$showAllProfiles, $profiles],
+  (showAll, profiles) => showAll && profiles.length > 1
+)
+
 // The profile context the sidebar is currently showing: a concrete profile key,
 // or ALL_PROFILES for the unified grouped view. Concrete scope is tied to the
 // gateway so opening/selecting a profile (which swaps the gateway) moves the

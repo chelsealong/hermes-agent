@@ -74,6 +74,7 @@ import {
 } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
 import {
+  $effectiveAllProfiles,
   $newChatProfile,
   $profiles,
   $profileScope,
@@ -479,8 +480,9 @@ export function ChatSidebar({
   const multiProfile = profiles.length > 1
   // Gate ALL-profiles grouping on multiProfile too: if a user drops back to one
   // profile while scope is still ALL (persisted), the rail is hidden and they'd
-  // otherwise be stuck in the grouped view with no way out.
-  const showAllProfiles = multiProfile && profileScope === ALL_PROFILES
+  // otherwise be stuck in the grouped view with no way out. Shared with the
+  // plugin SDK's host.state.allProfiles so both read one predicate (#118797).
+  const showAllProfiles = useStore($effectiveAllProfiles)
   const messagingProfile = sidebarProfileForScope(profileScope)
   const agentOrderIds = useStore($sidebarSessionOrderIds)
   const agentOrderManual = useStore($sidebarSessionOrderManual)

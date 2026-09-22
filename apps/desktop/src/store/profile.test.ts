@@ -41,11 +41,14 @@ vi.mock('@/store/starmap', () => ({ resetStarmapGraph }))
 
 const {
   $activeGatewayProfile,
+  $effectiveAllProfiles,
   $profiles,
+  $showAllProfiles,
   ensureGatewayProfile,
   invalidateProfileListFetches,
   prewarmProfileBackend,
-  refreshProfiles
+  refreshProfiles,
+  setShowAllProfiles
 } = await import('./profile')
 
 const { $poolLimits } = await import('@/store/pool-limits')
@@ -381,5 +384,41 @@ describe('stale profile-list fetches across a backend switch (#85731)', () => {
     await oldFetch
 
     expect($profiles.get().map(profile => profile.name)).toEqual(['default', 'coder'])
+  })
+})
+
+describe('$effectiveAllProfiles (#118797)', () => {
+  afterEach(() => {
+    setShowAllProfiles(false)
+  })
+
+  it('is false when the preference is off, regardless of profile count', () => {
+    $profiles.set([profile('default', true), profile('work')])
+    setShowAllProfiles(false)
+
+    expect($effectiveAllProfiles.get()).toBe(false)
+  })
+
+  it('is false when the preference is on but only one profile exists', () => {
+    $profiles.set([profile('default', true)])
+    setShowAllProfiles(true)
+
+    expect($effectiveAllProfiles.get()).toBe(false)
+  })
+
+  it('is true only when the preference is on AND more than one profile exists', () => {
+    $profiles.set([profile('default', true), profile('work')])
+    setShowAllProfiles(true)
+
+    expect($effectiveAllProfiles.get()).toBe(true)
+  })
+
+  it('drops back to false when profiles shrink to one while the preference stays on', () => {
+    $profiles.set([profile('default', true), profile('work')])
+    setShowAllProfiles(true)
+    expect($effectiveAllProfiles.get()).toBe(true)
+
+    $profiles.set([profile('default', true)])
+    expect($effectiveAllProfiles.get()).toBe(false)
   })
 })
