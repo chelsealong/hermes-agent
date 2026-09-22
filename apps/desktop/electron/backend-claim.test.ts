@@ -7,6 +7,7 @@ import {
   claimDecision,
   createBackendOutputTail,
   DEFAULT_OUTPUT_TAIL_LIMIT,
+  execText,
   formatBackendExitLine,
   isPidOnlyStartMarker,
   pidOnlyStartMarker,
@@ -65,6 +66,36 @@ test('processStartMarker resolves a real marker for the current process', async 
   const marker = await processStartMarker(process.pid)
 
   assert.match(marker, /^(linux|win|winms|ps):.+/)
+})
+
+// --- execText: never hands the child a stdin pipe (#118983) -----------------
+
+test('execText gives the child no stdin pipe to hang on — a real subprocess never sees a FIFO/socket on fd 0', async () => {
+  // Windows OpenSSH's `ssh -G` hangs forever when its stdin is a pipe that
+  // gets EOF (what the old execFile + `.stdin.end()` implementation did),
+  // but returns immediately when stdin is never opened as a pipe at all.
+  // That distinction is real and observable cross-platform: a pipe-backed
+  // stdin reports as a FIFO or socket via fstat, while `stdio: 'ignore'`
+  // reports as a character device (e.g. /dev/null). Drive a real child
+  // process and inspect its own fd 0 to prove which kind it got.
+  const probe =
+    'const fs=require("fs");const st=fs.fstatSync(0);process.stdout.write(String(st.isFIFO()||st.isSocket()))'
+  const output = await execText(process.execPath, ['-e', probe])
+
+  assert.equal(output, 'false')
+})
+
+test('execText resolves real stdout, trimmed', async () => {
+  const output = await execText(process.execPath, ['-e', 'process.stdout.write("  hello  \\n")'])
+
+  assert.equal(output, 'hello')
+})
+
+test('execText rejects with a timeout error and kills a child that never exits', async () => {
+  await assert.rejects(
+    execText(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 50 }),
+    /timed out after 50ms/
+  )
 })
 
 test('a missing PID is classified as ESRCH so reapOrphans can drop the record', async () => {

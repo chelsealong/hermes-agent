@@ -17,28 +17,62 @@
  * exit reason reaches desktop.log and the boot UI).
  */
 
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 
 import { electronProcessStartMarker } from './parent-process-identity'
 import { isPidAlive } from './update-marker'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
+/**
+ * Spawns with stdin never opened as a pipe (#118983). `execFile` opens a
+ * stdin pipe and this used to `.stdin.end()` it right after spawn to keep
+ * these noninteractive probes from waiting on input — that works almost
+ * everywhere, but Windows OpenSSH's `ssh -G` hangs indefinitely when its
+ * stdin is a pipe that receives EOF, as opposed to no stdin handle at all.
+ * `stdio: ['ignore', ...]` never gives the child a pipe to hang on.
+ */
 export function execText(command: string, args: string[], { timeout = 3000 } = {}): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = execFile(command, args, hiddenWindowsChildOptions({ encoding: 'utf8', timeout }), (error, stdout) => {
-      if (error) {
-        reject(error)
-      } else if (timeout > 0 && child.killed) {
-        // A SIGTERM handler can exit zero after execFile's timeout fired.
-        reject(new Error(`${command} timed out after ${timeout}ms`))
-      } else {
-        resolve(String(stdout || '').trim())
-      }
+    const child = spawn(command, args, hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'pipe'] }))
+
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+
+    const timer =
+      timeout > 0
+        ? setTimeout(() => {
+            timedOut = true
+            child.kill()
+          }, timeout)
+        : undefined
+
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', chunk => {
+      stdout += chunk
+    })
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', chunk => {
+      stderr += chunk
     })
 
-    // These probes are noninteractive; do not leave readers waiting for input.
-    child.stdin?.end()
+    child.on('error', error => {
+      clearTimeout(timer)
+      reject(error)
+    })
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+
+      if (timedOut) {
+        reject(new Error(`${command} timed out after ${timeout}ms`))
+      } else if (code !== 0) {
+        reject(Object.assign(new Error(stderr.trim() || `${command} exited with code ${code}`), { code, signal }))
+      } else {
+        resolve(stdout.trim())
+      }
+    })
   })
 }
 
