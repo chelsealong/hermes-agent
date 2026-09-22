@@ -126,6 +126,69 @@ test('guardAgainstWatchStorm reopens after the cooldown once things are quiet', 
   assert.equal(seen.length, 6, 'events flow normally again once reopened')
 })
 
+test('guardAgainstWatchStorm survives the reopen throwing when the watch target has vanished during cooldown', () => {
+  const timers = makeTimers()
+  const seen: any[] = []
+
+  let onEvent: (...args: any[]) => void = () => {}
+  let calls = 0
+  let shouldThrow = false
+
+  // Mirrors fs.watch: throws ENOENT synchronously whenever the watch
+  // target is currently missing — e.g. the directory was removed while the
+  // guard was tripped and cooling down (a plugin uninstall/reinstall, an
+  // atomic replace, a build tool's clean step) — and succeeds otherwise.
+  const create = (handler: (...args: any[]) => void) => {
+    calls += 1
+
+    if (shouldThrow) {
+      throw Object.assign(new Error('ENOENT: no such file or directory, watch'), { code: 'ENOENT' })
+    }
+
+    onEvent = handler
+
+    return { close: () => {} }
+  }
+
+  const guarded = guardAgainstWatchStorm(create, (...args) => seen.push(args), {
+    cooldownMs: 2_000,
+    maxEventsPerWindow: 5,
+    timers
+  })
+
+  assert.equal(calls, 1)
+
+  for (let i = 0; i < 10; i += 1) {
+    onEvent('rename', 'file.txt')
+  }
+
+  assert.equal(timers.pendingCount, 1, 'the guard tripped and scheduled a cooldown')
+
+  // The directory vanishes while the guard is cooling down.
+  shouldThrow = true
+
+  timers.advance(2_000)
+
+  assert.doesNotThrow(() => timers.fire(), 'a reopen against a vanished directory must not throw out of the cooldown timer')
+
+  assert.equal(calls, 2, 'the guard attempted the reopen')
+  assert.equal(seen.length, 5, 'events before the trip still flowed')
+  assert.equal(timers.pendingCount, 1, 'a failed reopen reschedules another cooldown instead of giving up silently')
+
+  // The directory reappears; the next cooldown reopen should succeed.
+  shouldThrow = false
+
+  timers.advance(2_000)
+  timers.fire()
+
+  assert.equal(calls, 3, 'the guard retried the reopen on the following cooldown')
+
+  onEvent('rename', 'file.txt')
+  assert.equal(seen.length, 6, 'events flow again once the reopen finally succeeds')
+
+  guarded.close()
+})
+
 test('guardAgainstWatchStorm.close() tears down the cooldown timer and the native watcher', () => {
   const timers = makeTimers()
   const native = makeNativeWatcherFactory()

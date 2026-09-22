@@ -69,8 +69,19 @@ export function guardAgainstWatchStorm(
   let windowCount = 0
   let cooldownTimer: unknown = null
 
-  function openNative() {
-    native = createNativeWatcher(handleEvent)
+  function openNative(): boolean {
+    try {
+      native = createNativeWatcher(handleEvent)
+
+      return true
+    } catch {
+      // The watch target (a churning directory) can vanish between the trip
+      // and the reopen — e.g. a plugin uninstall/reinstall or an atomic
+      // replace. fs.watch throws synchronously in that case; swallow it and
+      // let scheduleReopen() retry on the next cooldown instead of crashing
+      // the Electron main process from inside a bare setTimeout callback.
+      return false
+    }
   }
 
   function closeNative() {
@@ -78,6 +89,24 @@ export function guardAgainstWatchStorm(
       native.close()
       native = null
     }
+  }
+
+  function scheduleReopen() {
+    cooldownTimer = timers.setTimeout(() => {
+      cooldownTimer = null
+      tripped = false
+      windowStart = timers.now()
+      windowCount = 0
+
+      if (closed) {
+        return
+      }
+
+      if (!openNative()) {
+        tripped = true
+        scheduleReopen()
+      }
+    }, cooldownMs)
   }
 
   function handleEvent(...args: any[]) {
@@ -97,17 +126,7 @@ export function guardAgainstWatchStorm(
     if (windowCount > maxEventsPerWindow) {
       tripped = true
       closeNative()
-
-      cooldownTimer = timers.setTimeout(() => {
-        cooldownTimer = null
-        tripped = false
-        windowStart = timers.now()
-        windowCount = 0
-
-        if (!closed) {
-          openNative()
-        }
-      }, cooldownMs)
+      scheduleReopen()
 
       return
     }
