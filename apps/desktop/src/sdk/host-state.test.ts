@@ -69,6 +69,19 @@ describe('host.state focused-session atoms', () => {
     session.setConnection(null)
   })
 
+  it('onBattery defaults to false and follows the power atom reactively', async () => {
+    const { host } = await setup()
+    const { $onBattery } = await import('@/store/power')
+
+    expect(host.state.onBattery.get()).toBe(false)
+
+    $onBattery.set(true)
+    expect(host.state.onBattery.get()).toBe(true)
+
+    $onBattery.set(false)
+    expect(host.state.onBattery.get()).toBe(false)
+  })
+
   it('follows the interacted tile while the primary-only atom stays put', async () => {
     const { host, session, states } = await setup()
     const tree = await import('@/components/pane-shell/tree/store')

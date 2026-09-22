@@ -497,6 +497,7 @@ host.state.focusedUsage     // ReadableAtom<UsageStats | null>  (live streamed u
 host.state.cwd              // ReadableAtom<string>
 host.state.gateway          // ReadableAtom<string>  socket state ('idle' | 'connecting' | 'open' | …)
 host.state.model            // ReadableAtom<string>
+host.state.onBattery        // ReadableAtom<boolean>  Electron positively reports battery power; `false` is the safe fallback (AC, pre-hydration, or older builds without the bridge)
 host.state.profile          // ReadableAtom<string>
 host.state.viewport         // ReadableAtom<{ width, height, narrow }>
 ```

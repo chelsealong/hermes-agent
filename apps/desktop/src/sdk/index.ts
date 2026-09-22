@@ -61,6 +61,7 @@ import {
   type SpawnPriority
 } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { $onBattery } from '@/store/power'
 import {
   $activeGatewayProfile,
   $gatewaySwapTarget,
@@ -686,6 +687,11 @@ export const host = {
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
+    /** Electron positively reports battery power. `false` is the safe
+     *  fallback for AC, startup before hydration, or unavailable detection
+     *  (older builds without the bridge). No charge level or battery
+     *  identity — just the on/off signal core scheduling already uses. */
+    onBattery: readonlyAtom<boolean>($onBattery),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
     /** Window geometry ({ width, height, narrow }). */
