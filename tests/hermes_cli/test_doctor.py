@@ -1898,12 +1898,12 @@ def test_doctor_reports_auxiliary_blocks_that_do_not_resolve(tmp_path, monkeypat
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(yaml.safe_dump({"auxiliary": {
-        "vision": {"provider": "no-such-provider", "model": "m"},
+        "background_review": {"provider": "no-such-provider", "model": "m"},
         "compression": {"provider": "openai", "model": "gpt-x", "base_url": "https://gateway.example/v1", "api_key": "gw"},
     }}))
     issues = []
     doctor_config._validate_auxiliary_config(cfg_file, issues)
-    assert len(issues) == 1 and "auxiliary.vision" in issues[0] and "no-such-provider" in issues[0]
+    assert len(issues) == 1 and "auxiliary.background_review" in issues[0] and "no-such-provider" in issues[0]
 
 
 def test_doctor_ignores_auxiliary_blocks_with_no_reader(tmp_path, monkeypatch, capsys):
@@ -1921,3 +1921,25 @@ def test_doctor_ignores_auxiliary_blocks_with_no_reader(tmp_path, monkeypatch, c
     doctor_config._validate_auxiliary_config(cfg_file, issues)
     assert issues == []
     assert "auxiliary.web_extract has no reader" in capsys.readouterr().out
+
+
+def test_doctor_still_flags_tasks_read_outside_the_setup_picker(tmp_path, monkeypatch):
+    """background_review, side_question, moa_reference and moa_aggregator each have a live reader
+    (agent/background_review.py, agent/side_question.py, agent/moa_loop.py) but are absent from
+    main_provider_setup._all_aux_tasks() — the interactive setup picker's curated menu, not an
+    exhaustive reader registry. A misconfigured block for any of them must still hard-fail instead
+    of being reported as having "no reader" (#118720 regression)."""
+    import yaml
+    from hermes_cli import doctor_config
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg_file = tmp_path / "config.yaml"
+    tasks = ["background_review", "side_question", "moa_reference", "moa_aggregator"]
+    cfg_file.write_text(yaml.safe_dump({"auxiliary": {
+        task: {"provider": "no-such-provider", "model": "m"} for task in tasks
+    }}))
+    issues = []
+    doctor_config._validate_auxiliary_config(cfg_file, issues)
+    assert len(issues) == len(tasks)
+    for task in tasks:
+        assert any(f"auxiliary.{task}" in issue and "no-such-provider" in issue for issue in issues)

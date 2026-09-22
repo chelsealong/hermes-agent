@@ -267,22 +267,31 @@ def _validate_model_config(config_path, issues: list) -> None:
                                 f"API key in {_DHH}/.env, or switch providers with 'hermes config set model.provider <name>'", issues)
 
 
+#: Tasks whose aux routing was removed from the codebase — config_defaults.py documents both as
+#: dead ("web_extract and session_search no longer use an aux LLM; leftover blocks in user config
+#: are ignored"). NOT the inverse of `main_provider_setup._all_aux_tasks()`: that list is the
+#: interactive setup picker's curated menu, not an exhaustive reader registry — tasks read directly
+#: by their own module (background_review, side_question, moa_reference, moa_aggregator, ...)
+#: never appear in it despite having a live reader, so allowlisting against it misreports them as
+#: dead (#118720 fix regression). A denylist of the specific keys known to be unread is the only
+#: ground truth that doesn't also swallow live tasks.
+_DEAD_AUX_TASKS = frozenset({"web_extract", "session_search"})
+
+
 def _validate_auxiliary_config(config_path, issues: list) -> None:
     """Resolve every routed ``auxiliary.<task>`` block through the real entry point the tasks use and report
     the ones that fail — an unresolvable block otherwise silently runs the task on the main model (#116055).
 
-    Blocks for tasks with no reader (e.g. a leftover ``auxiliary.web_extract`` from before that task's aux
-    routing was removed) are reported informationally instead: no provider value can ever satisfy them, so
-    treating them as a hard failure sends the user to fix a key nothing reads (#118720)."""
+    Blocks for the tasks in ``_DEAD_AUX_TASKS`` (leftovers from before their aux routing was removed)
+    are reported informationally instead: no provider value can ever satisfy them, so treating them as
+    a hard failure sends the user to fix a key nothing reads (#118720)."""
     from hermes_cli.config import read_user_config_raw
-    from hermes_cli.main_provider_setup import _all_aux_tasks
     from hermes_cli.runtime_provider import resolve_runtime_provider
     from utils import base_url_hostname
     aux = read_user_config_raw(config_path).get("auxiliary")
-    known_tasks = {key for key, _name, _desc in _all_aux_tasks()}
     candidates = {name: block for name, block in (aux.items() if isinstance(aux, dict) else ())
                   if isinstance(block, dict) and str(block.get("provider") or "").strip().lower() not in ("", "auto")}
-    routed = {name: block for name, block in candidates.items() if name in known_tasks}
+    routed = {name: block for name, block in candidates.items() if name not in _DEAD_AUX_TASKS}
     for task in sorted(candidates.keys() - routed.keys()):
         check_info(f"auxiliary.{task} has no reader and is ignored; delete with 'hermes config unset auxiliary.{task}'")
     ok = []
