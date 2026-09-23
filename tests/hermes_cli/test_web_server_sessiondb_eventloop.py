@@ -28,6 +28,7 @@ TARGET_HANDLERS = {
     "search_sessions",
     "get_session_stats",
     "get_session_detail",
+    "rename_session_endpoint",
 }
 
 
