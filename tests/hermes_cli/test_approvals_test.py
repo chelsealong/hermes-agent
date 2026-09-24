@@ -121,7 +121,10 @@ class TestNormalizationParity:
     def test_normalized_trace_shown_when_command_normalizes(self,
                                                             isolated_approvals,
                                                             capsys):
-        rc = at.approvals_test_command(_args(['git', 'st""atus']))
+        # A single REMAINDER word is the caller's whole command, quoted as one
+        # shell argument, so it is evaluated verbatim — the embedded "" splicing
+        # reaches the detectors unchanged and still de-obfuscates to "git status".
+        rc = at.approvals_test_command(_args(['git st""atus']))
         out = capsys.readouterr().out
         assert rc == 0
         assert "git status" in out
@@ -195,3 +198,83 @@ class TestOutputAndWiring:
         assert rc == 0
         assert "ls -la" in out
         assert "-- ls" not in out
+
+
+class TestShellQuotingFidelity:
+    """REMAINDER hands over post-shell-split words; the reconstruction must re-quote
+    them so the detectors see the same token boundaries the real invocation would,
+    matching what ``check_all_command_guards`` decides for the actual command string.
+    """
+
+    def test_over_denial_direction_matches_runtime(self, isolated_approvals, capsys):
+        # `git commit -m "x; rm -rf /"` — the ';' and the delete pattern are inert
+        # inside the quoted commit message. A bare-space join exposes them as real
+        # operators and over-denies; the real runtime only asks for approval.
+        words = ["git", "commit", "-m", "x; rm -rf /"]
+        rc = at.approvals_test_command(_args(words))
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "ask-approval" in out
+        real_verdict = at.evaluate_command('git commit -m "x; rm -rf /"')
+        assert real_verdict["verdict"] == "ask-approval"
+
+    def test_second_over_denial_direction_matches_runtime(self, isolated_approvals,
+                                                           capsys):
+        # `echo "a | reboot"` — the pipe is inert prose inside quotes; a bare-space
+        # join exposes it as a real pipe into the hardline "reboot" pattern.
+        words = ["echo", "a | reboot"]
+        rc = at.approvals_test_command(_args(words))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "allow" in out
+        real_verdict = at.evaluate_command('echo "a | reboot"')
+        assert real_verdict["verdict"] == "allow"
+
+    def test_under_denial_direction_matches_runtime(self, isolated_approvals, capsys):
+        # `sh -c "rm -rf /"` — the dangerous direction: the sh -c payload is only
+        # scanned as code when it arrives quoted as one token. A bare-space join
+        # splits it into separate words and the hardline match is missed entirely.
+        words = ["sh", "-c", "rm -rf /"]
+        rc = at.approvals_test_command(_args(words))
+        out = capsys.readouterr().out
+        assert rc == 3
+        assert "hardline-deny" in out
+        real_verdict = at.evaluate_command('sh -c "rm -rf /"')
+        assert real_verdict["verdict"] == "hardline-deny"
+
+    def test_json_command_field_shows_faithful_reconstruction(self, isolated_approvals,
+                                                               capsys):
+        words = ["git", "commit", "-m", "x; rm -rf /"]
+        at.approvals_test_command(_args(words, as_json=True))
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["command"] == "git commit -m 'x; rm -rf /'"
+
+    def test_embedded_apostrophe_round_trips(self, isolated_approvals, capsys):
+        words = ["echo", "it's a test"]
+        at.approvals_test_command(_args(words, as_json=True))
+        payload = json.loads(capsys.readouterr().out)
+        import shlex
+        assert shlex.split(payload["command"]) == words
+
+    def test_single_argv_word_evaluated_verbatim(self, isolated_approvals, capsys):
+        # The caller quoted the WHOLE command as one shell argument, so REMAINDER
+        # sees exactly one word. Re-quoting it again would wrap it in an extra
+        # layer of quotes and hide the sh -c payload from the hardline scan.
+        single_word = 'sh -c "rm -rf /"'
+        at.approvals_test_command(_args([single_word], as_json=True))
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["command"] == single_word
+        assert payload["verdict"] == "hardline-deny"
+
+    def test_end_to_end_argparse_remainder_path(self, isolated_approvals, capsys):
+        from hermes_cli.subcommands.approvals import build_approvals_parser
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers()
+        build_approvals_parser(sub, cmd_approvals=at.approvals_test_command)
+        args = parser.parse_args(
+            ["approvals", "test", "--json", "--", "sh", "-c", "rm -rf /"])
+        rc = args.func(args)
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 3
+        assert payload["verdict"] == "hardline-deny"
+        assert payload["command"] == "sh -c 'rm -rf /'"

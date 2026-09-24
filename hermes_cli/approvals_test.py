@@ -13,6 +13,7 @@ rules (fire before yolo/off), 5. yolo / ``approvals.mode: off`` bypass, 6. perma
 from __future__ import annotations
 
 import json
+import shlex
 
 EXIT_ALLOW = 0
 EXIT_USAGE = 1
@@ -139,7 +140,13 @@ def approvals_test_command(args) -> int:
         print("usage: hermes approvals test [--env-type TYPE] [--json] -- <command...>")
         return EXIT_USAGE
 
-    verdict = evaluate_command(" ".join(words), env_type=getattr(args, "env_type", None) or "local")
+    # argparse REMAINDER hands us post-shell-split words: any metacharacter that survived the
+    # caller's own shell into argv was necessarily quoted or escaped there, i.e. literal. shlex.join
+    # re-quotes so the detectors see the same token boundaries the real invocation would. A lone
+    # word is already the complete command string (the caller quoted the whole thing) and must be
+    # evaluated verbatim — wrapping it in another layer of quoting would misrepresent it.
+    command = words[0] if len(words) == 1 else shlex.join(words)
+    verdict = evaluate_command(command, env_type=getattr(args, "env_type", None) or "local")
     if getattr(args, "json", False):
         print(json.dumps(verdict, indent=2))
     else:
