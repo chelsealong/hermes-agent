@@ -364,7 +364,12 @@ export function BotScreenPane({ bot }: { bot: RosterRow }) {
   )
 
   if (state?.unavailable) {
-    return <EmptyState description={t.screen.portalUnavailable} title={t.screen.unavailableTitle} />
+    // A Hermes Cloud instance has no self-update lever a user can act on — telling
+    // them to "update the bot's Hermes" sends them chasing an update that isn't
+    // theirs to run (#120852).
+    const description = bot.connectionKind === 'cloud' ? t.screen.portalUnavailableCloud : t.screen.portalUnavailable
+
+    return <EmptyState description={description} title={t.screen.unavailableTitle} />
   }
 
   if (status && !status.supported) {

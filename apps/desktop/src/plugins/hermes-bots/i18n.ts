@@ -381,6 +381,10 @@ type BotsMessages = {
     portalNotInstalled: string
     portalUnsupported: string
     portalUnavailable: string
+    /** Same "no display.* on the backend" state, but the connection is a Hermes Cloud
+     *  instance: the user has no self-update lever, so the copy must not send them
+     *  looking for one. */
+    portalUnavailableCloud: string
     unavailableTitle: string
     autoOpenMenu: string
     autoOpenOnToast: (name: string) => string
@@ -809,6 +813,7 @@ const en: BotsMessages = {
     portalNotInstalled: 'Not installed on host',
     portalUnsupported: 'Not available on this host',
     portalUnavailable: 'Update the bot\u2019s Hermes to use Screen',
+    portalUnavailableCloud: 'This Hermes Cloud instance doesn\u2019t support Screen yet \u2014 it updates automatically',
     unavailableTitle: 'Screen needs a newer Hermes',
     autoOpenMenu: 'Open Screen when the bot uses it',
     autoOpenOnToast: name => `${name}’s Screen opens when it starts using its desktop`,
@@ -1237,6 +1242,7 @@ const ja: BotsMessages = {
     portalNotInstalled: 'ホストに未インストール',
     portalUnsupported: 'このホストでは利用できません',
     portalUnavailable: 'Screen を使うにはボットの Hermes を更新してください',
+    portalUnavailableCloud: 'この Hermes Cloud インスタンスはまだ Screen に対応していません（自動更新されます）',
     unavailableTitle: 'Screen には新しい Hermes が必要です',
     autoOpenMenu: 'ボットが画面を使い始めたら Screen を開く',
     autoOpenOnToast: name => `${name} がデスクトップを使い始めると Screen が開きます`,
@@ -1650,6 +1656,7 @@ const zh: BotsMessages = {
     portalNotInstalled: '主机未安装',
     portalUnsupported: '此主机不可用',
     portalUnavailable: '更新机器人的 Hermes 以使用屏幕',
+    portalUnavailableCloud: '此 Hermes Cloud 实例尚不支持屏幕功能 —— 它会自动更新',
     unavailableTitle: '屏幕需要更新版的 Hermes',
     autoOpenMenu: '机器人使用屏幕时自动打开',
     autoOpenOnToast: name => `${name} 开始使用桌面时会自动打开屏幕`,
@@ -2063,6 +2070,7 @@ const zhHant: BotsMessages = {
     portalNotInstalled: '主機未安裝',
     portalUnsupported: '此主機不可用',
     portalUnavailable: '更新機器人的 Hermes 以使用螢幕',
+    portalUnavailableCloud: '此 Hermes Cloud 執行個體尚不支援螢幕功能 —— 它會自動更新',
     unavailableTitle: '螢幕需要較新版的 Hermes',
     autoOpenMenu: '機器人使用螢幕時自動開啟',
     autoOpenOnToast: name => `${name} 開始使用桌面時會自動開啟螢幕`,
