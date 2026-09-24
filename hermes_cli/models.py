@@ -771,6 +771,13 @@ def parse_model_input(
     if colon > 0:
         provider_part = stripped[:colon].strip().lower()
         model_part = stripped[colon + 1:].strip()
+        if model_part and provider_part:
+            from hermes_cli.providers import LLAMACPP_ALIASES, LLAMACPP_PROVIDER_ID
+            # The ACP Local picker (acp_adapter/model_catalog.py) encodes choice ids with the
+            # managed llama.cpp runtime's own provider id/aliases, which sit outside the cloud
+            # catalog that builds _KNOWN_PROVIDER_NAMES.
+            if provider_part in LLAMACPP_ALIASES:
+                return (LLAMACPP_PROVIDER_ID, model_part)
         if provider_part and model_part and provider_part in _KNOWN_PROVIDER_NAMES:
             if provider_part == "custom":
                 configured = _configured_custom_provider_ids() if custom_ids is None else custom_ids
