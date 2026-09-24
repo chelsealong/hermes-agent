@@ -370,6 +370,27 @@ class TestSubcommandCompletion:
         texts = {c.text for c in _completions(SlashCommandCompleter(), "/handoff ")}
         assert texts == {"telegram", "discord"}
 
+    def test_reasoning_offers_global_after_level(self):
+        """#121129: `/reasoning hide ` must still surface `--global` — the parser already
+        accepts a level/toggle word followed by the scope flag; only the dropdown didn't."""
+        texts = {c.text for c in _completions(SlashCommandCompleter(), "/reasoning hide ")}
+        assert texts == {"--global"}
+
+    def test_reasoning_global_not_reoffered_once_typed(self):
+        """`--global` already present in the line: don't suggest it a second time."""
+        completions = _completions(SlashCommandCompleter(), "/reasoning hide --global")
+        assert completions == []
+
+    def test_fast_offers_global_after_level(self):
+        """Same scope-flag mechanism backs /fast (`_split_scope_flags`); it shares the bug."""
+        texts = {c.text for c in _completions(SlashCommandCompleter(), "/fast normal ")}
+        assert texts == {"--global"}
+
+    def test_diff_second_word_gets_no_global_noise(self):
+        """/diff has no scope flag; its second word must not spuriously offer --global."""
+        texts = {c.text for c in _completions(SlashCommandCompleter(), "/diff staged ")}
+        assert "--global" not in texts
+
 
 # ── Ghost text (SlashCommandAutoSuggest) ────────────────────────────────
 
@@ -390,6 +411,15 @@ class TestGhostText:
     def test_command_name_suggestion(self):
         """/he → 'lp'"""
         assert _suggestion("/he") == "lp"
+
+    def test_reasoning_ghosts_global_after_level(self):
+        """#121129: inline ghost text should still offer the trailing scope flag once a
+        level/toggle word is typed, not just as the very first word."""
+        assert _suggestion("/reasoning hide ") == "--global"
+        assert _suggestion("/reasoning hide --glo") == "bal"
+
+    def test_reasoning_no_ghost_once_global_typed(self):
+        assert _suggestion("/reasoning hide --global") is None
 
 
     # -- stacked slash-skill ghost text -----------------------------------

@@ -437,6 +437,12 @@ class SlashCommandCompleter(Completer):
             elif first_arg and base_cmd in SUBCOMMANDS and self._command_allowed(base_cmd):
                 yield from _prefix_completions(
                     ((s, None) for s in SUBCOMMANDS[base_cmd]), sub_text)
+            elif (not first_arg and "--global" in SUBCOMMANDS.get(base_cmd, ())
+                  and self._command_allowed(base_cmd)):
+                # A scope flag (/reasoning, /fast) is still valid after the level/toggle word.
+                completed, partial = _split_args(sub_text)
+                if "--global" not in completed:
+                    yield from _prefix_completions((("--global", None),), partial)
             return
         word = text[1:]
 
@@ -509,4 +515,9 @@ class SlashCommandAutoSuggest(AutoSuggest):
             for sub in SUBCOMMANDS.get(base_cmd, ()):
                 if sub.startswith(sub_lower) and sub != sub_lower:
                     return Suggestion(sub[len(sub_text):])
+        elif "--global" in SUBCOMMANDS.get(base_cmd, ()):
+            # A scope flag (/reasoning, /fast) is still valid after the level/toggle word.
+            completed, partial = _split_args(sub_text)
+            if "--global" not in completed and "--global".startswith(partial.lower()) and partial != "--global":
+                return Suggestion("--global"[len(partial):])
         return self._history_suggestion(buffer, document)
