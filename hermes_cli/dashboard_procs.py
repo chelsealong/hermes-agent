@@ -12,13 +12,19 @@ from pathlib import Path
 
 from hermes_cli._startup_fast import is_desktop_ssh_backend_argv
 
-# Cmdline substrings identifying the long-lived server (``serve`` = the headless name Desktop
-# spawns; reaped on update for the same reason).
-_DASHBOARD_PATTERNS = tuple(
-    f"{launcher} {cmd}"
-    for cmd in ("dashboard", "serve")
-    for launcher in ("hermes", "hermes_cli.main", "hermes_cli/main.py"))
 _PS_RUN_KWARGS = dict(capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def _is_dashboard_or_serve_cmdline(command: str) -> bool:
+    """True when *command* is a genuine ``hermes dashboard``/``hermes serve`` invocation.
+
+    Token-based, never argv substring: a substring test on ``hermes serve`` also matches
+    ``herdr --session hermes server`` and any other process whose argv happens to mention
+    both words (#121156). Same canonical matcher ``_is_desktop_local_serve_cmdline`` below
+    uses for the orphan reap.
+    """
+    from hermes_cli.update_cmd_windows import _hermes_holder_subcommand
+    return _hermes_holder_subcommand(command) in ("dashboard", "serve")
 
 
 def _empty_result() -> dict[str, list]:
@@ -88,11 +94,12 @@ def _scan_dashboard_processes(*, exclude_pids: set[int] | None = None) -> list[t
     skip = {os.getpid(), *(exclude_pids or ())}
     try:
         found = [(pid, cmd) for pid, cmd in _iter_process_table()
-                 if pid not in skip and any(p in cmd for p in _DASHBOARD_PATTERNS)]
+                 if pid not in skip and _is_dashboard_or_serve_cmdline(cmd)]
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return []
-    # Spawn-ledger augmentation: substring patterns miss profiled launches (`hermes --profile p
-    # serve`); the ledger holds live-verified pids. Unavailable ledger → scan-only.
+    # Spawn-ledger augmentation: the scan can still miss a launch (truncated ps/wmic argv, an
+    # unrecognized launcher spelling); the ledger holds live-verified pids. Unavailable ledger →
+    # scan-only.
     with contextlib.suppress(Exception):
         # Every serve/ dashboard registers itself in the machine spawn ledger at startup with live-verified
         # (pid, create_time), so ledger rows are positive identity, not argv guessing. Add any live ledger
