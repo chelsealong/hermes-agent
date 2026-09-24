@@ -1285,3 +1285,71 @@ class TestFinalFrameAckTimeoutSemantics:
                 {"msgtype": "stream", "stream": {"id": "stream_x", "content": "x", "finish": True}},
                 is_final=True,
             )
+
+
+class TestWeComIsConnected:
+    """#120870: the setup picker probes `is_connected` with a synthetic PlatformConfig
+    carrying no `extra` — an env-only install must still read as connected."""
+
+    def test_extra_only_is_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _is_connected
+
+        monkeypatch.delenv("WECOM_BOT_ID", raising=False)
+        monkeypatch.delenv("WECOM_SECRET", raising=False)
+        assert _is_connected(PlatformConfig(enabled=True, extra={"bot_id": "b", "secret": "s"})) is True
+
+    def test_env_only_is_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _is_connected
+
+        monkeypatch.setenv("WECOM_BOT_ID", "b")
+        monkeypatch.setenv("WECOM_SECRET", "s")
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is True
+
+    def test_missing_secret_is_not_connected(self, monkeypatch):
+        """connect() requires both bot_id and secret — a half-configured install must not
+        read as ready (mirrors the paired-credential check on sibling adapters)."""
+        from plugins.platforms.wecom.adapter import _is_connected
+
+        monkeypatch.setenv("WECOM_BOT_ID", "b")
+        monkeypatch.delenv("WECOM_SECRET", raising=False)
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is False
+
+    def test_no_credentials_is_not_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _is_connected
+
+        monkeypatch.delenv("WECOM_BOT_ID", raising=False)
+        monkeypatch.delenv("WECOM_SECRET", raising=False)
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is False
+
+
+class TestWeComCallbackIsConnected:
+    def test_extra_only_is_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _callback_is_connected
+
+        monkeypatch.delenv("WECOM_CALLBACK_CORP_ID", raising=False)
+        monkeypatch.delenv("WECOM_CALLBACK_CORP_SECRET", raising=False)
+        config = PlatformConfig(enabled=True, extra={"corp_id": "c", "corp_secret": "s"})
+        assert _callback_is_connected(config) is True
+
+    def test_env_only_is_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _callback_is_connected
+
+        monkeypatch.setenv("WECOM_CALLBACK_CORP_ID", "c")
+        monkeypatch.setenv("WECOM_CALLBACK_CORP_SECRET", "s")
+        assert _callback_is_connected(PlatformConfig(enabled=True, extra={})) is True
+
+    def test_missing_secret_is_not_connected(self, monkeypatch):
+        from plugins.platforms.wecom.adapter import _callback_is_connected
+
+        monkeypatch.setenv("WECOM_CALLBACK_CORP_ID", "c")
+        monkeypatch.delenv("WECOM_CALLBACK_CORP_SECRET", raising=False)
+        assert _callback_is_connected(PlatformConfig(enabled=True, extra={})) is False
+
+    def test_multi_app_block_is_connected(self, monkeypatch):
+        """The `apps` list is its own complete config shape — no env rung applies to it."""
+        from plugins.platforms.wecom.adapter import _callback_is_connected
+
+        monkeypatch.delenv("WECOM_CALLBACK_CORP_ID", raising=False)
+        monkeypatch.delenv("WECOM_CALLBACK_CORP_SECRET", raising=False)
+        config = PlatformConfig(enabled=True, extra={"apps": [{"corp_id": "c", "corp_secret": "s"}]})
+        assert _callback_is_connected(config) is True

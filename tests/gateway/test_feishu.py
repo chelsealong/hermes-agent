@@ -2568,3 +2568,43 @@ def test_processing_failure_skips_cross_mark_when_typing_removal_fails(fake_lark
     assert tracker.created == ["Typing"]
     assert tracker.deleted == ["r_typing"]
     assert adapter._pending_processing_reactions["om_msg"] == "r_typing"
+
+
+class TestFeishuIsConnected:
+    """#120870: the setup picker probes `is_connected` with a synthetic PlatformConfig
+    carrying no `extra` — an env-only install must still read as connected."""
+
+    def test_extra_only_is_connected(self, monkeypatch):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import _is_connected
+
+        monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+        monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+        config = PlatformConfig(enabled=True, extra={"app_id": "a", "app_secret": "s"})
+        assert _is_connected(config) is True
+
+    def test_env_only_is_connected(self, monkeypatch):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import _is_connected
+
+        monkeypatch.setenv("FEISHU_APP_ID", "a")
+        monkeypatch.setenv("FEISHU_APP_SECRET", "s")
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is True
+
+    def test_missing_secret_is_not_connected(self, monkeypatch):
+        """connect() rejects a missing app_secret — a half-configured install must not read
+        as ready even once app_id resolves."""
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import _is_connected
+
+        monkeypatch.setenv("FEISHU_APP_ID", "a")
+        monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is False
+
+    def test_no_credentials_is_not_connected(self, monkeypatch):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import _is_connected
+
+        monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+        monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+        assert _is_connected(PlatformConfig(enabled=True, extra={})) is False
