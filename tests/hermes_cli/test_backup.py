@@ -1290,6 +1290,46 @@ class TestSafeCopyDb:
         assert connect_calls[0][1]["timeout"] == 0.0
         assert not dst.exists()
 
+    def test_aborts_endless_progress_restarts_without_busy_or_locked(
+        self, tmp_path, monkeypatch
+    ):
+        """#120888: a live source under concurrent writes can make backup() restart on every
+        step and report non-BUSY/LOCKED progress each time, so busy_deadline keeps getting
+        pushed out and never fires. The absolute deadline must bound this regardless."""
+        from hermes_cli import backup as backup_mod
+
+        src = tmp_path / "hot.db"
+        dst = tmp_path / "copy.db"
+        src.touch()
+        dst.write_bytes(b"partial")
+
+        clock = iter(float(i) for i in range(0, 10_000))
+
+        class FakeSourceConnection:
+            def backup(self, _destination, *, pages, progress, sleep):
+                assert pages > 0
+                assert sleep > 0
+                for _ in range(10_000):
+                    # Every step reports SQLITE_OK (non-BUSY/LOCKED progress, e.g. a restart),
+                    # which would reset busy_deadline forever without an independent ceiling.
+                    progress(sqlite3.SQLITE_OK, 0, 1)
+
+            def close(self):
+                pass
+
+        class FakeDestinationConnection:
+            def close(self):
+                pass
+
+        connections = iter((FakeSourceConnection(), FakeDestinationConnection()))
+
+        monkeypatch.setattr(backup_mod.sqlite3, "connect", lambda *a, **k: next(connections))
+        monkeypatch.setattr(backup_mod.time, "monotonic", lambda: next(clock))
+
+        assert backup_mod._safe_copy_db(
+            src, dst, timeout_seconds=1.0, max_seconds=5.0
+        ) is False
+        assert not dst.exists()
 
 
 

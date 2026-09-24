@@ -329,7 +329,9 @@ def _query_ro_sqlite(path: Path, fn):
         _close_quietly(conn)
 
 
-def _safe_copy_db(src: Path, dst: Path, *, timeout_seconds: float = 10.0) -> bool:
+def _safe_copy_db(
+    src: Path, dst: Path, *, timeout_seconds: float = 10.0, max_seconds: float = 600.0,
+) -> bool:
     """Copy a SQLite database with the backup() API (WAL-safe consistent snapshot).
 
     Fails closed when no consistent snapshot can be made: copying only the main file loses WAL data.
@@ -355,11 +357,20 @@ def _safe_copy_db(src: Path, dst: Path, *, timeout_seconds: float = 10.0) -> boo
         # full locked-source deadline instead of adding the default timeout before each callback.
         conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=0.0)
         backup_conn = sqlite3.connect(str(dst))
-        busy_deadline = time.monotonic() + max(0.0, timeout_seconds)
+        start = time.monotonic()
+        busy_deadline = start + max(0.0, timeout_seconds)
+        # Independent of busy_deadline: a live source under continuous writes can make the
+        # backup() API restart from scratch on every step (SQLite discards progress once the
+        # source page count/schema changes mid-copy) without ever reporting BUSY/LOCKED, so
+        # busy_deadline keeps getting pushed out forever. This absolute ceiling bounds that
+        # restart churn independently of whether any individual step was ever seen as locked.
+        absolute_deadline = start + max(0.0, max_seconds)
 
         def _check_backup_progress(status: int, _remaining: int, _total: int) -> None:
             nonlocal busy_deadline
             now = time.monotonic()
+            if now >= absolute_deadline:
+                raise _SQLiteBackupTimeout(f"database snapshot exceeded {max_seconds:g}-second absolute deadline")
             if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
                 if now >= busy_deadline:
                     raise _SQLiteBackupTimeout(f"database remained locked for {timeout_seconds:g} seconds")
