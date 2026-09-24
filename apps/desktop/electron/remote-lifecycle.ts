@@ -245,6 +245,24 @@ async function locateHermes(ssh, remoteHermesPath) {
   throw err
 }
 
+// The detached backend spawned by buildSpawnCommand runs under a non-login
+// `sh -c`, the same PATH pitfall locateHermes works around above for finding
+// the `hermes` binary itself. Anything the backend resolves at runtime via
+// shutil.which() — e.g. an `external_process` model provider's CLI installed
+// under $HOME/.local/bin — inherits that restricted PATH instead of a login
+// shell's, so a provider visible in an interactive session silently
+// disappears from the model picker (#120887). Carry the login shell's PATH
+// into the spawn so backend-side lookups see what a login shell would.
+async function probeLoginShellPath(ssh) {
+  try {
+    const out = await ssh.exec(`bash -lc ${shq('printf %s "$PATH"')}`)
+
+    return String(out || '').trim().split('\n').pop().trim()
+  } catch {
+    return ''
+  }
+}
+
 // Probe the resolved binary's version string (first line of `<hermes> --version`,
 // e.g. "Hermes Agent v0.18.2 ..."), or '' on failure. Surfaces WHICH hermes a
 // connection uses, so a stale/unexpected install is visible.
@@ -1131,9 +1149,11 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
     `owner=$(IFS= read -r owner < ${marker} && printf '%s' "$owner"); ` +
     `case "$owner" in ''|*[!0-9]*) return 1;; esac; if kill -0 "$owner" 2>/dev/null; then return 1; fi; return 0; }`
 
+  const pathArg = opts.loginPath ? ` PATH=${shq(opts.loginPath)}` : ''
+
   const dashCmd =
     `ulimit -n ${REMOTE_NOFILE_SOFT_LIMIT} 2>/dev/null || true; ` +
-    `exec env HERMES_DESKTOP=1${opts.guestOnboarding === true ? ' HERMES_GUEST_ONBOARDING=1' : ''} ${hermes} ${profileArgs}${subCmd}`
+    `exec env HERMES_DESKTOP=1${pathArg}${opts.guestOnboarding === true ? ' HERMES_GUEST_ONBOARDING=1' : ''} ${hermes} ${profileArgs}${subCmd}`
 
   const detachedShell = `eval "exec $1>&-"; ${dashCmd} </dev/null >> ${logPath} 2>&1 & echo $!`
   const detachedSpawn = `child=$("$(command -v setsid || echo nohup)" sh -c ${shq(detachedShell)} hermes-update-child "$1" & echo $!)`
@@ -1249,6 +1269,7 @@ async function spawnRemoteDashboard(
     ownershipId,
     hermesHome = '~/.hermes',
     guestOnboarding = false,
+    loginPath = '',
     assertInstallClear = async () => {}
   }
 ) {
@@ -1321,6 +1342,7 @@ async function spawnRemoteDashboard(
         logPath,
         hermesHome,
         guestOnboarding,
+        loginPath,
         ownershipId,
         reservationNonce: spawnNonce,
         lockMetadata: {
@@ -1625,6 +1647,7 @@ async function connect(deps) {
     ownershipId,
     hermesHome,
     guestOnboarding,
+    loginPath: await probeLoginShellPath(ssh),
     assertInstallClear: () => assertRemoteInstallUpdateClear(ssh, hermesHome)
   })
 
@@ -1767,6 +1790,7 @@ export {
   ownershipDirectory,
   pidIsOurDashboard,
   probeHermesVersion,
+  probeLoginShellPath,
   probeRemoteHermesHome,
   probeRemotePlatform,
   PROTOCOL_VERSION,

@@ -27,6 +27,7 @@ import {
   ownershipDirectory,
   pidIsOurDashboard,
   probeHermesVersion,
+  probeLoginShellPath,
   probeRemotePlatform,
   PROTOCOL_VERSION,
   readLockfile,
@@ -1436,6 +1437,40 @@ test('buildSpawnCommand includes --ssh-session-token-file when tokenFilePath is 
 
   assert.match(cmd, /--ssh-session-token-file/)
   assert.match(cmd, /\.hermes\/desktop-ssh\//)
+})
+
+test('buildSpawnCommand carries the login shell PATH into the backend env so shutil.which sees user installs (#120887)', () => {
+  const withPath = buildSpawnCommand('/x/hermes', 'work', {
+    logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE),
+    loginPath: '/home/u/.local/bin:/usr/bin:/bin'
+  })
+
+  assert.match(withPath, /PATH=/)
+  assert.ok(
+    withPath.includes('/home/u/.local/bin:/usr/bin:/bin'),
+    'the login shell PATH value must reach the backend env (nested through the update-mutex wrapper)'
+  )
+
+  const withoutPath = buildSpawnCommand('/x/hermes', 'work', {
+    logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE)
+  })
+
+  assert.doesNotMatch(withoutPath, /PATH=/)
+})
+
+test('probeLoginShellPath reads PATH from a login shell (the non-login ssh exec PATH misses user installs)', async () => {
+  const ssh = fakeSsh([[/bash -lc/, '/home/u/.local/bin:/usr/bin:/bin\n']])
+
+  assert.equal(await probeLoginShellPath(ssh), '/home/u/.local/bin:/usr/bin:/bin')
+  assert.ok(
+    ssh.calls.some(c => /bash -lc.*PATH/.test(c)),
+    'must probe PATH in a login shell (same PATH pitfall as locateHermes)'
+  )
+})
+
+test('probeLoginShellPath fails soft (empty string) instead of aborting the connection', async () => {
+  const ssh = { async exec() { throw new Error('channel closed') } }
+  assert.equal(await probeLoginShellPath(ssh), '')
 })
 
 test('spawnRemoteDashboard removes a token file when upload reporting fails', async () => {
