@@ -18,7 +18,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $botMeta, botMetaWriteAt, saveBotMeta } from './data'
+import { $botMeta, botMetaRevisionByKey, botMetaWriteAt, saveBotMeta } from './data'
 import { mergeServerMeta } from './profile-ops'
 import type { RosterRow } from './types'
 
@@ -70,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   $botMeta.set({})
   botMetaWriteAt.clear()
+  botMetaRevisionByKey.clear()
   storageMock.get.mockResolvedValue(null)
   storageMock.set.mockResolvedValue(undefined)
   storageMock.remove.mockResolvedValue(undefined)
@@ -140,6 +141,46 @@ describe('a lost-update guard on the ui_meta write (#120853)', () => {
     const configure = calls.find(call => call.method === 'profiles.configure')
 
     expect(configure?.params).not.toHaveProperty('ui_meta_expected_revisions')
+  })
+
+  it('does not self-reject a second save sharing the same (now-stale) roster row', async () => {
+    // bot-row.tsx's pin/hide/screen-auto-open menu items all close over the
+    // SAME `bot` prop with no roster refetch between clicks. This mock plays
+    // the real gateway's CAS guard (`_configure_ui_meta`): it bumps the
+    // namespace revision by 1 on an accepted write and rejects a mismatch.
+    // If the client kept sending the roster row's original revision for
+    // both saves, the second would collide with the first one's own advance.
+    let revision = 3
+
+    hostMock.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method !== 'profiles.configure') {
+        return {}
+      }
+
+      const expected = (params.ui_meta_expected_revisions as Record<string, number> | undefined)?.[
+        'hermes-bots'
+      ]
+
+      if (expected !== revision) {
+        return { applied: { ui_meta: false, ui_meta_revisions: { 'hermes-bots': revision } } }
+      }
+
+      revision += 1
+
+      return { applied: { ui_meta: true, ui_meta_revisions: { 'hermes-bots': revision } } }
+    })
+
+    const bot = { name: 'researcher', ui_meta_revisions: { 'hermes-bots': 3 } } as RosterRow
+
+    await expect(saveBotMeta(bot, { pinned: true })).resolves.toEqual({
+      serverOutcome: 'persisted',
+      serverPersisted: true
+    })
+
+    await expect(saveBotMeta(bot, { hidden: true })).resolves.toEqual({
+      serverOutcome: 'persisted',
+      serverPersisted: true
+    })
   })
 
   it('reports the write as failed, not persisted, when the gateway rejects a stale revision', async () => {

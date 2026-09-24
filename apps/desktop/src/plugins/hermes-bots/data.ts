@@ -306,12 +306,26 @@ interface BotMetaSaveResult {
 }
 
 /** `profiles.configure` reply. Older gateways answer without `applied` at all,
- *  which is what makes the field optional rather than the contract. */
+ *  which is what makes the field optional rather than the contract. `ui_meta_revisions`
+ *  rides both a successful write and a CAS conflict — it is the gateway's own
+ *  count either way, which is what makes it safe to fold back into
+ *  `botMetaRevisionByKey` even on a rejected save. */
 interface ProfilesConfigureResult {
-  applied?: { ui_meta?: boolean }
+  applied?: { ui_meta?: boolean; ui_meta_revisions?: Record<string, number> }
 }
 
 const BOT_META_NAMESPACE = 'hermes-bots'
+
+/** The revision this session last saw confirmed by the gateway for a bot's
+ *  CAS namespace, keyed the same as `$botMeta`/`botMetaWriteAt`. A roster-row
+ *  prop only refreshes on the 5s poll or an explicit invalidate, so two
+ *  `saveBotMeta` calls sharing one stale row (bot-row.tsx's pin/hide/
+ *  screen-auto-open toggles all close over the same prop) would otherwise
+ *  send the SAME expected revision twice — the gateway accepts the first and
+ *  CAS-rejects the second as if a different client raced it. Tracking the
+ *  confirmed revision here, independent of whatever roster snapshot the
+ *  caller happens to be holding, is what lets the second call succeed. */
+export const botMetaRevisionByKey = new Map<string, number>()
 
 export async function saveBotMeta(owner: RosterRow | string, patch: StoredBotMeta): Promise<BotMetaSaveResult> {
   const { bot, key, name, route } = botOwner(owner)
@@ -326,7 +340,10 @@ export async function saveBotMeta(owner: RosterRow | string, patch: StoredBotMet
   // every OTHER field in the merged object. A plain `owner` string (no live
   // roster row, e.g. a freshly created profile) has nothing to protect yet.
   const supportsCas = Object.prototype.hasOwnProperty.call(bot, 'ui_meta_revisions')
-  const expectedRevision = Math.max(0, Number(bot.ui_meta_revisions?.[BOT_META_NAMESPACE] || 0))
+  const rosterRevision = Math.max(0, Number(bot.ui_meta_revisions?.[BOT_META_NAMESPACE] || 0))
+  // The roster row can be behind a revision this session already confirmed
+  // (see `botMetaRevisionByKey` above) — take whichever is higher.
+  const expectedRevision = Math.max(rosterRevision, botMetaRevisionByKey.get(key) ?? 0)
 
   const next = {
     ...$botMeta.get(),
@@ -449,6 +466,17 @@ export async function saveBotMeta(owner: RosterRow | string, patch: StoredBotMet
         serverOutcome = 'persisted'
       } else if (result && typeof result === 'object' && result.applied && typeof result.applied === 'object') {
         serverOutcome = 'failed'
+      }
+
+      // The gateway echoes its own post-write count on both an accepted
+      // write and a CAS conflict (`_configure_ui_meta`) — either way it is
+      // the true current revision, so the NEXT save from this session (which
+      // may still be holding the same now-stale roster row) sends the right
+      // expected revision instead of repeating this one's.
+      const advanced = result?.applied?.ui_meta_revisions?.[BOT_META_NAMESPACE]
+
+      if (typeof advanced === 'number' && Number.isFinite(advanced)) {
+        botMetaRevisionByKey.set(key, advanced)
       }
     } catch {
       /* older/unavailable gateway — the local fallback remains saved */
