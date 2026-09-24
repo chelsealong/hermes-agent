@@ -3594,6 +3594,7 @@ export const en: Translations = {
       backgroundRunning: 'Background task running',
       draftSession: 'Draft — nothing sent yet',
       handoffOrigin: platform => `Handed off from ${platform}`,
+      compressionContinuation: 'Continues an earlier conversation that was auto-compressed',
       ownedByProfile: profile => `Profile: ${profile}`,
       renamed: 'Renamed',
       renameFailed: 'Rename failed',

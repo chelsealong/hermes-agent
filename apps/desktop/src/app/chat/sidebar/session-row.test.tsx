@@ -33,6 +33,7 @@ vi.mock('@/i18n', () => ({
           ageMin: 'm',
           ageNow: 'now',
           backgroundRunning: 'Running in background',
+          compressionContinuation: 'Continues a compressed conversation',
           finishedUnread: 'Finished',
           handoffOrigin: (platform: string) => `Started on ${platform}`,
           messageCount: (count: number) => `${count} messages`,
@@ -186,6 +187,44 @@ describe('SidebarSessionRow running arc', () => {
     const { container } = renderRow(makeSession({ title: 'Running' }))
 
     expect(arc(container)).toBeTruthy()
+  })
+})
+
+// #121148: a compression continuation (a listed row projected from an older,
+// sealed segment) must not render identically to a real `/branch` fork —
+// nothing in the row told a user which one they were looking at.
+describe('SidebarSessionRow compression continuation indicator', () => {
+  const icon = (container: HTMLElement) => container.querySelector('.codicon-history')
+
+  it('shows no continuation icon for an ordinary session', () => {
+    const { container } = renderRow(makeSession({ title: 'Plain' }))
+
+    expect(icon(container)).toBeNull()
+  })
+
+  it('shows no continuation icon for a real branch (branchStem set, no lineage root)', () => {
+    const { container } = render(
+      <SidebarSessionRow
+        branchStem="└─ "
+        isPinned={false}
+        isSelected={false}
+        onArchive={noop}
+        onDelete={noop}
+        onPin={noop}
+        onResume={noop}
+        onToggleUnread={noop}
+        session={makeSession({ title: 'Branch' })}
+        unread={false}
+      />
+    )
+
+    expect(icon(container)).toBeNull()
+  })
+
+  it('shows the continuation icon for a projected compression-continuation tip', () => {
+    const { container } = renderRow(makeSession({ _lineage_root_id: 'root-session-id', title: 'Continued' }))
+
+    expect(icon(container)).toBeTruthy()
   })
 })
 

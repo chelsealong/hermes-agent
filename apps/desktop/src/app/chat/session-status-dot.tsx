@@ -1,5 +1,6 @@
 import { useStore } from '@nanostores/react'
 
+import { Codicon } from '@/components/ui/codicon'
 import { type Translations, useI18n } from '@/i18n'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
@@ -139,12 +140,28 @@ export function SessionStatusDot({ storedSessionId, session, branchStem, classNa
 
   const variant = DOT_VARIANTS[dotState]
 
+  // A row surfaced with `_lineage_root_id` is a compression-continuation tip
+  // projected onto an older, sealed segment — NOT a `/branch` fork, even
+  // though both share `parent_session_id` shape server-side (#121148). The
+  // fork glyph (`branchStem`) is reserved for real branches; this is a
+  // distinct, non-nesting affordance so the two are never visually confused.
+  const isCompressionContinuation = Boolean(session?._lineage_root_id)
+
   return (
     <span className={cn('flex items-center gap-0.5', className)}>
       {branchStem ? (
         <span aria-hidden className="shrink-0 font-mono text-[0.625rem] leading-none text-(--ui-text-quaternary)">
           {branchStem}
         </span>
+      ) : null}
+      {isCompressionContinuation ? (
+        <Codicon
+          aria-hidden
+          className="shrink-0 text-(--ui-text-quaternary)"
+          name="history"
+          size="0.7em"
+          title={r.compressionContinuation}
+        />
       ) : null}
       {dotState === 'idle' ? (
         // Rendered even with no color to paint: an empty dot of the same size

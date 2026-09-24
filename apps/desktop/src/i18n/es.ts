@@ -4060,6 +4060,7 @@ export const es = defineLocale({
       backgroundRunning: 'Tarea en segundo plano en ejecución',
       draftSession: 'Borrador — aún no se ha enviado nada',
       handoffOrigin: platform => `Transferido desde ${platform}`,
+      compressionContinuation: 'Continúa una conversación anterior que se comprimió automáticamente',
       ownedByProfile: profile => `Perfil: ${profile}`,
       renamed: 'Renombrada',
       renameFailed: 'No se pudo renombrar',

@@ -4068,6 +4068,7 @@ export const de = defineLocale({
       backgroundRunning: 'Hintergrundaufgabe läuft',
       draftSession: 'Entwurf – noch nichts gesendet',
       handoffOrigin: platform => `Übergeben von ${platform}`,
+      compressionContinuation: 'Setzt ein früheres, automatisch komprimiertes Gespräch fort',
       ownedByProfile: profile => `Profil: ${profile}`,
       renamed: 'Umbenannt',
       renameFailed: 'Umbenennen fehlgeschlagen',
