@@ -311,9 +311,22 @@ interface ProfilesConfigureResult {
   applied?: { ui_meta?: boolean }
 }
 
+const BOT_META_NAMESPACE = 'hermes-bots'
+
 export async function saveBotMeta(owner: RosterRow | string, patch: StoredBotMeta): Promise<BotMetaSaveResult> {
   const { bot, key, name, route } = botOwner(owner)
   const prevMeta = $botMeta.get()[key] || {}
+
+  // CAS guard against a lost update (#120853): `bot` is a roster-row snapshot
+  // that carries the namespace revision as of when it was fetched. Sending it
+  // back as the expected revision means an unrelated field saved from a
+  // stale snapshot (a section change made before this bot's title was
+  // corrected elsewhere) is rejected by the gateway instead of silently
+  // clobbering a newer server write with this snapshot's stale value for
+  // every OTHER field in the merged object. A plain `owner` string (no live
+  // roster row, e.g. a freshly created profile) has nothing to protect yet.
+  const supportsCas = Object.prototype.hasOwnProperty.call(bot, 'ui_meta_revisions')
+  const expectedRevision = Math.max(0, Number(bot.ui_meta_revisions?.[BOT_META_NAMESPACE] || 0))
 
   const next = {
     ...$botMeta.get(),
@@ -353,19 +366,26 @@ export async function saveBotMeta(owner: RosterRow | string, patch: StoredBotMet
   try {
     const { image, pet, ...rest } = next[key] || {}
 
+    const configureParams: {
+      name: string
+      ui_meta: Record<string, unknown>
+      ui_meta_expected_revisions?: Record<string, number>
+    } = {
+      name,
+      ui_meta: {
+        [BOT_META_NAMESPACE]: rest
+      }
+    }
+
+    if (supportsCas) {
+      configureParams.ui_meta_expected_revisions = {
+        [BOT_META_NAMESPACE]: expectedRevision
+      }
+    }
+
     const request = route
-      ? requestForBot(bot, 'profiles.configure', {
-          name,
-          ui_meta: {
-            'hermes-bots': rest
-          }
-        })
-      : host.request('profiles.configure', {
-          name,
-          ui_meta: {
-            'hermes-bots': rest
-          }
-        })
+      ? requestForBot(bot, 'profiles.configure', configureParams)
+      : host.request('profiles.configure', configureParams)
 
     serverRequest = Promise.resolve(request) as Promise<ProfilesConfigureResult>
   } catch {

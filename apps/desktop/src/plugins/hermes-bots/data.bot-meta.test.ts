@@ -114,6 +114,53 @@ describe('a save reports what the SERVER did, not just what the screen shows', (
   })
 })
 
+describe('a lost-update guard on the ui_meta write (#120853)', () => {
+  // Desktop's own cached appearance object can be stale relative to the
+  // server (another client just corrected a field). Without sending the
+  // namespace revision it knew about, an unrelated save from that stale
+  // cache silently overwrites the newer server value with the cache's old
+  // copy of every OTHER field in the merged object.
+  it('sends the roster row’s known revision as the expected revision', async () => {
+    const calls = recordRequests(method => (method === 'profiles.configure' ? { applied: { ui_meta: true } } : {}))
+
+    const bot = { name: 'researcher', ui_meta_revisions: { 'hermes-bots': 3 } } as RosterRow
+
+    await saveBotMeta(bot, { sectionId: 'sec-1', sectionName: 'Clients' })
+
+    const configure = calls.find(call => call.method === 'profiles.configure')
+
+    expect(configure?.params.ui_meta_expected_revisions).toEqual({ 'hermes-bots': 3 })
+  })
+
+  it('sends no expected revision for a plain name with no live roster row to protect', async () => {
+    const calls = recordRequests(method => (method === 'profiles.configure' ? { applied: { ui_meta: true } } : {}))
+
+    await saveBotMeta('researcher', { sectionId: 'sec-1', sectionName: 'Clients' })
+
+    const configure = calls.find(call => call.method === 'profiles.configure')
+
+    expect(configure?.params).not.toHaveProperty('ui_meta_expected_revisions')
+  })
+
+  it('reports the write as failed, not persisted, when the gateway rejects a stale revision', async () => {
+    // What the real gateway CAS guard (tui_gateway/methods_profiles.py
+    // _configure_ui_meta) answers on a revision mismatch: applied.ui_meta
+    // stays false and the conflict is reported alongside it.
+    recordRequests(method =>
+      method === 'profiles.configure'
+        ? { applied: { ui_meta: false, ui_meta_conflicts: { 'hermes-bots': { actual: 5, expected: 3 } } } }
+        : {}
+    )
+
+    const bot = { name: 'researcher', ui_meta_revisions: { 'hermes-bots': 3 } } as RosterRow
+
+    await expect(saveBotMeta(bot, { sectionId: 'sec-1', sectionName: 'Clients' })).resolves.toEqual({
+      serverOutcome: 'failed',
+      serverPersisted: false
+    })
+  })
+})
+
 describe('a save for a bot on the pooled local backend', () => {
   it('is admitted while warm bot backends hold every background slot', async () => {
     // Main's pool admission, reduced: cap 3 with one slot reserved for
