@@ -166,6 +166,18 @@ def _primary_profile_routes_for_current_home() -> list:
         routes_raw = raw.get("profile_routes")
         if routes_raw is None and isinstance(raw.get("gateway"), dict):
             routes_raw = raw["gateway"].get("profile_routes")
+
+        # The raw read above deliberately skips the merged config so no primary platform config
+        # leaks into this process, but that also drops routes pinned in the managed scope
+        # (/etc/hermes/config.yaml) — the managed leaf still wins there (docs/design/managed-scope.md §4.1).
+        from hermes_cli import managed_scope
+        managed = managed_scope.load_managed_config()
+        managed_routes = managed.get("profile_routes")
+        if managed_routes is None and isinstance(managed.get("gateway"), dict):
+            managed_routes = managed["gateway"].get("profile_routes")
+        if isinstance(managed_routes, list):
+            routes_raw = managed_routes
+
         if not isinstance(routes_raw, list):
             return []
 

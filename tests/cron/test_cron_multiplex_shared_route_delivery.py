@@ -142,6 +142,42 @@ def test_guild_scoped_route_authorizes_cron_target_even_when_satellite_has_no_pl
         reset_hermes_home_override(token)
 
 
+def test_routes_pinned_in_managed_scope_reach_the_satellite_preflight(tmp_path, monkeypatch):
+    """#121212: routes pinned in the managed scope (``/etc/hermes/config.yaml``) never reach
+    ``_primary_profile_routes_for_current_home`` because it deliberately reads the raw primary
+    ``config.yaml`` and skips the merged config. The managed layer must still win at the leaf
+    (docs/design/managed-scope.md §4.1) — a satellite whose routing is centrally managed, with
+    no ``profile_routes`` in its own primary config.yaml, must still resolve the pinned route."""
+    from hermes_cli import managed_scope
+
+    root = tmp_path / "root"
+    sat_home = root / "profiles" / "sat"
+    sat_home.mkdir(parents=True)
+    # Primary's raw user file pins no routes at all — they are managed centrally.
+    (root / "config.yaml").write_text(
+        yaml.safe_dump({"gateway": {"multiplex_profiles": True}}), encoding="utf-8")
+    monkeypatch.setattr("hermes_constants.get_default_hermes_root", lambda: root)
+
+    managed_dir = tmp_path / "etc-hermes"
+    managed_dir.mkdir()
+    (managed_dir / "config.yaml").write_text(yaml.safe_dump({
+        "gateway": {"profile_routes": [
+            {"name": "sat-wa", "platform": "whatsapp", "chat_id": "G1@g.us", "profile": "sat"}]},
+    }), encoding="utf-8")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+    managed_scope.invalidate_managed_cache()
+
+    token = set_hermes_home_override(str(sat_home))
+    try:
+        routes = _primary_profile_routes_for_current_home()
+    finally:
+        reset_hermes_home_override(token)
+        managed_scope.invalidate_managed_cache()
+
+    assert [r.platform for r in routes] == ["whatsapp"]
+    assert routes[0].profile == "sat"
+
+
 def test_live_native_adapter_without_platform_block_is_not_treated_as_disabled():
     """#89302: a live native adapter handed in by the gateway is the authorization; an absent
     ``platforms.<p>`` block in the firing profile means "no config", not "disabled"."""
