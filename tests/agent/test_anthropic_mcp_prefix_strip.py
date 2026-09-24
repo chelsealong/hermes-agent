@@ -152,6 +152,82 @@ class TestAnthropicOAuthAliasRoundTrip:
 # Request side: registry name -> mcp__ wire name (no single-underscore leaks)
 # ---------------------------------------------------------------------------
 
+class TestAnthropicOAuthBridgeArgAliasReversal:
+    """GH-120858: the wire alias (session_search -> chat_history_lookup) is applied to
+    catalog prose too, so the model passes the WIRE name into tool_describe's ``names``
+    and tool_call's ``calls[].name`` STRING ARGUMENTS. Those arguments never pass through
+    ``_unprefix_oauth_tool_name`` (which only sees the ``mcp__``-prefixed function name),
+    so the bridge previously reported ``not_found`` / ``not deferrable`` for a real tool."""
+
+    def _get_transport(self):
+        from agent.transports.anthropic import AnthropicTransport
+        return AnthropicTransport()
+
+    def test_tool_describe_names_reverse_aliased_under_oauth(self):
+        import json
+        transport = self._get_transport()
+        block = _make_tool_use_block("tool_describe", input_data={"names": ["chat_history_lookup"]})
+        response = _make_response(block)
+
+        registry = _FakeRegistry({"session_search"})
+        with patch("tools.registry.registry", registry):
+            result = transport.normalize_response(response, strip_tool_prefix=True)
+
+        assert json.loads(result.tool_calls[0].arguments) == {"names": ["session_search"]}
+
+    def test_tool_call_name_reverse_aliased_under_oauth(self):
+        import json
+        transport = self._get_transport()
+        block = _make_tool_use_block(
+            "tool_call", input_data={"calls": [{"name": "chat_history_lookup", "arguments": {"query": "x"}}]})
+        response = _make_response(block)
+
+        registry = _FakeRegistry({"session_search"})
+        with patch("tools.registry.registry", registry):
+            result = transport.normalize_response(response, strip_tool_prefix=True)
+
+        assert json.loads(result.tool_calls[0].arguments) == {
+            "calls": [{"name": "session_search", "arguments": {"query": "x"}}]}
+
+    def test_bridge_args_untouched_when_not_oauth(self):
+        import json
+        transport = self._get_transport()
+        block = _make_tool_use_block("tool_describe", input_data={"names": ["chat_history_lookup"]})
+        response = _make_response(block)
+
+        with patch("tools.registry.registry", _FakeRegistry({"session_search"})):
+            result = transport.normalize_response(response, strip_tool_prefix=False)
+
+        assert json.loads(result.tool_calls[0].arguments) == {"names": ["chat_history_lookup"]}
+
+    def test_bridge_arg_alias_skipped_when_real_tool_owns_wire_name(self):
+        """A real tool actually registered under the wire name wins, mirroring the
+        function-name precedence in ``_unprefix_oauth_tool_name``."""
+        import json
+        transport = self._get_transport()
+        block = _make_tool_use_block("tool_describe", input_data={"names": ["chat_history_lookup"]})
+        response = _make_response(block)
+
+        registry = _FakeRegistry({"chat_history_lookup", "session_search"})
+        with patch("tools.registry.registry", registry):
+            result = transport.normalize_response(response, strip_tool_prefix=True)
+
+        assert json.loads(result.tool_calls[0].arguments) == {"names": ["chat_history_lookup"]}
+
+    def test_non_bridge_tool_arguments_untouched_under_oauth(self):
+        """Aliasing only applies to the two meta-tools; an ordinary tool's own arguments
+        (which may legitimately contain the word) are never rewritten."""
+        import json
+        transport = self._get_transport()
+        block = _make_tool_use_block("read_file", input_data={"path": "chat_history_lookup.py"})
+        response = _make_response(block)
+
+        with patch("tools.registry.registry", _FakeRegistry({"read_file"})):
+            result = transport.normalize_response(response, strip_tool_prefix=True)
+
+        assert json.loads(result.tool_calls[0].arguments) == {"path": "chat_history_lookup.py"}
+
+
 class TestAnthropicOAuthOutgoingPrefix:
     """build_anthropic_kwargs must emit ZERO single-underscore ``mcp_`` names on
     the OAuth wire — bare names and MCP server names both land on ``mcp__``."""

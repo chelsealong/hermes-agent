@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall
+from tools.tool_search_catalog import TOOL_CALL_NAME, TOOL_DESCRIBE_NAME
 
 _MCP_PREFIX = "mcp__"
 _THINKING_TYPES = ("thinking", "redacted_thinking")
@@ -21,6 +22,46 @@ def _unprefix_oauth_tool_name(name: str) -> str:
         if _tool_registry.get_entry(candidate):
             return candidate
     return _OAUTH_TOOL_NAME_REVERSE_ALIASES.get(bare, name)
+
+
+def _reverse_oauth_wire_alias(name: str) -> str:
+    """Resolve one OAuth wire alias (``chat_history_lookup`` -> ``session_search``),
+    same registry-first precedence as ``_unprefix_oauth_tool_name``."""
+    from agent.anthropic_adapter import _OAUTH_TOOL_NAME_REVERSE_ALIASES
+    from tools.registry import registry as _tool_registry
+    if _tool_registry.get_entry(name):
+        return name
+    return _OAUTH_TOOL_NAME_REVERSE_ALIASES.get(name, name)
+
+
+def _reverse_oauth_bridge_alias_args(bridge_name: str, args: Any) -> Any:
+    """``tool_describe``/``tool_call`` take target tool names as STRING ARGUMENTS, not as
+    the function name, so the ``mcp__`` unprefixing above never sees them. Under OAuth
+    aliasing the model reads the wire name (e.g. ``chat_history_lookup``) from the deferred
+    catalog and passes it straight through as ``names``/``calls[].name``, and the underlying
+    tool (``session_search``) reports ``not_found`` (GH-120858). Reverse-map those names here."""
+    if not isinstance(args, dict):
+        return args
+    if bridge_name == TOOL_DESCRIBE_NAME:
+        names = args.get("names")
+        if not isinstance(names, list):
+            return args
+        args = dict(args)
+        args["names"] = [_reverse_oauth_wire_alias(n) if isinstance(n, str) else n for n in names]
+        return args
+    if bridge_name == TOOL_CALL_NAME:
+        args = dict(args)
+        if isinstance(args.get("name"), str):
+            args["name"] = _reverse_oauth_wire_alias(args["name"])
+        calls = args.get("calls")
+        if isinstance(calls, list):
+            args["calls"] = [
+                {**c, "name": _reverse_oauth_wire_alias(c["name"])}
+                if isinstance(c, dict) and isinstance(c.get("name"), str) else c
+                for c in calls
+            ]
+        return args
+    return args
 
 
 # build_kwargs params forwarded to build_anthropic_kwargs, with the defaults applied when absent.
@@ -89,7 +130,10 @@ class AnthropicTransport(ProviderTransport):
                 name = block.name
                 if strip_tool_prefix and name.startswith(_MCP_PREFIX):
                     name = _unprefix_oauth_tool_name(name)
-                tool_calls.append(ToolCall(id=block.id, name=name, arguments=json.dumps(block.input)))
+                block_input = block.input
+                if strip_tool_prefix and name in (TOOL_DESCRIBE_NAME, TOOL_CALL_NAME):
+                    block_input = _reverse_oauth_bridge_alias_args(name, block_input)
+                tool_calls.append(ToolCall(id=block.id, name=name, arguments=json.dumps(block_input)))
         provider_data = {"reasoning_details": reasoning_details} if reasoning_details else {}
         stop_details = _to_plain_data(getattr(response, "stop_details", None))
         if stop_details is not None:
