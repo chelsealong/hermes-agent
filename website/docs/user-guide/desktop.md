@@ -734,6 +734,12 @@ macOS/Windows signing and notarization run automatically when the relevant crede
 
 The opt-in HUD modifier-tap helper is built with the Electron bundle and packaged outside ASAR. macOS uses the existing Xcode command-line tools prerequisite. Windows builds use the C# compiler included with the operating system's .NET Framework; no Clang or developer SDK is required. Windows packaging fails rather than silently omitting the helper. Linux builds need a C compiler and X11/XInput development headers (`libx11-dev` and `libxi-dev` on Debian/Ubuntu); without those optional Linux prerequisites, packaging continues without modifier-tap support. Build on the target OS; Linux also requires the target architecture. Installed users do not need a developer toolchain. Settings distinguishes a missing helper from startup failure and an unsupported desktop session; the X11/Wayland warning is not shown for a missing or failed Windows helper.
 
+### Antivirus flags a locally built Windows package
+
+A `npm run pack` / `dist:win` build done without `WIN_CSC_*` signing credentials in the environment is unsigned, so Windows AV engines have no publisher reputation to weigh against a heuristic match. The packaged main-process bundle legitimately does things a generic password-stealer heuristic keys on — encrypting stored secrets (`safeStorage`), handling browser cookies/sessions, and opening a CDP debug port — so an unsigned local build can trip a detection like `HEUR:Trojan-PSW.*` (seen with Kaspersky) even though the file matches the repo at a clean, unmodified commit.
+
+If this happens: verify the flagged file's SHA-256 against your own build output — a match confirms nothing else touched it, though it doesn't clear the heuristic — then add an exclusion for `%LOCALAPPDATA%\hermes\hermes-agent\apps\desktop` and submit the file to the vendor's false-positive queue (e.g. Kaspersky OpenTip's "submit for reanalysis"). Official release builds carry Hermes' code-signing identity and are far less likely to trip a heuristic than a local unsigned build.
+
 ### macOS permissions and local rebuilds (TCC)
 
 **Silence every folder prompt with one switch.** macOS prompts per-category
