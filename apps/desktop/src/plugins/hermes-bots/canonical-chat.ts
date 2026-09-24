@@ -48,6 +48,24 @@ export const PROFILE_SESSION_LIST_LIMIT = 200
  *  recognize canonical-titled tabs without restating the literal. */
 export const CANONICAL_CHAT_TITLE = 'Bot Chat'
 
+/** True when a tile is titled the canonical chat but names neither id this
+ *  open considers current for the bot — a tile Local Storage kept from an
+ *  identity the bot no longer answers to. Shared by the roster click's
+ *  stale-tile probe (`focusExistingBotTab`) and the reconciliation below,
+ *  which covers the opens that skip that click (roster-activity refresh,
+ *  `session.reclaimed`) and otherwise leave the stale tile open beside the
+ *  new one after every compression (hermes-agent#120810). */
+export function isStaleCanonicalTile(
+  tile: { storedSessionId: string; workspaceTabTitle?: string },
+  canonicalIds: readonly string[]
+): boolean {
+  return (
+    typeof tile.workspaceTabTitle === 'string' &&
+    tile.workspaceTabTitle === CANONICAL_CHAT_TITLE &&
+    !canonicalIds.includes(String(tile.storedSessionId))
+  )
+}
+
 /** A `session.list` row as the registry lookup reads it. CanonicalSession
  *  models the roster's `canonical_session` field, which carries no
  *  `message_count` — the listing row does. `readonly` because the count is
@@ -113,6 +131,25 @@ async function openStoredBotChat(
   // previous time this bot was open — which left the pane showing old messages
   // until an app restart (hermes-agent#93604). A resume is cheap and
   // idempotent, so on this explicit user navigation we always request one.
+  //
+  // `intent: 'in-place'` below only fronts a tile it recognizes as THIS
+  // conversation, and a hidden Bot Chat's lineage never reaches the sidebar
+  // metadata that recognition reads (hermes-agent#120810) — so a tile left
+  // over from before a compression rotation is invisible to it and stays
+  // open beside the new one. Discard any such tile first, the same way the
+  // roster click's own stale-tile probe does (`focusExistingBotTab`), so an
+  // open that skipped that click (roster-activity refresh, session.reclaimed)
+  // still lands as one tab.
+  if (typeof host.focusOpenWorkspaceSession === 'function') {
+    const canonicalIds = [summary?.id, summary?.resolved_id, storedId].filter(Boolean).map(String)
+
+    try {
+      host.focusOpenWorkspaceSession(ownerKey, tile => isStaleCanonicalTile(tile, canonicalIds), canonicalIds)
+    } catch {
+      /* best-effort reconciliation; host.openSession below still opens the right tip */
+    }
+  }
+
   await host.openSession(storedId, {
     ...(route
       ? {
