@@ -1140,3 +1140,54 @@ class TestTeamsRequireMention:
         adapter = self._make_adapter(**extra)
         assert adapter._require_mention is expected
         assert adapter._extra.get("require_mention") == yaml_value  # extras stay readable on the instance
+
+
+# ---------------------------------------------------------------------------
+# Tests: processing_ack (channel-thread processing feedback, #120892)
+# ---------------------------------------------------------------------------
+
+class TestTeamsProcessingAck:
+    """Teams channel threads cannot render the typing indicator (Bot Framework/Teams platform
+    limitation), so ``on_processing_start`` can post a short ack message instead, gated by
+    ``extra.processing_ack`` + ``extra.processing_ack_scope`` (default ``"channel"``)."""
+
+    def _make_adapter(self, **extra):
+        adapter = TeamsAdapter(_make_config(
+            client_id="id", client_secret="secret", tenant_id="tenant", **extra))
+        adapter.send = AsyncMock(return_value=None)
+        return adapter
+
+    @staticmethod
+    def _event(chat_type, *, chat_id="19:conv@thread.v2", message_id="act-1"):
+        from gateway.platforms.event import MessageEvent, MessageType
+        return MessageEvent(
+            text="hi", message_type=MessageType.TEXT,
+            source=SimpleNamespace(chat_id=chat_id, chat_type=chat_type), message_id=message_id)
+
+    @pytest.mark.anyio
+    async def test_disabled_by_default(self):
+        adapter = self._make_adapter()
+        await adapter.on_processing_start(self._event("channel"))
+        adapter.send.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_default_scope_fires_only_in_channel(self):
+        adapter = self._make_adapter(processing_ack=True)
+        await adapter.on_processing_start(self._event("dm"))
+        adapter.send.assert_not_awaited()
+        await adapter.on_processing_start(self._event("channel"))
+        adapter.send.assert_awaited_once_with(
+            "19:conv@thread.v2", _teams_mod._DEFAULT_PROCESSING_ACK_TEXT, reply_to="act-1")
+
+    @pytest.mark.anyio
+    async def test_custom_text(self):
+        adapter = self._make_adapter(processing_ack="On it, one moment...")
+        await adapter.on_processing_start(self._event("channel"))
+        adapter.send.assert_awaited_once_with(
+            "19:conv@thread.v2", "On it, one moment...", reply_to="act-1")
+
+    @pytest.mark.anyio
+    async def test_scope_all_also_fires_in_dm(self):
+        adapter = self._make_adapter(processing_ack=True, processing_ack_scope="all")
+        await adapter.on_processing_start(self._event("dm"))
+        adapter.send.assert_awaited_once()

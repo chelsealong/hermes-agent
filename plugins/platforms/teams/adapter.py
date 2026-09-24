@@ -310,6 +310,7 @@ def check_teams_requirements() -> bool:
 
 
 _CHAT_TYPES = {"personal": "dm", "groupChat": "group", "channel": "channel"}
+_DEFAULT_PROCESSING_ACK_TEXT = "⏳ Working on it…"
 # DOCUMENT wins over PHOTO/VIDEO/AUDIO for mixed attachments: document-context
 # injection gates strictly on MessageType.DOCUMENT (same precedence as Email/Signal).
 _MEDIA_KIND_PRECEDENCE = (
@@ -721,6 +722,27 @@ class TeamsAdapter(BasePlatformAdapter):
         if self._app:
             with suppress(Exception):
                 await self._app.send(chat_id, TypingActivityInput())
+
+    def _processing_ack_text(self, chat_type: Optional[str]) -> Optional[str]:
+        """Ack text for ``on_processing_start``, or ``None`` when disabled or out of scope for
+        ``chat_type``. Teams cannot render a typing indicator in channel threads (Bot Framework/
+        Teams platform limitation, MicrosoftDocs/msteams-docs#1451), so a posted message is the
+        only processing feedback available there. Off by default so 1:1/group chats — where
+        typing already works — don't get a second signal. ``extra.processing_ack``: ``true`` or
+        a custom string enables it; ``extra.processing_ack_scope`` (default ``"channel"``) narrows
+        where it fires."""
+        raw = self._extra.get("processing_ack")
+        if not raw:
+            return None
+        scope = str(self._extra.get("processing_ack_scope") or "channel").strip().lower()
+        if scope == "channel" and chat_type != "channel":
+            return None
+        return raw if isinstance(raw, str) else _DEFAULT_PROCESSING_ACK_TEXT
+
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        text = self._processing_ack_text(getattr(event.source, "chat_type", None))
+        if text:
+            await self.send(event.source.chat_id, text, reply_to=event.message_id)
 
     async def _send_media_attachment(
         self, chat_id: str, source: str, default_mime: str, caption: Optional[str] = None, media_label: str = "media"

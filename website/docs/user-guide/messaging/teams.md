@@ -172,6 +172,9 @@ Open the printed link in your browser — it opens directly in the Teams client.
 | `TEAMS_PORT` | Webhook port (default: `3978`) |
 | `TEAMS_REQUIRE_MENTION` | Set `true` to answer only @mentions / replies to the bot in channels and group chats (default: `false`; for apps with RSC message-read consent) |
 
+`processing_ack` / `processing_ack_scope` are config.yaml-only (see below) — Teams channel
+threads can't show a typing indicator, so this posts a short acknowledgement message instead.
+
 ### config.yaml
 
 Alternatively, configure via `~/.hermes/config.yaml`:
@@ -185,6 +188,8 @@ platforms:
       client_secret: "your-secret"
       tenant_id: "your-tenant-id"
       port: 3978
+      processing_ack: true              # or a custom string; unset/false = off
+      processing_ack_scope: channel      # "channel" (default) or "all" (also 1:1/group)
     require_mention: false   # true once the app has RSC message-read consent
 ```
 
