@@ -3659,9 +3659,24 @@ def named_profile_served_by_running_multiplexer(profile_name: str | None = None)
         return False
 
     # The host record answers first: it names the live host process whatever home launched it, so a
-    # multiplexer started by a named profile is visible here too.
-    if host_multiplexer_serving(suffix) is not None:
-        return True
+    # multiplexer started by a named profile is visible here too. But a host record whose home IS
+    # this profile's own home is that profile's own (standalone) process serving itself, not a
+    # satellite relationship to some other multiplexer -- the same distinction
+    # _served_by_another_host_gateway() draws for its "owner" case. Without it, a running standalone
+    # gateway reported itself as "served by a multiplexer" and the restart guard refused to manage it
+    # (#120871).
+    owner = host_multiplexer_serving(suffix)
+    if owner is not None:
+        try:
+            from gateway.status import _same_hermes_home
+            from hermes_cli.profiles import get_profile_dir
+            if not _same_hermes_home(owner.home, get_profile_dir(suffix)):
+                return True
+        except Exception:
+            logger.debug("Multiplexer self-home comparison failed", exc_info=True)
+            return True
+        # else: the host record is this profile's own home -- fall through to the config-derived
+        # checks below, which correctly answer False for a standalone profile serving only itself.
 
     try:
         from hermes_constants import get_default_hermes_root

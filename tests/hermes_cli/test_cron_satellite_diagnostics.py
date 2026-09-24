@@ -107,6 +107,21 @@ def test_host_record_rung_names_the_roster_and_a_runnable_restart(served_root, c
     assert "\n  If heartbeat never appears, restart: hermes gateway restart" not in output
 
 
+def test_host_record_naming_only_this_profile_hints_its_own_restart(served_root, capsys, monkeypatch):
+    """#120871: a host record that names ONLY this profile is its own standalone gateway, not a
+    multiplexer -- the restart hint must name this profile, never a nonexistent `default` gateway."""
+    from gateway import host_rendezvous as hr
+    from hermes_cli import cron
+
+    hr.publish_record(hr.ROLE_GATEWAY, profiles=("probe",))
+
+    cron.cron_status()
+    output = capsys.readouterr().out
+
+    assert "hermes --profile probe gateway restart" in output
+    assert "hermes --profile default gateway restart" not in output
+
+
 @pytest.mark.parametrize("heartbeat", ["missing", "fresh", "stale"])
 def test_satellite_list_and_create_require_own_heartbeat(served_root, capsys, monkeypatch, heartbeat):
     from argparse import Namespace
