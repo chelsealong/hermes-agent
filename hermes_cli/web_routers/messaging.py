@@ -238,6 +238,11 @@ def _messaging_platform_payload(
     ]
 
     enabled, configured, home_channel = _platform_enablement(platform_id, entry, env_on_disk, scoped)
+    if runtime_platform.get("mirrored_from") == "default":
+        # api_server/webhook have no config.yaml `enabled` flag of their own and the profile's
+        # local .env check above can't see this — the shared multiplexer's default listener is
+        # already live-serving this profile at /p/<profile>/..., which is the actual truth.
+        enabled, configured = True, True
 
     state = runtime_platform.get("state")
     if not enabled:

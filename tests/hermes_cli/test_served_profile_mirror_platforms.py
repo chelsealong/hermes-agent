@@ -115,3 +115,30 @@ def test_messaging_card_keeps_a_live_own_gateway_record_over_the_multiplexer(ser
     [payload] = messaging._platform_payloads(alpha, [entry])
     assert payload["gateway_running"] is True
     assert payload["state"] == "retrying", payload
+
+
+def test_desktop_api_server_card_reads_enabled_for_a_multiplex_served_secondary(served_root):
+    """#121125: a secondary profile's own config.yaml never carries `platforms.api_server.enabled`
+    (api_server/webhook are env-var-driven, and enabling one on a secondary under multiplex is
+    rejected outright — see `_multiplex_port_binding_conflict`), so the real (non-monkeypatched)
+    `_platform_enablement` scoped branch always reported api_server as disabled for a served
+    secondary even though the shared listener already answers `/p/<profile>/v1` for it.
+    """
+    from hermes_cli.web_routers import messaging
+    entry = {
+        "id": "api_server", "name": "API server", "description": "", "docs_url": "",
+        "env_vars": ("API_SERVER_ENABLED", "API_SERVER_KEY", "API_SERVER_PORT", "API_SERVER_HOST",
+                     "API_SERVER_MODEL_NAME"),
+        "required_env": (),
+    }
+    alpha = served_root / "profiles" / "alpha"
+    # alpha needs an identity marker to resolve as a real profile, but no `platforms.api_server`
+    # section — enabling api_server on a secondary under multiplex is rejected outright, so a real
+    # served secondary's own config.yaml never carries that flag.
+    (alpha / "config.yaml").write_text("gateway: {}\n", encoding="utf-8")
+    with messaging._profile_scope("alpha") as scoped_dir:
+        [payload] = messaging._platform_payloads(scoped_dir, [entry])
+    assert payload["enabled"] is True, payload
+    assert payload["configured"] is True, payload
+    assert payload["state"] == "connected", payload
+    assert payload["ingress_url"] == "http://127.0.0.1:45719/p/alpha/v1"
