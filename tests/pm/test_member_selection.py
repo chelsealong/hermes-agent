@@ -37,3 +37,29 @@ def test_manifest_only_member_is_named_after_its_plugin_dir_and_stays_unique(tmp
     assert all(name.startswith("hermes-plugin-my-plugin-") for name in names), names
     assert names[0] != names[1]
     assert members[0].name != members[1].name
+
+
+def test_pyproject_member_is_renamed_from_its_declared_name_and_stays_unique(tmp_path):
+    """A catalog plugin with its own pyproject.toml (e.g. Hindsight) ships a fixed
+    ``[project].name``. Enabled from two homes/profiles, uv would see two workspace
+    members both named the same and refuse the workspace — rename every pyproject
+    member by its key too, exactly like the manifest-only members already are."""
+    import tomllib
+    from pm.workspace import _workspace_member
+
+    members = []
+    for home in ("home-a", "home-b"):
+        plugin = tmp_path / home / "plugins" / "hindsight"
+        plugin.mkdir(parents=True)
+        (plugin / "pyproject.toml").write_text(
+            '[project]\nname = "hermes-plugin-hindsight"\nversion = "1.0.1"\n'
+            'dependencies = ["hindsight-client>=0.10.1,<1"]\n',
+            encoding="utf-8",
+        )
+        root = tmp_path / f"gen-{home}"
+        root.mkdir()
+        members.append(_workspace_member(plugin, root, identity=plugin))
+    names = [tomllib.loads((m / "pyproject.toml").read_text(encoding="utf-8"))["project"]["name"] for m in members]
+    assert all(name.startswith("hermes-plugin-hindsight-") for name in names), names
+    assert names[0] != names[1]
+    assert members[0].name != members[1].name

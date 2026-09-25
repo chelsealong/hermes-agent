@@ -230,8 +230,11 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
         shutil.copytree(plugin_dir, member, symlinks=True,
                         ignore=_member_ignored)
         document = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
-        changed = declaration.install_requirements != declaration.requirements
-        if changed:
+        # uv refuses two workspace members with one name, and the same plugin
+        # enabled from two homes/profiles keeps its declared name for both:
+        # name every pyproject member by its key, as plugin-deps members already are.
+        document["project"]["name"] = f"hermes-plugin-{key}"
+        if declaration.install_requirements != declaration.requirements:
             document["project"]["dependencies"] = list(declaration.install_requirements)
         for sources in document.get("tool", {}).get("uv", {}).get("sources", {}).values():
             for spec in sources if isinstance(sources, list) else [sources]:
@@ -244,11 +247,9 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
                 if resolved.is_relative_to(plugin_dir.resolve()):
                     continue  # The referenced tree was copied with this member.
                 spec["path"] = (identity / relative).resolve().as_posix()
-                changed = True
-        if changed:
-            import tomli_w
+        import tomli_w
 
-            (member / "pyproject.toml").write_text(tomli_w.dumps(document), encoding="utf-8")
+        (member / "pyproject.toml").write_text(tomli_w.dumps(document), encoding="utf-8")
         return member
     specs = declaration.install_requirements
     member = root / "plugin-deps" / key
