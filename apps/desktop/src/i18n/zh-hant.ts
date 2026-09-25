@@ -3422,7 +3422,10 @@ export const zhHant = defineLocale({
     noAuthenticatedProviders: '沒有已驗證的提供方。',
     addProvider: '新增提供方…',
     addCustomModel: '新增自訂模型',
-    removeCustomModel: '移除自訂模型'
+    removeCustomModel: '移除自訂模型',
+    resetToDefaults: '重設為預設值',
+    resetConfirmTitle: '要重設模型顯示設定嗎?',
+    resetConfirmDescription: '每個提供方都會恢復為預設模型。此操作不會影響憑證、提供方、工作階段或自訂模型。'
   },
 
   shell: {

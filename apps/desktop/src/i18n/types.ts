@@ -3736,6 +3736,9 @@ export interface Translations {
     addProvider: string
     addCustomModel: string
     removeCustomModel: string
+    resetToDefaults: string
+    resetConfirmTitle: string
+    resetConfirmDescription: string
   }
 
   shell: {

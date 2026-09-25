@@ -4928,7 +4928,11 @@ export const frOverrides = {
     noAuthenticatedProviders: 'Aucun fournisseur authentifié.',
     addProvider: 'Ajouter un fournisseur…',
     addCustomModel: 'Ajouter un modèle personnalisé',
-    removeCustomModel: 'Retirer le modèle personnalisé'
+    removeCustomModel: 'Retirer le modèle personnalisé',
+    resetToDefaults: 'Réinitialiser les valeurs par défaut',
+    resetConfirmTitle: 'Réinitialiser la visibilité des modèles ?',
+    resetConfirmDescription:
+      'Chaque fournisseur revient à ses modèles par défaut. Les identifiants, fournisseurs, sessions et modèles personnalisés ne sont pas affectés.'
   },
   shell: {
     windowControls: 'Contrôles de fenêtre',

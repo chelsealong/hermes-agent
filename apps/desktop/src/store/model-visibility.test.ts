@@ -1,14 +1,18 @@
 import type { ModelOptionProvider } from '@hermes/shared'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  $knownModels,
+  $visibleModels,
   collapseModelFamilies,
   defaultVisibleKeys,
   effectiveVisibleKeys,
   emptyProviderSentinelKey,
   isProviderSentinel,
   modelVisibilityKey,
+  resetModelVisibility,
   resolveVisibleKeys,
+  seedKnownModels,
   setProviderVisibility,
   toggleModelVisibility
 } from './model-visibility'
@@ -332,5 +336,49 @@ describe('setProviderVisibility', () => {
     expect(next.has(modelVisibilityKey('nous', 'model'))).toBe(true)
     // The -fast sibling is represented by its base family, not its own key.
     expect(next.has(modelVisibilityKey('nous', 'model-fast'))).toBe(false)
+  })
+})
+
+describe('resetModelVisibility', () => {
+  const providers = [provider('openai', ['gpt-a', 'gpt-b', 'gpt-c'])]
+
+  afterEach(() => {
+    resetModelVisibility()
+  })
+
+  it('clears a stale known-models snapshot that grandfathered a new model as hidden (#122053)', () => {
+    // The user curated their allowlist before gpt-c existed.
+    $visibleModels.set(new Set([modelVisibilityKey('openai', 'gpt-a')]))
+
+    // seedKnownModels runs post-upgrade against a catalog that already
+    // contains gpt-c, so it is grandfathered as "already judged" and stays
+    // hidden through every later refresh.
+    seedKnownModels(providers)
+    expect(
+      effectiveVisibleKeys($visibleModels.get(), providers, $knownModels.get()).has(
+        modelVisibilityKey('openai', 'gpt-c')
+      )
+    ).toBe(false)
+
+    resetModelVisibility()
+
+    expect($visibleModels.get()).toBeNull()
+    expect($knownModels.get()).toBeNull()
+    // Falling back to curated defaults brings gpt-c back.
+    expect(
+      effectiveVisibleKeys($visibleModels.get(), providers, $knownModels.get()).has(
+        modelVisibilityKey('openai', 'gpt-c')
+      )
+    ).toBe(true)
+  })
+
+  it('clears the persisted storage entries, not just the in-memory atoms', () => {
+    $visibleModels.set(new Set([modelVisibilityKey('openai', 'gpt-a')]))
+    seedKnownModels(providers)
+
+    resetModelVisibility()
+
+    expect(window.localStorage.getItem('hermes.desktop.visible-models')).toBeNull()
+    expect(window.localStorage.getItem('hermes.desktop.known-models')).toBeNull()
   })
 })

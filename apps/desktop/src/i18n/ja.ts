@@ -3224,7 +3224,11 @@ export const ja = defineLocale({
     noAuthenticatedProviders: '認証済みプロバイダーがありません。',
     addProvider: 'プロバイダーを追加…',
     addCustomModel: 'カスタムモデルを追加',
-    removeCustomModel: 'カスタムモデルを削除'
+    removeCustomModel: 'カスタムモデルを削除',
+    resetToDefaults: '既定にリセット',
+    resetConfirmTitle: 'モデルの表示設定をリセットしますか?',
+    resetConfirmDescription:
+      '各プロバイダーが既定のモデルに戻ります。認証情報、プロバイダー、セッション、カスタムモデルには影響しません。'
   },
 
   shell: {

@@ -16,6 +16,7 @@ import { Plus, Search, X } from '@/lib/icons'
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { foldIncludes, normalize } from '@/lib/text'
+import { confirm } from '@/store/confirm'
 import {
   $customModels,
   addCustomModel,
@@ -29,6 +30,7 @@ import {
   collapseModelFamilies,
   effectiveVisibleKeys,
   modelVisibilityKey,
+  resetModelVisibility,
   seedKnownModels,
   setProviderVisibility,
   setVisibleModels,
@@ -102,6 +104,21 @@ export function ModelVisibilityDialog({
   )
 
   const customSlug = hasMatches ? null : customModelCandidate(search, providers)
+
+  const handleReset = async () => {
+    const ok = await confirm({
+      confirmLabel: copy.resetToDefaults,
+      description: copy.resetConfirmDescription,
+      destructive: true,
+      title: copy.resetConfirmTitle
+    })
+
+    if (!ok) {
+      return
+    }
+
+    resetModelVisibility()
+  }
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -234,7 +251,7 @@ export function ModelVisibilityDialog({
           )}
         </div>
 
-        <div className="px-3 py-2">
+        <div className="flex items-center justify-between px-3 py-2">
           <Button
             className="-ml-2 text-(--ui-text-tertiary)"
             onClick={() => {
@@ -246,6 +263,9 @@ export function ModelVisibilityDialog({
             variant="text"
           >
             {copy.addProvider}
+          </Button>
+          <Button className="text-(--ui-text-tertiary)" onClick={handleReset} size="xs" type="button" variant="text">
+            {copy.resetToDefaults}
           </Button>
         </div>
       </DialogContent>

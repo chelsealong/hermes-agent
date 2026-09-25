@@ -148,6 +148,19 @@ export function setModelVisibilityOpen(open: boolean): void {
   $modelVisibilityOpen.set(open)
 }
 
+/** Recovery action: clear the persisted visible/known sets so every provider
+ *  falls back to its curated defaults. Fixes a `known-models` snapshot seeded
+ *  from a stale `visible-models` allowlist (a model that arrived between the
+ *  user's last curation and the seed is grandfathered as "already judged" and
+ *  stays hidden forever). Touches only these two keys — credentials,
+ *  providers, sessions, and custom model definitions are untouched. */
+export function resetModelVisibility(): void {
+  $visibleModels.set(null)
+  persistString(STORAGE_KEY, null)
+  $knownModels.set(null)
+  persistString(KNOWN_STORAGE_KEY, null)
+}
+
 /** The default-visible key set: the curated top-N per provider. Used both as
  *  the dropdown fallback and to seed the Edit Models dialog. */
 export function defaultVisibleKeys(providers: readonly ModelOptionProvider[]): Set<string> {

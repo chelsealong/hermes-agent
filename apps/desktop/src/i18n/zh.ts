@@ -4195,7 +4195,10 @@ export const zh = defineLocale({
     noAuthenticatedProviders: '没有已认证的提供方。',
     addProvider: '添加提供方…',
     addCustomModel: '添加自定义模型',
-    removeCustomModel: '移除自定义模型'
+    removeCustomModel: '移除自定义模型',
+    resetToDefaults: '重置为默认值',
+    resetConfirmTitle: '要重置模型可见性吗?',
+    resetConfirmDescription: '每个提供方都会恢复为默认模型。此操作不会影响凭据、提供方、会话或自定义模型。'
   },
 
   shell: {

@@ -4908,7 +4908,11 @@ export const esOverrides = {
     noAuthenticatedProviders: 'No hay proveedores autenticados.',
     addProvider: 'Añadir proveedor…',
     addCustomModel: 'Añadir modelo personalizado',
-    removeCustomModel: 'Quitar modelo personalizado'
+    removeCustomModel: 'Quitar modelo personalizado',
+    resetToDefaults: 'Restablecer valores predeterminados',
+    resetConfirmTitle: '¿Restablecer la visibilidad de los modelos?',
+    resetConfirmDescription:
+      'Cada proveedor vuelve a sus modelos predeterminados. No afecta a las credenciales, los proveedores, las sesiones ni los modelos personalizados.'
   },
   shell: {
     windowControls: 'Controles de ventana',

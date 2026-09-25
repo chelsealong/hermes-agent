@@ -4461,7 +4461,11 @@ export const en: Translations = {
     noAuthenticatedProviders: 'No authenticated providers.',
     addProvider: 'Add provider…',
     addCustomModel: 'Add custom model',
-    removeCustomModel: 'Remove custom model'
+    removeCustomModel: 'Remove custom model',
+    resetToDefaults: 'Reset to defaults',
+    resetConfirmTitle: 'Reset model visibility?',
+    resetConfirmDescription:
+      'Every provider returns to its default models. Credentials, providers, sessions, and custom models are not affected.'
   },
 
   shell: {
