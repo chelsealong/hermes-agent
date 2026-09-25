@@ -42,11 +42,43 @@ def _remove_plugin_core(target: Path) -> None:
     _pc().rmtree_readonly(staging)
 
 
+def _forget_stale_plugin_record(name: str, console) -> bool:
+    """A plugin whose directory is already gone (e.g. manual ``rm -rf``) but whose
+    install-metadata record and/or config.yaml selection still name it: clear that bookkeeping
+    so a later ``hermes plugins install <name>`` starts clean instead of tripping the "active
+    plugin" consent gate against a target it can never publish over. Returns False when nothing
+    names *name* (the caller reports the ordinary "no plugin named ..." error)."""
+    enabled, disabled = _pc()._get_enabled_set(), _pc()._get_disabled_set()
+    has_metadata = name in _pc()._read_install_metadata()
+    if not has_metadata and name not in enabled and name not in disabled:
+        return False
+    if has_metadata:
+        _pc()._update_install_record(name, lambda _current: None)
+    result = _pc()._forget_plugin_config({name})
+    console.print()
+    console.print(
+        f"[yellow]⚠[/yellow] Plugin [bold]{name}[/bold]'s directory was already gone; "
+        "cleared its stale install record."
+    )
+    if result.get("cleared_memory_provider"):
+        console.print("[yellow]memory.provider pointed at this plugin and was reset; "
+                      "run `hermes memory setup` to pick another.[/yellow]")
+    console.print()
+    return True
+
+
 def cmd_remove(name: str) -> None:
     """Remove an installed plugin by name."""
     console = _pc()._console()
     plugins_dir = _pc()._plugins_dir()
-    target = _pc()._require_installed_plugin(name, plugins_dir, console)
+    try:
+        target = _pc()._sanitize_plugin_name(name, plugins_dir, allow_subdir=True)
+    except ValueError as e:
+        _pc()._fail(console, f"[red]Error:[/red] {e}")
+    if not target.exists():
+        if _forget_stale_plugin_record(name, console):
+            return
+        _pc()._fail(console, _pc()._unknown_plugin_message(name, downloaded_only=True))
     try:
         result = _remove_user_plugin(plugins_dir, name, target)
     except (OSError, _pc().PluginOperationError) as exc:

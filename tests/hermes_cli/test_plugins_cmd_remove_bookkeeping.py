@@ -6,6 +6,8 @@ Real removal core against a temp HERMES_HOME; the RPC path goes through ``tui_ga
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 import hermes_yaml as yaml
 
@@ -53,6 +55,28 @@ def test_remove_forgets_every_config_trace_and_resets_the_memory_provider(home):
     assert cfg["plugins"]["enabled"] == ["keep-me"] and cfg["plugins"]["disabled"] == ["other"]
     assert cfg["plugins"]["entries"] == {"keep-me": {}}
     assert not cfg["memory"]["provider"]
+
+
+def test_remove_reconciles_a_plugin_whose_directory_was_manually_deleted(home):
+    """A directory removed by hand (``rm -rf ~/.hermes/plugins/<name>``) leaves the
+    install-metadata record and the config.yaml selection still naming the plugin. ``hermes
+    plugins remove`` must reconcile that stale bookkeeping instead of refusing with "No plugin
+    named ..." — otherwise the plugin can never be cleanly reinstalled (#122135)."""
+    plugin_dir = _write_plugin(home / "plugins", "hindsight", "hindsight")
+    (home / "plugins" / ".install-metadata.json").write_text(
+        '{"hindsight": {"pinned": false, "revision": "%s", "source": "example/hindsight"}}' % ("a" * 40),
+        encoding="utf-8")
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "plugins": {"enabled": ["hindsight", "keep-me"]},
+    }), encoding="utf-8")
+    shutil.rmtree(plugin_dir)
+    assert not plugin_dir.exists()
+
+    plugins_cmd.cmd_remove("hindsight")
+
+    assert "hindsight" not in yaml.safe_load(
+        (home / "plugins" / ".install-metadata.json").read_text(encoding="utf-8"))
+    assert _config(home)["plugins"]["enabled"] == ["keep-me"]
 
 
 def test_remove_of_a_symlink_inside_the_plugins_dir_unlinks_only_the_link(home):
