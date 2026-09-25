@@ -146,3 +146,33 @@ def test_full_checkout_refreshes_release_tags_before_publishing_identity(tmp_pat
     assert stamp is not None
     assert (stamp["baseVersion"], stamp["distance"]) == (versions[1][1], 1)
     assert stamp["commit"] == commit == git(checkout, "rev-parse", "HEAD")
+
+
+def test_fetching_the_commit_graph_never_converts_a_full_clone_into_a_partial_one(tmp_path):
+    # #122353: git fetch --filter writes remote.origin.promisor/partialclonefilter even on a
+    # repo that had neither set, which silently re-arms the partial-clone pack-objects failure
+    # on every following fetch. A full clone must stay a full clone.
+    from hermes_cli.gitlock import fetch_full_commit_graph
+
+    server = _repo(tmp_path)
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+
+    def git(root: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=root, env=env, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git(server, "config", "uploadpack.allowFilter", "true")
+    checkout = tmp_path / "checkout"
+    git(server, "clone", "-q", "--no-tags", server.as_uri(), str(checkout))
+
+    def promisor() -> str:
+        result = subprocess.run(["git", "config", "--get", "remote.origin.promisor"],
+                                cwd=checkout, env=env, capture_output=True, text=True)
+        return result.stdout.strip()
+
+    assert promisor() == ""
+
+    fetch_full_commit_graph(checkout)
+
+    assert promisor() == ""
