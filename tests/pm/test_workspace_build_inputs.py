@@ -162,6 +162,33 @@ def test_source_refresh_does_not_need_metadata_change_and_refuses_live_root(tmp_
     assert (core / "code.py").read_bytes() == before
 
 
+def test_member_stamp_ignores_files_the_plugin_gitignores(tmp_path):
+    """Regression for #122349: a plugin writing runtime state (a db, a watermark file) into its
+    own member directory must not invalidate the recorded venv stamp on every write, or every
+    ``hermes`` launch sees a "stale" venv and loops forever rebuilding it. The plugin's own
+    ``.gitignore`` is the declaration that a file is not a build input.
+    """
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "pyproject.toml").write_text(
+        '[project]\nname="stateful-plugin"\nversion="1"\nrequires-python=">=3.11"\n', encoding="utf-8")
+    (plugin / "code.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (plugin / ".gitignore").write_text("state.db\ncache/\n", encoding="utf-8")
+    (plugin / "state.db").write_text("v1", encoding="utf-8")
+    (plugin / "cache").mkdir()
+    (plugin / "cache" / "watermark.json").write_text("v1", encoding="utf-8")
+
+    stamp = workspace.members_stamp([plugin])
+
+    (plugin / "state.db").write_text("v2", encoding="utf-8")
+    (plugin / "cache" / "watermark.json").write_text("v2", encoding="utf-8")
+    (plugin / "cache" / "new_file.tmp").write_text("also ignored", encoding="utf-8")
+    assert workspace.members_stamp([plugin]) == stamp, "gitignored runtime state must not move the stamp"
+
+    (plugin / "code.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert workspace.members_stamp([plugin]) != stamp, "a real source change must still move the stamp"
+
+
 def test_legacy_member_is_generated_only_inside_workspace(tmp_path, monkeypatch):
     import tomllib
     core, plugin = tmp_path / "core", tmp_path / "readonly-plugin"

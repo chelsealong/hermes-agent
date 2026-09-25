@@ -27,6 +27,62 @@ def _member_ignored(directory, names):
     return [name for name in names if name in _MEMBER_EXCLUDE or name.endswith(".egg-info")]
 
 
+def _member_gitignore_patterns(entry: Path) -> tuple[str, ...]:
+    try:
+        text = (entry / ".gitignore").read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, UnicodeError, OSError):
+        return ()
+    return tuple(s for s in map(str.strip, text.splitlines()) if s and not s.startswith("#"))
+
+
+def _member_ignored_for(entry: Path):
+    """Exclusions for one plugin member: the hard-coded build-tooling names, plus whatever the
+    plugin's own top-level ``.gitignore`` declares. A plugin that writes runtime state (a
+    database, a watermark file) into its own member directory is declaring — via its own
+    .gitignore — that the file is not a build input, not something for us to guess at.
+
+    gitignore basics only (as ``tools/skills_guard.py``'s ``.skillignore`` reader also limits
+    itself to): comments/blank lines skipped, trailing ``/`` = a directory and everything under
+    it, leading ``/`` anchors to *entry*, ``*``/``?`` globs via fnmatch on the full relative path
+    and each segment. No negation.
+    """
+    import fnmatch
+
+    patterns = _member_gitignore_patterns(entry)
+    if not patterns:
+        return _member_ignored
+
+    def matches(rel_posix: str) -> bool:
+        segs = rel_posix.split("/")
+        base = segs[-1]
+        for pat in patterns:
+            anchored = pat.startswith("/")
+            p = pat.strip("/")
+            if not p:
+                continue
+            below = rel_posix.startswith(p + "/")
+            if pat.endswith("/"):
+                if rel_posix == p or below or (not anchored and f"/{p}/" in f"/{rel_posix}/"):
+                    return True
+            elif fnmatch.fnmatch(rel_posix, p) or (not anchored and (
+                    fnmatch.fnmatch(base, p) or below or
+                    ("/" not in p and any(fnmatch.fnmatch(seg, p) for seg in segs)))):
+                return True
+        return False
+
+    def ignore(directory, names):
+        ignored = set(_member_ignored(directory, names))
+        rel_dir = os.path.relpath(directory, entry)
+        for name in names:
+            if name not in ignored:
+                rel = name if rel_dir == "." else f"{rel_dir}/{name}".replace(os.sep, "/")
+                if matches(rel):
+                    ignored.add(name)
+        return list(ignored)
+
+    return ignore
+
+
 # The uv failure classifier lives beside the uv runner (stdlib-only imports): the bootstrap
 # runner streams uv output from a pre-3.11 system python where this module's tomllib import
 # cannot load. Workspace callers keep reaching it from here.
@@ -51,9 +107,10 @@ def members_stamp(plugin_dirs) -> str:
             h.update(source.read_bytes())
             h.update(b"\0")
         if (entry / "pyproject.toml").is_file():
+            ignored = _member_ignored_for(entry)
             for directory, dirs, files in os.walk(entry):
-                dirs[:] = sorted(set(dirs) - set(_member_ignored(directory, dirs)))
-                for name in sorted(set(files) - set(_member_ignored(directory, files))):
+                dirs[:] = sorted(set(dirs) - set(ignored(directory, dirs)))
+                for name in sorted(set(files) - set(ignored(directory, files))):
                     path = Path(directory) / name
                     h.update(path.relative_to(entry).as_posix().encode())
                     h.update(b"\0")
@@ -251,7 +308,7 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
     if pyproject is not None:
         member = root / "plugin-sources" / key
         shutil.copytree(plugin_dir, member, symlinks=True,
-                        ignore=_member_ignored)
+                        ignore=_member_ignored_for(plugin_dir))
         document = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
         # uv identifies a workspace member by [project].name, so the same virtual
         # plugin enabled in two profiles would declare one name twice and fail
