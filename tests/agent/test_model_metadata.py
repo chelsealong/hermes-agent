@@ -239,6 +239,15 @@ class TestEstimateRequestTokensRough:
 # =========================================================================
 
 class TestDefaultContextLengths:
+    def test_space_bunny_alpha_context_is_1m_not_the_256k_catchall(self):
+        """stealth/space-bunny-alpha is a 1M-context OpenRouter stealth model (#122075); without
+        a DEFAULT_CONTEXT_LENGTHS entry it silently falls through to the 256K probe-down default."""
+        from agent.model_metadata import DEFAULT_CONTEXT_LENGTHS, _longest_key_match
+
+        hit = _longest_key_match(DEFAULT_CONTEXT_LENGTHS, "stealth/space-bunny-alpha")
+        assert hit is not None
+        assert hit[1] == 1_000_000
+
     def test_nvidia_deepseek_v4_pro_context_is_endpoint_scoped(self):
         """NVIDIA's 262K NIM window must not lower DeepSeek V4 globally."""
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \

@@ -455,6 +455,19 @@ class TestIntegrationWithModelsModule:
         assert zero_row["total_models"] == len(expected)
 
 
+class TestSpaceBunnyAlphaCurated:
+    """stealth/space-bunny-alpha (issue #122075): a $0 stealth SKU with tool support that must
+    reach the OpenRouter picker row via the curated snapshot, but never the derived Nous row
+    (the Nous Portal does not carry it)."""
+
+    def test_curated_in_openrouter_not_in_nous(self):
+        from hermes_cli.models import OPENROUTER_MODELS, _PROVIDER_MODELS
+
+        ids = [mid for mid, _ in OPENROUTER_MODELS]
+        assert "stealth/space-bunny-alpha" in ids
+        assert "stealth/space-bunny-alpha" not in _PROVIDER_MODELS["nous"]
+
+
 # -----------------------------------------------------------------------------
 # Drift guard — prevent the in-repo curated lists from going out of sync with
 # the docs-hosted manifest at website/static/api/model-catalog.json.
