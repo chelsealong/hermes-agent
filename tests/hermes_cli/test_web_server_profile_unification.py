@@ -722,6 +722,30 @@ class TestProfileScopedChatPty:
         assert env["TERMINAL_ENV"] == "ssh"
         assert env["TERMINAL_CWD"] == "/operator/work"
 
+    def test_chat_argv_own_profile_name_attaches_like_current(
+        self, isolated_profiles, monkeypatch
+    ):
+        """The SPA scopes requests with the dashboard's own profile name
+        (``serving_profile_name()``), e.g. ``?profile=default``. That must attach to
+        the dashboard's in-memory gateway exactly like ``profile=None``/``"current"``,
+        not self-host a second ``tui_gateway.entry`` backend (#122365)."""
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setenv("PATH", "/run/current-system/sw/bin:/usr/bin")
+        monkeypatch.setattr(
+            "hermes_cli.main_tui_launch._make_tui_argv",
+            lambda root, tui_dev=False: (["cat"], None),
+            raising=False,
+        )
+        monkeypatch.setattr(web_server.app.state, "bound_host", "127.0.0.1", raising=False)
+        monkeypatch.setattr(web_server.app.state, "bound_port", 9119, raising=False)
+
+        _argv, _cwd, env = _web_server_chat._resolve_chat_argv(profile="default")
+
+        assert env is not None
+        gateway_url = env.get("HERMES_TUI_GATEWAY_URL", "")
+        assert gateway_url.startswith("ws://127.0.0.1:9119/api/ws?")
+
     def test_chat_argv_warns_when_profile_terminal_bridge_fails(
         self, isolated_profiles, monkeypatch, caplog
     ):
