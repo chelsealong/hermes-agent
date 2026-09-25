@@ -62,6 +62,17 @@ def test_retired_ensure_reports_unavailable_without_installing(prompt, no_extern
         ensure("memory.honcho", prompt=prompt)
 
 
+def test_retired_install_specs_reports_unavailable_without_a_takeover(no_external_work):
+    from tools.lazy_deps import install_specs
+
+    # A plugin (e.g. Hindsight, #122326) can call this outside any update, from
+    # inside a live `hermes serve`/gateway process. It must fail the same way
+    # `ensure` does above, not call stop_for_relaunch() and start a real update
+    # takeover (subprocess spawn, npm/web/Desktop rebuild) from a live session.
+    with pytest.raises(ImportError, match="relaunch"):
+        install_specs(["hindsight-all"])
+
+
 def test_live_dingtalk_dependencies_use_pm_not_retired_installer(monkeypatch):
     from plugins.platforms.dingtalk import adapter
     from pm import extras

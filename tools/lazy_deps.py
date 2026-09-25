@@ -2,8 +2,6 @@
 
 from typing import NoReturn
 
-from hermes_cli._old_updater import stop_for_relaunch
-
 
 def ensure(feature: str, *, prompt: bool = True) -> NoReturn:
     # Shim to suppress old updater work until relaunch. Do not claim readiness.
@@ -13,4 +11,8 @@ def ensure(feature: str, *, prompt: bool = True) -> NoReturn:
 
 def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> NoReturn:
     # Shim to suppress old updater work until relaunch. Do not install or report success.
-    stop_for_relaunch()
+    # Unlike hermes_cli.old_updater_deps, this module is public API that a live
+    # plugin can still import and call outside any update (#122326) - it must
+    # fail like `ensure` above, not call stop_for_relaunch() and start a real
+    # update takeover from inside a normal hermes serve/gateway process.
+    raise ImportError("Dependencies are unknown to this old updater. Please relaunch Hermes.")
