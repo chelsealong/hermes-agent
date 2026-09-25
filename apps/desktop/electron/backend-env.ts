@@ -182,6 +182,70 @@ function profileBackendParentEnv({
 }
 
 /**
+ * Windows can hand a child process an environment block assembled straight
+ * from the registry (HKCU\Environment + HKLM's System Environment key) — a
+ * Task-Scheduler launch, or a relaunch that rebuilt its environment instead
+ * of inheriting one. That block excludes everything Windows only computes at
+ * logon rather than storing in either key: USERPROFILE, LOCALAPPDATA,
+ * APPDATA, HOMEDRIVE/HOMEPATH, SystemRoot. Without USERPROFILE (or an
+ * equivalent), the Python launcher's home-directory resolution raises before
+ * `hermes.exe --version` can even report "not installed"; without
+ * SystemRoot, Windows PowerShell 5.1 cannot initialize at all (0x8009001d).
+ * Backfill only what's actually missing — a value the caller already set is
+ * never overridden. See #122384.
+ */
+function backfillWindowsSessionEnv(
+  env: NodeJS.ProcessEnv = {},
+  { platform = process.platform, homedir = os.homedir() }: any = {}
+): NodeJS.ProcessEnv {
+  if (platform !== 'win32') {
+    return {}
+  }
+
+  const keyOf = (name: string) => Object.keys(env || {}).find(key => key.toUpperCase() === name)
+  const has = (name: string) => keyOf(name) !== undefined
+
+  const get = (name: string) => {
+    const key = keyOf(name)
+
+    return key === undefined ? undefined : (env as any)[key]
+  }
+
+  const patch: NodeJS.ProcessEnv = {}
+  const userProfile = get('USERPROFILE') || homedir
+
+  if (!has('USERPROFILE') && userProfile) {
+    patch.USERPROFILE = userProfile
+  }
+
+  if (!has('LOCALAPPDATA') && userProfile) {
+    patch.LOCALAPPDATA = path.win32.join(userProfile, 'AppData', 'Local')
+  }
+
+  if (!has('APPDATA') && userProfile) {
+    patch.APPDATA = path.win32.join(userProfile, 'AppData', 'Roaming')
+  }
+
+  if (userProfile && (!has('HOMEDRIVE') || !has('HOMEPATH'))) {
+    const root = path.win32.parse(userProfile).root // e.g. "C:\\"
+
+    if (!has('HOMEDRIVE')) {
+      patch.HOMEDRIVE = root.replace(/\\$/, '')
+    }
+
+    if (!has('HOMEPATH')) {
+      patch.HOMEPATH = userProfile.slice(root.length - 1) || '\\'
+    }
+  }
+
+  if (!has('SYSTEMROOT')) {
+    patch.SystemRoot = get('WINDIR') || 'C:\\Windows'
+  }
+
+  return patch
+}
+
+/**
  * The environment for the spawned Python backend. Electron knows ONE thing:
  * where the interpreter is (by convention). Everything else — managed tool
  * PATHs, browser paths, node — is composed in-process by pm when the backend
@@ -203,12 +267,14 @@ function buildDesktopBackendEnv({ currentEnv = process.env, platform = process.p
     // pre-bootstrap tracebacks) still decodes with the locale default without
     // this. User's explicit setting wins. Re-port of PR #56499 (echoriver89).
     PYTHONUTF8: currentEnv?.PYTHONUTF8 ?? '1',
-    [key]: appendUniquePathEntries([currentEnv?.[key] || '', saneEntries], { delimiter })
+    [key]: appendUniquePathEntries([currentEnv?.[key] || '', saneEntries], { delimiter }),
+    ...backfillWindowsSessionEnv(currentEnv, { platform })
   }
 }
 
 export {
   appendUniquePathEntries,
+  backfillWindowsSessionEnv,
   buildDesktopBackendEnv,
   delimiterForPlatform,
   normalizeHermesHomeRoot,

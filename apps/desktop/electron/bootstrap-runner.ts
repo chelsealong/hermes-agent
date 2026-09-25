@@ -42,6 +42,7 @@ import path from 'node:path'
 // with no tsconfig path resolution (see scripts/bundle-electron-main.mjs).
 import { stripAnsi } from '../../shared/src/ansi'
 
+import { backfillWindowsSessionEnv } from './backend-env'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -491,6 +492,10 @@ function spawnPowerShell(scriptPath, args, { emit, stageName, abortSignal, herme
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
+          // A registry-built parent environment (Task Scheduler, a relaunch
+          // that rebuilt its block) lacks SystemRoot etc.; Windows
+          // PowerShell 5.1 cannot even initialize without it (#122384).
+          ...backfillWindowsSessionEnv(process.env),
           // Pass HERMES_HOME through so install.ps1 respects the caller's
           // choice rather than re-computing the default.
           HERMES_HOME: hermesHome || process.env.HERMES_HOME || ''

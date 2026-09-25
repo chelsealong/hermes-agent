@@ -7,6 +7,7 @@ import { test } from 'vitest'
 
 import {
   appendUniquePathEntries,
+  backfillWindowsSessionEnv,
   buildDesktopBackendEnv,
   normalizeHermesHomeRoot,
   pathEnvKey,
@@ -67,6 +68,54 @@ test('buildDesktopBackendEnv forces PYTHONUTF8 unless the user set it explicitly
   })
 
   assert.equal(optedOut.PYTHONUTF8, '0')
+})
+
+test('backfillWindowsSessionEnv is a no-op off Windows', () => {
+  assert.deepEqual(backfillWindowsSessionEnv({}, { platform: 'darwin', homedir: '/Users/test' }), {})
+})
+
+test('backfillWindowsSessionEnv fills the logon-computed variables a registry-only environment lacks', () => {
+  // The exact shape reported in #122384: a Task-Scheduler-style block that
+  // has SystemRoot but none of the profile-derived variables.
+  const patch = backfillWindowsSessionEnv(
+    { SystemRoot: 'C:\\WINDOWS', Path: 'C:\\WINDOWS\\System32' },
+    { platform: 'win32', homedir: 'C:\\Users\\Axiom' }
+  )
+
+  assert.equal(patch.USERPROFILE, 'C:\\Users\\Axiom')
+  assert.equal(patch.LOCALAPPDATA, 'C:\\Users\\Axiom\\AppData\\Local')
+  assert.equal(patch.APPDATA, 'C:\\Users\\Axiom\\AppData\\Roaming')
+  assert.equal(patch.HOMEDRIVE, 'C:')
+  assert.equal(patch.HOMEPATH, '\\Users\\Axiom')
+  assert.equal(patch.SystemRoot, undefined, 'SystemRoot was already set and must not be touched')
+})
+
+test('backfillWindowsSessionEnv fills SystemRoot from WINDIR when both are missing', () => {
+  const patch = backfillWindowsSessionEnv({ WINDIR: 'C:\\WINDOWS' }, { platform: 'win32', homedir: 'C:\\Users\\Axiom' })
+
+  assert.equal(patch.SystemRoot, 'C:\\WINDOWS')
+})
+
+test('backfillWindowsSessionEnv never overrides a variable the caller already set, in any casing', () => {
+  const patch = backfillWindowsSessionEnv(
+    { userprofile: 'C:\\Users\\Real', SYSTEMROOT: 'C:\\WINDOWS' },
+    { platform: 'win32', homedir: 'C:\\Users\\Wrong' }
+  )
+
+  assert.equal(patch.USERPROFILE, undefined)
+  assert.equal(patch.SystemRoot, undefined)
+  // Derived from the caller's real USERPROFILE, not the fallback homedir.
+  assert.equal(patch.LOCALAPPDATA, 'C:\\Users\\Real\\AppData\\Local')
+})
+
+test('buildDesktopBackendEnv backfills the depleted Windows session variables onto the composed backend env', () => {
+  const env = buildDesktopBackendEnv({
+    currentEnv: { SystemRoot: 'C:\\WINDOWS', Path: 'C:\\WINDOWS\\System32' },
+    platform: 'win32'
+  })
+
+  assert.ok(env.USERPROFILE, 'USERPROFILE must be backfilled so the launcher can resolve a home directory')
+  assert.ok(env.LOCALAPPDATA)
 })
 
 test('normalizeHermesHomeRoot expands a literal leading ~ against the home directory, not cwd', () => {
