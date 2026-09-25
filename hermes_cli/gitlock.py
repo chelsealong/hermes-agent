@@ -395,18 +395,21 @@ def fetch_full_commit_graph(repo_root: Path, **run_kwargs) -> bool:
 
     A full commit graph does not imply current tags, especially after a --no-tags
     clone. Fetch version tags explicitly without fetching every remote branch or
-    replacing existing tags. Trees and blobs stay on demand for a checkout that is
-    *already* a partial clone; a full clone is never turned into one, because
-    ``git fetch --filter`` writes ``remote.origin.promisor``/``partialclonefilter``
-    even on a repo that had neither set, silently re-arming the partial-clone fetch
-    failure the next run repairs (#122353). Returns whether the checkout was
-    unshallowed; fetch failures raise subprocess errors.
+    replacing existing tags. Unshallowing fetches commits only (trees and blobs stay
+    on demand) since that is the dominant case this function exists for (pre-PM
+    ``--depth 1`` installs); a checkout that is already a partial clone keeps that
+    same on-demand behavior for its tag refresh. A full, never-partial clone is never
+    turned into one, because ``git fetch --filter`` writes
+    ``remote.origin.promisor``/``partialclonefilter`` even on a repo that had neither
+    set, silently re-arming the partial-clone fetch failure the next run repairs
+    (#122353). Returns whether the checkout was unshallowed; fetch failures raise
+    subprocess errors.
     """
     shallow = _shallow_file_path(repo_root) is not None
     already_partial = _git_stdout_lines(repo_root, ["config", "--get", "remote.origin.promisor"]) == ["true"]
     subprocess.run(
         ["git", "fetch", "--quiet", *(["--unshallow"] if shallow else []),
-         *(["--filter=tree:0"] if already_partial else []), "--no-tags", "origin", "refs/tags/v*:refs/tags/v*"],
+         *(["--filter=tree:0"] if shallow or already_partial else []), "--no-tags", "origin", "refs/tags/v*:refs/tags/v*"],
         cwd=str(repo_root), check=True, capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=900, **run_kwargs,
     )

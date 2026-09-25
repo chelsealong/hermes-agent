@@ -148,6 +148,42 @@ def test_full_checkout_refreshes_release_tags_before_publishing_identity(tmp_pat
     assert stamp["commit"] == commit == git(checkout, "rev-parse", "HEAD")
 
 
+def test_unshallowing_a_never_partial_clone_still_fetches_trees_on_demand(tmp_path):
+    # #122353 follow-up: the fix must not overcorrect. A pre-PM --depth 1 clone (shallow,
+    # remote.origin.promisor never set) is the dominant case fetch_full_commit_graph exists
+    # for, and unshallowing it must still be a treeless partial fetch, not a full unshallow.
+    from hermes_cli.gitlock import fetch_full_commit_graph
+
+    server = _repo(tmp_path)
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+
+    def git(root: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=root, env=env, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git(server, "config", "uploadpack.allowFilter", "true")
+    for message in ("one", "two", "three"):
+        (server / f"blob-{message}.bin").write_bytes(os.urandom(64 * 1024))
+        git(server, "add", f"blob-{message}.bin")
+        git(server, "commit", "-qm", message)
+    checkout = tmp_path / "checkout"
+    git(server, "clone", "-q", "--depth", "1", "--no-tags", server.as_uri(), str(checkout))
+    assert git(checkout, "rev-parse", "--is-shallow-repository") == "true"
+
+    def promisor() -> str:
+        result = subprocess.run(["git", "config", "--get", "remote.origin.promisor"],
+                                cwd=checkout, env=env, capture_output=True, text=True)
+        return result.stdout.strip()
+
+    assert promisor() == ""
+
+    assert fetch_full_commit_graph(checkout)
+
+    assert promisor() == "true"
+    assert git(checkout, "rev-parse", "--is-shallow-repository") == "false"
+
+
 def test_fetching_the_commit_graph_never_converts_a_full_clone_into_a_partial_one(tmp_path):
     # #122353: git fetch --filter writes remote.origin.promisor/partialclonefilter even on a
     # repo that had neither set, which silently re-arms the partial-clone pack-objects failure
