@@ -119,7 +119,9 @@ def _configure_mcp_tools_interactive(config: dict):
             _print_info(f"  {server_name}: no tools found")
             continue
 
-        tools_cfg = mcp_servers.get(server_name, {}).get("tools") or {}
+        from tools.mcp_tool_schema import normalize_tools_config
+
+        tools_cfg = normalize_tools_config(mcp_servers.get(server_name, {}).get("tools"), server_name)
         # ``include: []`` is an explicit block-all whitelist, not "unfiltered" (#12865).
         include_raw, exclude_raw = tools_cfg.get("include"), tools_cfg.get("exclude")
         include_set = {str(p) for p in include_raw} if isinstance(include_raw, list) else None
@@ -209,8 +211,10 @@ def _print_tools_list(enabled_toolsets: set, mcp_servers: dict, platform: str = 
     if mcp_servers:
         print()
         print("MCP servers:")
+        from tools.mcp_tool_schema import normalize_tools_config
+
         for srv_name, srv_cfg in mcp_servers.items():
-            tools_cfg = srv_cfg.get("tools") or {}
+            tools_cfg = normalize_tools_config(srv_cfg.get("tools"), srv_name)
             exclude, include = tools_cfg.get("exclude") or [], tools_cfg.get("include")
             if isinstance(include, list):
                 _print_info(f"{srv_name}  [include only: {', '.join(include) or '(none)'}]")

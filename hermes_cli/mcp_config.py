@@ -486,7 +486,9 @@ def _probe_single_server(
                 # Gate capability probes like runtime registration (_select_utility_schemas):
                 # honour tools.prompts / tools.resources config AND only call a family the server
                 # advertises — some servers hard-error on unknown prompts/list.
-                tools_filter = config.get("tools") or {}
+                from tools.mcp_tool_schema import normalize_tools_config
+
+                tools_filter = normalize_tools_config(config.get("tools"), name)
                 advertised_caps = getattr(getattr(server, "initialize_result", None), "capabilities", None)
 
                 def _wanted(cap: str) -> bool:

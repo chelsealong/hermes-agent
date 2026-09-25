@@ -4,6 +4,8 @@ The module landed in #56832's extraction without its tests; these cover the
 fingerprint keying, read/write round-trip, and invalidation behavior.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 import tools.mcp_schema_cache as msc
@@ -32,6 +34,50 @@ class TestConfigFingerprint:
         assert msc.config_fingerprint(base) == msc.config_fingerprint(
             {**base, "timeout": 5, "enabled": True, "lazy": True}
         )
+
+
+class TestToolsShorthandConfig:
+    """#122373: a bare string/list ``mcp_servers.<name>.tools`` (the natural shorthand for an
+    include whitelist, already accepted for ``tools.include``/``tools.exclude`` themselves) must
+    not crash every ``config.get("tools").get(...)`` consumer with ``AttributeError``."""
+
+    def test_config_fingerprint_accepts_bare_string_tools(self):
+        cfg = {"command": "npx", "tools": "search_x,query_docs_filesystem_x"}
+        assert isinstance(msc.config_fingerprint(cfg), str)
+
+    def test_config_fingerprint_accepts_list_tools(self):
+        cfg = {"command": "npx", "tools": ["search_x", "query_docs_filesystem_x"]}
+        assert isinstance(msc.config_fingerprint(cfg), str)
+
+    def test_string_shorthand_becomes_include_whitelist(self):
+        should_register = _mcp_registration._make_tool_filter(
+            "x_docs", {"tools": "search_x,query_docs_filesystem_x"})
+        assert should_register("search_x") is True
+        assert should_register("query_docs_filesystem_x") is True
+        assert should_register("unrelated_tool") is False
+
+    def test_select_utility_schemas_accepts_string_tools(self):
+        server = SimpleNamespace(initialize_result=None, session=SimpleNamespace(
+            list_resources=lambda: None, read_resource=lambda: None,
+            list_prompts=lambda: None, get_prompt=lambda: None))
+        selected = _mcp_registration._select_utility_schemas(
+            "x_docs", server, {"tools": "search_x,query_docs_filesystem_x"})
+        assert {e["handler_key"] for e in selected} == {
+            "list_resources", "read_resource", "list_prompts", "get_prompt"}
+
+    def test_dict_shape_passes_through_unchanged(self):
+        from tools.mcp_tool_schema import normalize_tools_config
+
+        cfg = {"include": ["a"], "exclude": ["b"], "resources": False}
+        assert normalize_tools_config(cfg) is cfg
+
+    def test_invalid_type_degrades_to_no_filter_with_warning(self, caplog):
+        from tools.mcp_tool_schema import normalize_tools_config
+
+        with caplog.at_level("WARNING"):
+            result = normalize_tools_config(42, "x_docs")
+        assert result == {}
+        assert "x_docs" in caplog.text
 
 
 class TestCacheRoundTrip:

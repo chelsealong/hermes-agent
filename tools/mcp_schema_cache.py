@@ -26,7 +26,8 @@ def _cache_path() -> Path:
 
 def config_fingerprint(config: dict) -> str:
     """Stable hash of the connection-defining parts of an MCP server config."""
-    tools_filter = config.get("tools") or {}
+    from tools.mcp_tool_schema import normalize_tools_config
+    tools_filter = normalize_tools_config(config.get("tools"))
     payload = {
         "command": config.get("command"),
         "args": config.get("args") or [],

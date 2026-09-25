@@ -17,7 +17,8 @@ from tools.mcp_tool_handlers import (
     _make_check_fn, _make_get_prompt_handler, _make_list_prompts_handler,
     _make_list_resources_handler, _make_read_resource_handler)
 from tools.mcp_tool_schema import (
-    _UTILITY_CAPABILITY_ATTRS, _build_utility_schemas, _normalize_name_filter, matches_name_filter)
+    _UTILITY_CAPABILITY_ATTRS, _build_utility_schemas, _normalize_name_filter, matches_name_filter,
+    normalize_tools_config)
 from tools.mcp_tool_scope import _key_name, _key_scope, _resolve_server_key, _server_key
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -152,7 +153,7 @@ def _select_utility_schemas(server_name: str, server: "MCPServerTask", config: d
     capabilities. ``initialize_result.capabilities`` is the truth (sub-object non-None iff the
     family is served); without it fall back to the legacy session-method check, which never
     filters anything since ClientSession defines all four methods."""
-    tools_filter = config.get("tools") or {}
+    tools_filter = normalize_tools_config(config.get("tools"), server_name)
     enabled = {f: _parse_boolish(tools_filter.get(f), default=True) for f in ("resources", "prompts")}
     advertised = getattr(getattr(server, "initialize_result", None), "capabilities", None)
 
@@ -210,7 +211,7 @@ def _existing_tool_names() -> List[str]:
 def _make_tool_filter(name: str, config: dict) -> Callable[[str], bool]:
     """Include/exclude predicate for a server's tool names: ``tools.include`` is a whitelist (``[]`` = register
     nothing), ``tools.exclude`` a blacklist; entries are exact names or fnmatch globs; include wins over exclude."""
-    tools_filter = config.get("tools") or {}
+    tools_filter = normalize_tools_config(config.get("tools"), name)
     # Selective tool loading: honour include/exclude lists from config. Rules (matching issue #690 spec,
     # extended with glob support): tools.include — whitelist: only matching tool names are registered
     # tools.exclude — blacklist: all tools EXCEPT matching ones are registered entries may be exact names or

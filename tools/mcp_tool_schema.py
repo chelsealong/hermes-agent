@@ -6,7 +6,7 @@ import logging
 import hashlib
 import fnmatch
 import re
-from typing import Any, List
+from typing import Any, List, Optional
 from tools.ansi_strip import strip_unicode_tags
 from tools.mcp_tool_common import mcp_field
 
@@ -226,6 +226,26 @@ def _build_utility_schemas(server_name: str) -> List[dict]:
                 "parameters": parameters},
             "handler_key": handler_key})
     return out
+
+
+def normalize_tools_config(value: Any, server_name: Optional[str] = None) -> dict:
+    """Normalize ``mcp_servers.<name>.tools`` to its ``{include, exclude, resources, prompts}`` dict
+    shape. ``tools.include``/``tools.exclude`` already accept a bare string or list of strings
+    (``_normalize_name_filter``); the same shorthand at the top level is the natural thing to write
+    and means an ``include`` whitelist. Anything else degrades to no filter (register everything)
+    with a warning naming the server, instead of every ``config.get("tools").get(...)`` consumer
+    crashing with ``AttributeError``."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return {"include": [item.strip() for item in value.split(",") if item.strip()]}
+    if isinstance(value, (list, tuple, set)):
+        return {"include": [str(item) for item in value]}
+    label = f"mcp_servers.{server_name}.tools" if server_name else "mcp_servers.<name>.tools"
+    logger.warning("MCP config %s must be a dict, string, or list of strings; ignoring %r", label, value)
+    return {}
 
 
 def _normalize_name_filter(value: Any, label: str) -> set[str]:

@@ -75,6 +75,21 @@ def test_empty_tools_server_skipped(capsys):
     assert "no tools found" in captured.out
 
 
+def test_bare_string_tools_shorthand_preselects_named_tools():
+    """#122373: a bare string ``tools:`` value (comma shorthand for an include whitelist,
+    same shape already accepted by ``tools.include``) must not crash the checklist builder
+    with ``AttributeError: 'str' object has no attribute 'get'``."""
+    config = {"mcp_servers": {"github": {"command": "npx", "tools": "create_issue"}}}
+    tools = [("create_issue", "Create an issue"), ("search_repos", "Search repos")]
+
+    with patch(_PROBE, return_value={"github": tools}), \
+         patch(_CHECKLIST, side_effect=lambda title, labels, pre, **kw: pre) as checklist, \
+         patch(_SAVE):
+        _configure_mcp_tools_interactive(config)
+
+    assert checklist.call_args.args[2] == {0}
+
+
 def test_empty_include_reopens_with_nothing_preselected():
     """``include: []`` is the runtime's block-all whitelist; the picker must not reopen it as
     "all tools enabled" and must persist it when the user keeps zero tools checked (#12865)."""
