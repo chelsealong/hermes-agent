@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from pm.environment import PythonEnvironment, _base_environment
+from pm.index_config import has_custom_index
 from pm.package import InstallError
 
 
@@ -50,6 +51,16 @@ def test_pip_conf_is_bridged_only_when_uv_has_no_index(clean_index_env, monkeypa
     env = _base_environment()
     assert env["UV_DEFAULT_INDEX"] == "https://explicit.example/simple"
     assert "UV_INDEX_URL" not in env
+
+
+def test_has_custom_index_reflects_any_forwarded_uv_index_knob():
+    assert has_custom_index({"UV_INDEX_URL": "https://mirror.example/simple"})
+    assert has_custom_index({"UV_DEFAULT_INDEX": "https://mirror.example/simple"})
+    assert has_custom_index({"UV_INDEX": "extra=https://mirror.example/simple"})
+    assert not has_custom_index({})
+    assert not has_custom_index({"UV_INDEX_URL": ""})
+    # A non-index forwarded setting (credentials, timeout) is not "a custom index".
+    assert not has_custom_index({"UV_HTTP_TIMEOUT": "300"})
 
 
 def test_streamed_runs_do_not_request_uv_debug_output(tmp_path, monkeypatch):

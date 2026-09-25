@@ -44,6 +44,20 @@ def is_forwarded(key: str) -> bool:
     return key in FORWARDED_UV_SETTINGS or key.startswith("UV_INDEX_")
 
 
+def has_custom_index(env: Mapping[str, str]) -> bool:
+    """Whether *env* resolves against something other than uv's built-in default index.
+
+    A committed ``uv.lock`` always records packages against the default index
+    (https://pypi.org/simple). ``uv sync --locked`` re-resolves to confirm the
+    lock still matches, and fails on any registry difference — even when the
+    lock itself is current and the mirror serves the identical packages
+    (#122112). Callers that need ``--locked``'s staleness check to survive a
+    bridged or explicitly configured mirror use this to know when that check
+    can no longer be trusted.
+    """
+    return any(env.get(key) for key in _UV_INDEX_KNOBS)
+
+
 def pip_config_candidates(env: Mapping[str, str]) -> list[Path]:
     """pip's config files, lowest precedence first, as ``pip._internal.configuration`` ranks them.
 
