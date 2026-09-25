@@ -18,6 +18,20 @@ def _sync_locked(environment, snapshot: Path, env: Mapping[str, str]) -> None:
     same, just fetched from elsewhere (#122112). Retry with ``--frozen`` (trust
     the lock, skip that check) only when a non-default index is actually in play,
     so the staleness check still fires for everyone else.
+
+    Blind spot: uv raises the identical "needs to be updated" error for a
+    registry-only mismatch AND for a genuinely stale lock (e.g. a dependency
+    added to pyproject.toml without re-running ``uv lock``), so the ``--frozen``
+    retry can't tell them apart and would silently install a venv missing the
+    new dependency in the second case. This is out of reach for the one caller
+    wired up today (``stage_runtime``, against ``pm/pyproject.toml`` +
+    ``pm/uv.lock``): every current caller (``scripts/bundles/native.py``,
+    ``scripts/termux/build_environment.py``, ``pm/runtime.py::prepare_runtime``)
+    builds that same lock in a mirror-free release/CI environment first, so a
+    genuinely stale ``pm/uv.lock`` already fails loudly there before any
+    mirrored end-user machine reaches this fallback. That invariant breaks if a
+    future caller passes a user-supplied ``project`` whose lock was never
+    verified mirror-free — re-check this reasoning before adding one.
     """
     from pm.index_config import has_custom_index
 
