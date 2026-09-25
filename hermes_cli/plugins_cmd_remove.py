@@ -44,17 +44,22 @@ def _remove_plugin_core(target: Path) -> None:
 
 def _forget_stale_plugin_record(name: str, console) -> bool:
     """A plugin whose directory is already gone (e.g. manual ``rm -rf``) but whose
-    install-metadata record and/or config.yaml selection still name it: clear that bookkeeping
-    so a later ``hermes plugins install <name>`` starts clean instead of tripping the "active
-    plugin" consent gate against a target it can never publish over. Returns False when nothing
-    names *name* (the caller reports the ordinary "no plugin named ..." error)."""
-    enabled, disabled = _pc()._get_enabled_set(), _pc()._get_disabled_set()
-    has_metadata = name in _pc()._read_install_metadata()
-    if not has_metadata and name not in enabled and name not in disabled:
+    install-metadata record still names it: clear that bookkeeping so a later ``hermes plugins
+    install <name>`` starts clean instead of tripping the "active plugin" consent gate against a
+    target it can never publish over.
+
+    Gated on install-metadata alone (never on a bare ``plugins.enabled``/``disabled`` mention):
+    only a downloaded plugin ever gets an install-metadata record, so its presence is the one
+    signal that distinguishes "a download whose tree was deleted by hand" from a bundled or
+    entry-point plugin's ordinary, permanent, directory-less state — those routinely sit in
+    ``plugins.disabled`` (e.g. a user-disabled bundled backend) with no tree under the user
+    plugins dir at all, and reconciling on that alone would silently clear the disable and
+    reactivate them. Returns False when there is no install-metadata record for *name* (the
+    caller reports the ordinary "no plugin named ..." error)."""
+    if name not in _pc()._read_install_metadata():
         return False
-    if has_metadata:
-        _pc()._update_install_record(name, lambda _current: None)
-    result = _pc()._forget_plugin_config({name})
+    _pc()._update_install_record(name, lambda _current: None)
+    result = _pc()._forget_plugin_config(_pc()._plugin_aliases(name))
     console.print()
     console.print(
         f"[yellow]⚠[/yellow] Plugin [bold]{name}[/bold]'s directory was already gone; "

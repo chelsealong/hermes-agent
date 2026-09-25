@@ -79,6 +79,23 @@ def test_remove_reconciles_a_plugin_whose_directory_was_manually_deleted(home):
     assert _config(home)["plugins"]["enabled"] == ["keep-me"]
 
 
+def test_remove_on_disabled_bundled_plugin_name_does_not_reenable_it(home):
+    """A bundled plugin has no tree under the user plugins dir and no install-metadata record —
+    that is its ordinary, permanent state, not evidence of a deleted download. ``hermes plugins
+    remove`` on a name a user has explicitly disabled (e.g. the bundled ``basic`` dashboard-auth
+    plugin) must keep refusing with "No plugin named ...", never silently clear the disable and
+    reactivate it (#122135 regression: the stale-record reconciliation must gate on
+    install-metadata, not on a bare ``plugins.disabled``/``enabled`` mention)."""
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "plugins": {"disabled": ["basic"]},
+    }), encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        plugins_cmd.cmd_remove("basic")
+
+    assert _config(home)["plugins"]["disabled"] == ["basic"]
+
+
 def test_remove_of_a_symlink_inside_the_plugins_dir_unlinks_only_the_link(home):
     """A dev alias pointing at a sibling install resolves INSIDE the plugins dir, so the containment
     check passes; removing the alias must not delete the sibling (or its install metadata)."""
