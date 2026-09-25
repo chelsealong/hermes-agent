@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClientSessionState } from '@/app/types'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { errorRecoveryPlan } from '@/lib/error-surface'
+import { $onBattery } from '@/store/power'
 
 import { $activeSessionId, $selectedStoredSessionId, $unreadFinishedSessionIds } from './session'
 import {
@@ -154,6 +155,11 @@ function partial(text: string, over: Partial<ClientSessionState> = {}): ClientSe
 describe('live turn event silence', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    // document.hasFocus() is not reliably true in jsdom, so pin it for these
+    // tests (matches use-background-sync.test.ts) — settling now requires the
+    // safety-net poll to have had a chance to run, which needs a focused,
+    // visible, off-battery window (see the two tests below for the opposite).
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     clearAllSessionStates()
     $unreadFinishedSessionIds.set([])
     $selectedStoredSessionId.set(null)
@@ -163,6 +169,8 @@ describe('live turn event silence', () => {
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
+    vi.restoreAllMocks()
+    $onBattery.set(false)
     clearAllSessionStates()
     $unreadFinishedSessionIds.set([])
     $selectedStoredSessionId.set(null)
@@ -250,6 +258,47 @@ describe('live turn event silence', () => {
     expect($workingSessionIds.get()).toContain('s-b')
     expect($sessionStates.get()['rt-a']?.messages.some(message => message.errorSurface?.retryable)).toBe(true)
     expect($sessionStates.get()['rt-b']?.busy).toBe(true)
+  })
+
+  it('does not settle a silent turn while the window is unfocused, and catches up once it regains focus', () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    $activeSessionId.set('rt-bg')
+    publishSessionState('rt-bg', partial('working in the background', { storedSessionId: 's-bg' }))
+    noteSessionEvent('rt-bg')
+
+    // #121532's window elapses while nothing can confirm the backend is dead:
+    // the safety-net poll that would normally reset this clock is paused
+    // while the window isn't focused.
+    vi.advanceTimersByTime(SILENCE_MS * 3)
+
+    expect($workingSessionIds.get()).toContain('s-bg')
+    expect($sessionStates.get()['rt-bg']?.messages.some(message => message.errorSurface)).toBe(false)
+
+    hasFocus.mockReturnValue(true)
+    vi.advanceTimersByTime(SILENCE_MS)
+
+    expect($workingSessionIds.get()).not.toContain('s-bg')
+    expect($sessionStates.get()['rt-bg']?.messages.some(message => message.errorSurface?.retryable)).toBe(true)
+  })
+
+  it('does not settle a silent turn while on battery, since the safety-net poll cadence exceeds the silence window', () => {
+    $onBattery.set(true)
+
+    $activeSessionId.set('rt-batt')
+    publishSessionState('rt-batt', partial('working on battery', { storedSessionId: 's-batt' }))
+    noteSessionEvent('rt-batt')
+
+    vi.advanceTimersByTime(SILENCE_MS * 3)
+
+    expect($workingSessionIds.get()).toContain('s-batt')
+    expect($sessionStates.get()['rt-batt']?.messages.some(message => message.errorSurface)).toBe(false)
+
+    $onBattery.set(false)
+    vi.advanceTimersByTime(SILENCE_MS)
+
+    expect($workingSessionIds.get()).not.toContain('s-batt')
+    expect($sessionStates.get()['rt-batt']?.messages.some(message => message.errorSurface?.retryable)).toBe(true)
   })
 
   it('does not stamp a retry when the turn settles before the silence window', () => {

@@ -37,6 +37,7 @@ import type { ErrorSurface } from '@/lib/error-surface'
 import { tileFocusStampOnFocusChange } from '@/lib/session-timer-since'
 import { stableArray } from '@/lib/stable-array'
 import { readJson, writeJson } from '@/lib/storage'
+import { $onBattery } from '@/store/power'
 import type { SessionInfo } from '@/types/hermes'
 
 import { dropStatusDrawersForProfile, migrateStatusDrawersForProfile } from './composer-status-drawer'
@@ -442,6 +443,38 @@ function settleSilentLiveTurn(runtimeId: string) {
   })
 }
 
+/** True while the safety-net `session.active_list` poll (use-background-sync's
+ *  `visiblePoll`) is actually running on a cadence tight enough to reset the
+ *  silence clock below before it fires: paused outright while the window
+ *  isn't focused/visible, and stretched to 120s on battery — both well past
+ *  `LIVE_TURN_EVENT_SILENCE_MS`. Its silence is evidence of neither state, so
+ *  the clock must not read it as a dead backend in either case. */
+function liveStatusPollCanConfirmSilence(): boolean {
+  return (
+    typeof document !== 'undefined' && document.visibilityState === 'visible' && document.hasFocus() && !$onBattery.get()
+  )
+}
+
+function armEventSilenceTimer(runtimeId: string) {
+  sessionEventSilenceTimers.set(
+    runtimeId,
+    setTimeout(() => {
+      sessionEventSilenceTimers.delete(runtimeId)
+
+      if (!liveStatusPollCanConfirmSilence()) {
+        // The poll that would confirm a dead backend didn't get a chance to
+        // run; keep waiting rather than settle on a guess. A live stream
+        // event, or the poll's on-focus catch-up, resolves it for real.
+        armEventSilenceTimer(runtimeId)
+
+        return
+      }
+
+      settleSilentLiveTurn(runtimeId)
+    }, LIVE_TURN_EVENT_SILENCE_MS)
+  )
+}
+
 /** Record that this session just produced an event. A live turn that then goes
  *  silent is force-settled; a turn still receiving events, or waiting on the
  *  user, is not. */
@@ -458,13 +491,7 @@ export function noteSessionEvent(runtimeId: string) {
     return
   }
 
-  sessionEventSilenceTimers.set(
-    runtimeId,
-    setTimeout(() => {
-      sessionEventSilenceTimers.delete(runtimeId)
-      settleSilentLiveTurn(runtimeId)
-    }, LIVE_TURN_EVENT_SILENCE_MS)
-  )
+  armEventSilenceTimer(runtimeId)
 }
 
 const sessionWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
