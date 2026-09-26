@@ -308,7 +308,7 @@ def _call(tool_name, args):
                     if buf.endswith(b"\\n"):
                         break
                 break
-            except (OSError, RuntimeError):
+            except (OSError, RuntimeError) as e:
                 global _sock
                 try:
                     if _sock is not None:
@@ -316,7 +316,12 @@ def _call(tool_name, args):
                 except OSError:
                     pass
                 _sock = None
-                if _attempt + 1 >= _attempts:
+                # A socket.timeout means the server already received this
+                # request and may still be running it; resending would
+                # dispatch the tool call a second time. Only a dropped idle
+                # connection -- which never reached the server -- is safe to
+                # retry on a fresh socket.
+                if isinstance(e, socket.timeout) or _attempt + 1 >= _attempts:
                     raise
     raw = buf.decode().strip()
     result = json.loads(raw)

@@ -868,6 +868,89 @@ class TestRpcTokenAuthorization(unittest.TestCase):
         self.assertIn("Unauthorized", resp[0].get("error", ""))
 
 
+@unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
+class TestPersistentRpcClientSocketTimeout(unittest.TestCase):
+    """Regression for #123565: a session kernel's ``_call()`` retries once on a
+    fresh socket (HERMES_RPC_PERSISTENT=1) so it can survive the server's idle
+    connection being legitimately gone by the next cell. But the retry must not
+    fire for a ``socket.timeout`` while a slow tool call is still running on the
+    server -- the server already has the request, so resending it dispatches
+    the tool a second time.
+    """
+
+    def test_timeout_is_not_retried_as_a_dropped_connection(self):
+        import importlib.util
+        import tempfile
+
+        from tools.code_execution_tool import generate_hermes_tools_module, SANDBOX_ALLOWED_TOOLS
+
+        src = generate_hermes_tools_module(list(SANDBOX_ALLOWED_TOOLS), transport="uds")
+        self.assertIn("_sock.settimeout(300)", src)
+        # Shrink the client's read timeout so a "slow tool call" can be
+        # simulated with a short sleep instead of the real 300s.
+        src = src.replace("_sock.settimeout(300)", "_sock.settimeout(0.2)")
+
+        tmp_dir = tempfile.mkdtemp()
+        mod_path = os.path.join(tmp_dir, "hermes_tools_under_test.py")
+        with open(mod_path, "w", encoding="utf-8") as f:
+            f.write(src)
+        spec = importlib.util.spec_from_file_location("hermes_tools_under_test", mod_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        sock_path = os.path.join(tmp_dir, "rpc.sock")
+        request_count = [0]
+        server_ready = threading.Event()
+
+        def server():
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            srv.listen(1)
+            server_ready.set()
+            # Mirrors _rpc_forever: re-accept a fresh connection per request,
+            # since the client stub reconnects on HERMES_RPC_PERSISTENT.
+            for _ in range(2):
+                srv.settimeout(0.5)
+                try:
+                    conn, _ = srv.accept()
+                except socket.timeout:
+                    break
+                with conn:
+                    buf = b""
+                    while not buf.endswith(b"\n"):
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    request_count[0] += 1
+                    # Simulate a tool call still running past the client's
+                    # read timeout (0.2s) -- the client should not have
+                    # resent by the time this responds.
+                    time.sleep(0.4)
+                    try:
+                        conn.sendall((json.dumps({"output": "late", "exit_code": 0}) + "\n").encode())
+                    except OSError:
+                        pass
+            srv.close()
+
+        t = threading.Thread(target=server, daemon=True)
+        t.start()
+        self.assertTrue(server_ready.wait(2), "test RPC server never started")
+
+        with patch.dict(os.environ, {
+            "HERMES_RPC_SOCKET": sock_path,
+            "HERMES_RPC_TOKEN": "test-token",
+            "HERMES_RPC_PERSISTENT": "1",
+        }):
+            with self.assertRaises(Exception):
+                mod._call("terminal", {"command": "echo hi"})
+
+        t.join(timeout=3)
+        self.assertEqual(
+            request_count[0], 1,
+            "client resent the request after a socket.timeout, so the server "
+            "ran the tool call twice",
+        )
 
 
 if __name__ == "__main__":
