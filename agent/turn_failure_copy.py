@@ -298,9 +298,9 @@ _ONE_OFF_COPY: Dict[str, str] = {
         "history is kept), or try /compress once more."
     ),
     "compression_disabled": (
-        "This conversation is too long for {model} and automatic shrinking is turned off in "
-        "your settings (compression.enabled). Run /compress to shrink it now, /new to start "
-        "fresh, or pick a model with a bigger context window."
+        "This conversation is too long for {model} and automatic shrinking is not active "
+        "for this session. Run /compress to shrink it now, /new to start fresh, or pick a "
+        "model with a bigger context window."
     ),
     # Wording deliberately avoids the overflow phrases gateway/run_turn.py matches on
     # (``_CONTEXT_OVERFLOW_ERROR_PHRASES``): this failure is transient, so the user's

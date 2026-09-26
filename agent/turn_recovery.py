@@ -1806,7 +1806,7 @@ def route_classified_error(
         agent._flush_status_buffer()
         _vlines(
             agent,
-            "❌ The conversation is too long for the model and automatic shrinking is off (compression.enabled: false).",
+            "❌ The conversation is too long for the model and automatic shrinking is not active for this session.",
             "   💡 Run /compress to shrink it now, /new to start fresh, "
             "pick a model with a bigger context window, or remove attachments.",
         )

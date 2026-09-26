@@ -61,7 +61,10 @@ def test_production_warn_emits_once_and_dedups():
 
     agent._emit_warning.assert_called_once()
     msg = agent._emit_warning.call_args[0][0]
-    assert "compression.enabled: false" in msg
+    # The copy must not blame the user's config (#123500): a host integration can disable
+    # compression programmatically, so the warning stays neutral about the cause.
+    assert "compression.enabled" not in msg
+    assert "not active for this session" in msg
     assert "10,000 tokens" in msg
 
 def test_clear_rearms_the_warning():

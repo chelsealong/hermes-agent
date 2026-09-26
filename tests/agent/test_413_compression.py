@@ -1571,4 +1571,6 @@ class TestOverflowWithCompactionDisabled:
         assert result.get("failed") is True
         assert result.get("compaction_disabled") is True
         assert result["failure_reason"] == "context_overflow" and result["failure_retryable"] is False
-        assert "/compress" in result["error"] and "compression.enabled" in result["error"]
+        # Neutral copy (#123500): must not claim the user's config disabled compression,
+        # since a host integration can also set ``compression_enabled = False`` itself.
+        assert "/compress" in result["error"] and "not active for this session" in result["error"]

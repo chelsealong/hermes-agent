@@ -124,18 +124,18 @@ class StatusOutputMixin:
     def _warn_uncompressed_context_overflow(self, preflight_tokens: int, context_length: int) -> None:
         """Deduped warning when uncompressed context exceeds the model limit; points the user at /compact.
 
-        When compression is explicitly disabled (compression.enabled: false), long sessions can grow past
-        the model context window with no compression to shrink them (#89297). Surface an actionable warning
-        so the user knows to run /compact or enable compression.
+        ``agent.compression_enabled`` can be False because of config OR because a host integration
+        that owns compression itself set it programmatically (#123500) — the copy must not claim
+        the user's config is the cause, since it may not be. Stay neutral about why and only
+        recommend /compact, which works regardless of who disabled automatic compression.
         """
         _warn_key = ("uncompressed_ctx_overflow", context_length)
         if getattr(self, "_last_ctx_overflow_warn", None) != _warn_key:
             self._last_ctx_overflow_warn = _warn_key
             self._emit_warning(
                 f"⚠️ Session context (~{preflight_tokens:,} tokens) exceeds the model "
-                f"context window (~{context_length:,} tokens) with compression disabled "
-                f"(compression.enabled: false). Use /compact to compress history or "
-                f"enable compression in config.yaml."
+                f"context window (~{context_length:,} tokens) with automatic compression "
+                f"not active for this session. Use /compact to compress history."
             )
 
     def _clear_context_overflow_warn(self) -> None:
