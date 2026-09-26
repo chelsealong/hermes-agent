@@ -252,10 +252,10 @@ def _find_skill_path(name: str) -> Optional[Path]:
     return found["path"] if found else None
 
 
-def skill_pending_diff(record: Dict[str, Any]) -> str:
-    """Full content (create) or unified diff vs. the on-disk skill (edit/patch/write_file),
-    rendered by /skills diff <id> on surfaces that can show it."""
-    payload = record.get("payload", {})
+def _single_op_diff(payload: Dict[str, Any]) -> str:
+    """Full content (create) or unified diff vs. the on-disk skill (edit/patch/write_file)
+    for one skill-write op — a single-op payload, or one element of a ``batch`` payload's
+    ``operations`` list."""
     action = payload.get("action", "")
     name = payload.get("name", "")
     if action == "create":
@@ -282,6 +282,27 @@ def skill_pending_diff(record: Dict[str, Any]) -> str:
     diff = difflib.unified_diff(current.splitlines(keepends=True), new.splitlines(keepends=True),
                                 fromfile=f"a/{target_label}", tofile=f"b/{target_label}")
     return "".join(diff) or "(no textual change)"
+
+
+def skill_pending_diff(record: Dict[str, Any]) -> str:
+    """Full content (create) or unified diff vs. the on-disk skill (edit/patch/write_file),
+    rendered by /skills diff <id> on surfaces that can show it. A ``batch`` payload (every
+    write staged through ``skill_manage``'s ``operations`` array) renders one such diff per
+    op, each under a ``skill_gist`` header — the single-op path above is unchanged."""
+    payload = record.get("payload", {})
+    if payload.get("action") != "batch":
+        return _single_op_diff(payload)
+    ops = payload.get("operations") or []
+    if not ops:
+        return "(empty batch)"
+    sections = [
+        "## {}\n\n{}".format(
+            skill_gist(op.get("action", ""), op.get("name", ""), content=op.get("content") or "",
+                       file_path=op.get("file_path") or "", old_string=op.get("old_string") or "",
+                       new_string=op.get("new_string") or ""),
+            _single_op_diff(op))
+        for op in ops]
+    return "\n\n".join(sections)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

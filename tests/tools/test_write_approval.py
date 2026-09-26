@@ -327,3 +327,26 @@ def test_memory_invalid_params_rejected_before_staging(hermes_home):
     r = json.loads(memory_tool("add", "memory", None, store=store))
     assert r["success"] is False
     assert wa.pending_count("memory") == 0
+
+def test_skill_pending_diff_renders_every_op_in_a_batch(hermes_home):
+    # skill_manage's atomic multi-op path stages the whole call as one 'batch' payload
+    # (tools/skill_manager_batch.py::_skill_manage_batch); /skills diff must show a
+    # real diff per op, not fall through to the generic "(batch on '')" catch-all — #123315.
+    from tools import write_approval as wa
+    record = {
+        "id": "abc123",
+        "payload": {
+            "action": "batch",
+            "operations": [
+                {"action": "create", "name": "widget-maker",
+                 "content": "---\ndescription: Makes widgets\n---\nBody"},
+                {"action": "patch", "name": "widget-maker", "file_path": "SKILL.md",
+                 "old_string": "Body", "new_string": "New body"},
+            ],
+        },
+    }
+    out = wa.skill_pending_diff(record)
+    assert "(batch on" not in out
+    assert out.count("widget-maker") == 2
+    assert "Makes widgets" in out  # create op's gist surfaces the frontmatter description
+    assert "New body" in out  # patch op's diff/fallback names the replacement text
