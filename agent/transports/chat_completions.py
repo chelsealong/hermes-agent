@@ -40,6 +40,12 @@ _STRIP_MSG_KEYS = (
 _STRIP_TC_KEYS = ("call_id", "response_item_id")
 _HIGH_EFFORTS = {"high", "xhigh", "max", "ultra"}
 
+# Gemini 3 models that 400 on ``thinkingBudget: 0`` ("Request contains an invalid argument",
+# no field named in the error body) despite it being the documented disable for the rest of the
+# 2.5/3 family. Acceptance is per-model, not per-tier — ``gemini-3.1-flash-lite`` accepts the
+# same field ``gemini-3.5-flash-lite`` rejects — so this is a name list, not a rule. (#123512)
+_GEMINI_THINKING_BUDGET_DISABLE_REJECTED = frozenset({"gemini-3.5-flash-lite"})
+
 
 def _rename_tool_search_bridge_for_xai(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Alias the client ``tool_search`` declaration for xAI; returns ``(tools, {alias: "tool_search"})``.
@@ -183,7 +189,11 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         # ``gemini-flash-latest`` alias); future majors are added only when the
         # API documents thinkingBudget for them. (#91927)
         config: dict[str, Any] = {"includeThoughts": False}
-        if normalized_model == "gemini-flash-latest" or normalized_model.startswith(("gemini-2.5-", "gemini-3")):
+        if normalized_model in _GEMINI_THINKING_BUDGET_DISABLE_REJECTED:
+            # thinkingBudget: 0 400s here; thinkingLevel: "minimal" is Google's documented
+            # closest-to-zero level and is accepted where the hard disable is not.
+            config["thinkingLevel"] = "minimal"
+        elif normalized_model == "gemini-flash-latest" or normalized_model.startswith(("gemini-2.5-", "gemini-3")):
             config["thinkingBudget"] = 0
         return config
     thinking_config: dict[str, Any] = {"includeThoughts": True}
