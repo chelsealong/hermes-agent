@@ -78,11 +78,13 @@ def _shell_write_re(file_alt: str) -> str:
     """Mechanical shell write into *file_alt*: ``>``/``>>``, ``sed -i``, ``tee`` (target as immediate argument, so
     ``| tee output | AGENTS.md |`` cells miss), ``cp``/``mv`` with the file as destination (source arg required, so
     ``cp AGENTS.md backup/`` misses; ``AGENTS.md.bak`` is not the file). A single ``>`` needs a preceding word/quote/
-    paren char so blockquotes (``> text``) and arrows (``-> file``) miss; a preceding word run whose start is a ``<``
-    is the close of a ``<placeholder>`` (prose like ``<vault>/.claude/settings.json``), not a redirect, so it misses
-    too (``\\b(?<!<)`` anchors on the run's true start rather than the single character touching ``>``)."""
+    paren char so blockquotes (``> text``) and arrows (``-> file``) miss. A `<placeholder>`-shaped false positive
+    (``<vault>/.claude/settings.json``) is a REAL POSIX double-redirect too (``<dummy>AGENTS.md`` reads stdin from
+    ``dummy`` and writes stdout to ``AGENTS.md`` with no space needed), so it is left alone: keeping this pattern
+    (and the whole ``*_mod_shell`` family) at full severity in prose is deliberate, not a gap — see
+    ``plugin_guard_context.py``'s ``_PROSE_KEEPS_FULL_SEVERITY_IDS``."""
     return (
-        rf'(?:>>|["\'`)\]]\s*>|\b(?<!<)\w+\s*>)\s*[~\w./-]*{file_alt}(?!\.?\w)'
+        rf'(?:>>|[\w"\'`)\]]\s*>)\s*[~\w./-]*{file_alt}(?!\.?\w)'
         rf'|\bsed\b[^\n]*\s(?:-[A-Za-z]*i[A-Za-z]*|--in-place)\b[^\n]*{file_alt}(?!\.?\w)'
         rf'|\btee\s+(?:-a\s+)?[~\w./"\'-]*{file_alt}(?!\.?\w)'
         rf'|\b(?:cp|mv)\s+[^\s|;&]+\s+[^\n|;&]{{0,40}}?{file_alt}(?!\.?\w)')
