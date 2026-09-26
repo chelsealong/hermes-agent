@@ -514,19 +514,46 @@ def env_for(*names: str, base_env: Optional[dict] = None) -> dict[str, str]:
     return compose_env(diffs, base=base_env)
 
 
+def _requires_python(project_root: Path) -> str | None:
+    """The project's ``project.requires-python``, or ``None`` if undeclared/unreadable."""
+    import tomllib
+
+    try:
+        text = (project_root / "pyproject.toml").read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    document = tomllib.loads(text)
+    value = document.get("project", {}).get("requires-python")
+    return value if isinstance(value, str) else None
+
+
 def _runtime_state_matches(fact: dict, stamp: str, *, project_root: Path | None = None) -> bool:
     if not isinstance(fact, dict) or fact.get("stamp") != stamp:
         return False
-    from pm.environments import selected_venv
+    from pm.environments import selected_venv, venv_python_version
 
+    root = paths.repo_root() if project_root is None else project_root
     try:
-        environment = selected_venv(paths.repo_root() if project_root is None else project_root)
+        environment = selected_venv(root)
     except (OSError, RuntimeError, ValueError):
         return False
     recorded = fact.get("environment")
     if recorded is not None and (not isinstance(recorded, str) or Path(recorded).resolve() != environment):
         return False
-    return (environment / "pyvenv.cfg").is_file()
+    if not (environment / "pyvenv.cfg").is_file():
+        return False
+    # The dependency stamp does not encode the project's own ``requires-python``: a commit
+    # that bumps it without changing the resolved package set leaves the stamp unchanged,
+    # so a venv built for the old interpreter would otherwise still read as current.
+    requires_python = _requires_python(root)
+    if requires_python:
+        version = venv_python_version(environment)
+        if version is not None:
+            from packaging.specifiers import SpecifierSet
+
+            if not SpecifierSet(requires_python).contains(f"{version[0]}.{version[1]}", prereleases=True):
+                return False
+    return True
 
 
 def _member_inputs(plugins: PluginInput | None) -> dict:
