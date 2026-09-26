@@ -34,15 +34,17 @@ def test_disabled_reasoning_zeroes_thinking_budget_where_supported(model, expect
             assert "thinkingBudget" not in config
 
 
-def test_disabled_reasoning_degrades_to_minimal_where_budget_zero_is_rejected():
+def test_disabled_reasoning_degrades_to_low_where_budget_zero_is_rejected():
     # gemini-3.5-flash-lite 400s on thinkingBudget: 0 ("Request contains an invalid
-    # argument"); it accepts thinkingLevel: "minimal" instead (#123512).
+    # argument"); fall back to "low", the lowest thinkingLevel Flash documents
+    # (matching the enabled-reasoning clamp's minimal->low), rather than the
+    # undocumented "minimal" that same clamp treats as invalid for Flash (#123512).
     for reasoning in ({"enabled": False}, {"effort": "none"}):
         config = _build_gemini_thinking_config("gemini-3.5-flash-lite", reasoning)
         assert config is not None
         assert config.get("includeThoughts") is False
         assert "thinkingBudget" not in config
-        assert config.get("thinkingLevel") == "minimal"
+        assert config.get("thinkingLevel") == "low"
 
 
 def test_enabled_reasoning_never_zeroes_budget_and_non_gemini_gets_nothing():

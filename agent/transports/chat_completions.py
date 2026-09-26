@@ -45,6 +45,9 @@ _HIGH_EFFORTS = {"high", "xhigh", "max", "ultra"}
 # 2.5/3 family. Acceptance is per-model, not per-tier — ``gemini-3.1-flash-lite`` accepts the
 # same field ``gemini-3.5-flash-lite`` rejects — so this is a name list, not a rule. (#123512)
 _GEMINI_THINKING_BUDGET_DISABLE_REJECTED = frozenset({"gemini-3.5-flash-lite"})
+# Flash's documented thinkingLevel set is {low, medium, high} (529eb29b6a); "low" is the
+# lowest documented level, not an unverified "minimal".
+_GEMINI_THINKING_BUDGET_DISABLE_FALLBACK_LEVEL = "low"
 
 
 def _rename_tool_search_bridge_for_xai(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -190,9 +193,10 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
         # API documents thinkingBudget for them. (#91927)
         config: dict[str, Any] = {"includeThoughts": False}
         if normalized_model in _GEMINI_THINKING_BUDGET_DISABLE_REJECTED:
-            # thinkingBudget: 0 400s here; thinkingLevel: "minimal" is Google's documented
-            # closest-to-zero level and is accepted where the hard disable is not.
-            config["thinkingLevel"] = "minimal"
+            # thinkingBudget: 0 400s here. Fall back to the lowest level Flash documents
+            # (low/medium/high, per the enabled-reasoning clamp below) rather than the
+            # undocumented "minimal", which that same clamp treats as invalid for Flash.
+            config["thinkingLevel"] = _GEMINI_THINKING_BUDGET_DISABLE_FALLBACK_LEVEL
         elif normalized_model == "gemini-flash-latest" or normalized_model.startswith(("gemini-2.5-", "gemini-3")):
             config["thinkingBudget"] = 0
         return config
