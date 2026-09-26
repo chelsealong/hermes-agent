@@ -97,32 +97,60 @@ export function checkDistBuilt(distDir) {
 // `{$:n,}` vs `{categories:n,}`, leaving an invalid destructuring pattern).
 // Parse each emitted chunk as an ES module before packaging so a corrupted
 // build fails loudly and the update retry rebuilds instead of shipping it.
+//
+// All chunks are parsed in ONE child process. A renderer build can emit close
+// to a thousand chunks, and spawning a `node --check` per chunk scales with
+// process-spawn cost: on a loaded Windows host (real-time AV, ~5s/spawn) that
+// ran ~80 minutes past the desktop update hand-off's 600s idle watchdog,
+// silently, twice (#123216). `vm.SourceTextModule` parses source as an ES
+// module without linking or evaluating it — the same verdict as
+// `node --input-type=module --check` — so the whole batch runs in one process.
+const PARSE_ALL_CHUNKS_SCRIPT = `
+const vm = require("node:vm")
+const fs = require("node:fs")
+const path = require("node:path")
+const dir = process.argv[1]
+for (const name of fs.readdirSync(dir).filter(n => n.endsWith(".js"))) {
+  try {
+    new vm.SourceTextModule(fs.readFileSync(path.join(dir, name), "utf8"))
+  } catch (e) {
+    process.stdout.write(JSON.stringify({ name, detail: String((e && e.message) || e) }))
+    process.exit(3)
+  }
+}
+`
+
 function verifyChunksParse(assetsDir) {
   const nodeBin = process.env.NODE ||
-    (process.execPath && process.execPath.endsWith("node") ? process.execPath : "node")
-  const chunks = readdirSync(assetsDir).filter(name => name.endsWith(".js"))
-  for (const name of chunks) {
-    const file = join(assetsDir, name)
-    const probe = spawnSync(nodeBin, ["--input-type=module", "--check"], {
-      input: readFileSync(file),
-      maxBuffer: 64 * 1024 * 1024,
-      timeout: 60_000,
-    })
-    if (probe.error) {
-      return {
-        ok: false,
-        error: `could not run node to syntax-check ${name}: ${probe.error.message}`,
-      }
+    (process.execPath && /node(\.exe)?$/i.test(process.execPath) ? process.execPath : "node")
+  const probe = spawnSync(
+    nodeBin,
+    ["--experimental-vm-modules", "--no-warnings", "-e", PARSE_ALL_CHUNKS_SCRIPT, assetsDir],
+    { maxBuffer: 64 * 1024 * 1024, timeout: 600_000 },
+  )
+  if (probe.error) {
+    return {
+      ok: false,
+      error: `could not run node to syntax-check renderer chunks: ${probe.error.message}`,
     }
-    if (probe.status !== 0) {
-      const detail = String(probe.stderr || "").trim().split("\n").slice(0, 4).join(" / ")
-      return {
-        ok: false,
-        error: `built chunk is not valid ES module syntax: ${name} — ${detail}. ` +
-          `A renderer chunk failed to parse, so packaging would ship an app that ` +
-          `white-screens with "Uncaught SyntaxError" on launch. Re-run the build.`,
-      }
+  }
+  if (probe.status === 3) {
+    let failure = { name: "?", detail: String(probe.stdout || "") }
+    try {
+      failure = JSON.parse(String(probe.stdout))
+    } catch {
+      // stdout wasn't the JSON payload we expect; fall back to the raw text above.
     }
+    return {
+      ok: false,
+      error: `built chunk is not valid ES module syntax: ${failure.name} — ${failure.detail}. ` +
+        `A renderer chunk failed to parse, so packaging would ship an app that ` +
+        `white-screens with "Uncaught SyntaxError" on launch. Re-run the build.`,
+    }
+  }
+  if (probe.status !== 0) {
+    const detail = String(probe.stderr || "").trim().split("\n").slice(0, 4).join(" / ")
+    return { ok: false, error: `could not syntax-check renderer chunks: ${detail}` }
   }
   return { ok: true }
 }

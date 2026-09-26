@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 
 import { checkDistBuilt } from '../scripts/assert-dist-built.mjs'
 
@@ -179,6 +179,37 @@ test('checkDistBuilt fails when a chunk is not valid ES module syntax', () => {
     assert.match(result.error, /index-abc123\.js/)
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('checkDistBuilt syntax-checks every chunk with a single spawned process (#123216)', async () => {
+  // The reported bug is one `node --check` spawn per chunk: on a slow host a
+  // ~960-chunk renderer build spawns ~960 processes and stalls for ~80
+  // minutes with no output, past the desktop update hand-off's idle
+  // watchdog. Assert the actual fix — spawn count independent of chunk
+  // count — not just that the parse verdict is still correct.
+  const spawnSyncMock = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }))
+  vi.doMock('child_process', () => ({ spawnSync: spawnSyncMock }))
+  vi.resetModules()
+  try {
+    const { checkDistBuilt: checkDistBuiltWithMockedSpawn } = await import('../scripts/assert-dist-built.mjs')
+    const { tempRoot, distDir } = makeDist(d => {
+      fs.writeFileSync(path.join(d, 'index.html'), '<!doctype html>', 'utf8')
+      fs.mkdirSync(path.join(d, 'assets'))
+      for (let i = 0; i < 20; i++) {
+        fs.writeFileSync(path.join(d, 'assets', `chunk-${i}-abc.js`), `export const v = ${i}`, 'utf8')
+      }
+    })
+    try {
+      const result = checkDistBuiltWithMockedSpawn(distDir)
+      assert.deepEqual(result, { ok: true })
+      assert.equal(spawnSyncMock.mock.calls.length, 1)
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  } finally {
+    vi.doUnmock('child_process')
+    vi.resetModules()
   }
 })
 
