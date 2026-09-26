@@ -36,14 +36,18 @@ EXCLUDED_DIRS = {
 # hold hostile strings to prove the plugin rejects them, and an un-overridable ``dangerous``
 # made such plugins uninstallable and taught authors to obfuscate their own tests (#89610).
 
+# All JS/TS source extensions: the plain and module-flavored variants (.mjs/.cjs/.mts/.cts)
+# and the JSX/TSX variants share the same // line comments and /* */ block comments.
+JS_TS_EXTENSIONS = {".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".mts", ".cts"}
+
 # Code files, where "reads an env secret" / "HTTP call with a key" is normal (requires_env).
-CODE_FILE_EXTENSIONS = {".py", ".js", ".ts", ".sh", ".bash", ".rb", ".pl", ".php"}
+CODE_FILE_EXTENSIONS = {".py", ".sh", ".bash", ".rb", ".pl", ".php"} | JS_TS_EXTENSIONS
 
 # Line-comment marker per code extension. Whole-line comments explain intent; hardening
 # notes like "# a symlink could point at /etc/passwd" are prose *about* a defense.
 COMMENT_PREFIXES_BY_EXTENSION = {
     ".py": "#", ".sh": "#", ".bash": "#", ".rb": "#", ".pl": "#", ".r": "#", ".jl": "#",
-    ".js": "//", ".ts": "//", ".php": "//"}
+    ".php": "//", **{ext: "//" for ext in JS_TS_EXTENSIONS}}
 
 # One severity step down from the pattern's default.
 _COMMENT_SEVERITY_CAP = {"critical": "high", "high": "medium"}
@@ -159,10 +163,11 @@ def _filter_findings(findings: List[Finding], rel_path: str, file_path: Path) ->
     """Apply plugin-specific exemptions and severity remaps to raw findings."""
     is_code = Path(rel_path).suffix.lower() in CODE_FILE_EXTENSIONS
     main_guard_lines = _main_guard_body_lines(file_path) if file_path.suffix.lower() == ".py" else set()
-    is_js = Path(rel_path).suffix.lower() in {".js", ".ts"}
+    is_js = Path(rel_path).suffix.lower() in JS_TS_EXTENSIONS
     # A CI workflow definition runs on the forge's runner, not the host: same cap as a README.
     doc_prose = is_doc_prose(rel_path) or is_ci_workflow(rel_path)
     lines = _file_lines(file_path) if findings else []
+    block_comment_lines = _c_style_block_comment_lines(lines) if is_js else set()
     out: List[Finding] = []
     for f in findings:
         if is_code and f.pattern_id in CODE_EXEMPT_PATTERN_IDS:
@@ -175,7 +180,7 @@ def _filter_findings(findings: List[Finding], rel_path: str, file_path: Path) ->
             f.severity = DOC_PROSE_DEMOTIONS[f.pattern_id]
         line = lines[f.line - 1] if 0 < f.line <= len(lines) else f.match
         f.severity = _context_severity(f, rel_path, line, doc_prose, is_code)
-        if _is_defensive_documentation(f, rel_path):
+        if f.line in block_comment_lines or _is_defensive_documentation(f, rel_path):
             f.severity = _comment_severity(f)
         # Last and critical-only: a one-step cap that can never re-raise a finding an
         # earlier remap already lowered.
@@ -210,6 +215,27 @@ def _file_lines(file_path: Path) -> List[str]:
         return file_path.read_text(encoding="utf-8-sig").split("\n")
     except (OSError, UnicodeDecodeError):
         return []
+
+
+def _c_style_block_comment_lines(lines: List[str]) -> set:
+    """1-indexed lines that open, continue or close a whole-line ``/* ... */`` block comment
+    (JSDoc's ``/**`` included). A JSDoc line starts with ``*``, not ``//``, so without this a
+    hardening note inside one keeps full severity while the identical sentence behind ``//``
+    is capped — the same text scored ``critical`` or ``low`` depending only on comment style."""
+    result: set = set()
+    inside = False
+    for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if inside:
+            result.add(i)
+            if "*/" in stripped:
+                inside = False
+            continue
+        if stripped.startswith("/*"):
+            result.add(i)
+            if "*/" not in stripped[2:]:
+                inside = True
+    return result
 
 
 def _context_severity(f: Finding, rel_path: str, line: str, doc_prose: bool, is_code: bool) -> str:

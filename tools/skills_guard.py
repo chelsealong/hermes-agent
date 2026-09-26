@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 
-SCANNER_VERSION = "skills-guard-v6"
+SCANNER_VERSION = "skills-guard-v7"
 
 # NVIDIA-verified skills each ship a signed `skill.oms.sig` + governance `skill-card.md`.
 TRUSTED_REPOS = {"openai/skills", "anthropics/skills", "huggingface/skills", "NVIDIA/skills"}
@@ -78,9 +78,11 @@ def _shell_write_re(file_alt: str) -> str:
     """Mechanical shell write into *file_alt*: ``>``/``>>``, ``sed -i``, ``tee`` (target as immediate argument, so
     ``| tee output | AGENTS.md |`` cells miss), ``cp``/``mv`` with the file as destination (source arg required, so
     ``cp AGENTS.md backup/`` misses; ``AGENTS.md.bak`` is not the file). A single ``>`` needs a preceding word/quote/
-    paren char so blockquotes (``> text``) and arrows (``-> file``) miss."""
+    paren char so blockquotes (``> text``) and arrows (``-> file``) miss; a preceding word run whose start is a ``<``
+    is the close of a ``<placeholder>`` (prose like ``<vault>/.claude/settings.json``), not a redirect, so it misses
+    too (``\\b(?<!<)`` anchors on the run's true start rather than the single character touching ``>``)."""
     return (
-        rf'(?:>>|[\w"\'`)\]]\s*>)\s*[~\w./-]*{file_alt}(?!\.?\w)'
+        rf'(?:>>|["\'`)\]]\s*>|\b(?<!<)\w+\s*>)\s*[~\w./-]*{file_alt}(?!\.?\w)'
         rf'|\bsed\b[^\n]*\s(?:-[A-Za-z]*i[A-Za-z]*|--in-place)\b[^\n]*{file_alt}(?!\.?\w)'
         rf'|\btee\s+(?:-a\s+)?[~\w./"\'-]*{file_alt}(?!\.?\w)'
         rf'|\b(?:cp|mv)\s+[^\s|;&]+\s+[^\n|;&]{{0,40}}?{file_alt}(?!\.?\w)')
@@ -443,8 +445,9 @@ _COMPILED_THREAT_PATTERNS = [(re.compile(pattern, re.IGNORECASE), *rest) for pat
 _PATH_REFERENCE_PATTERN_IDS = frozenset({"ssh_dir_access", "aws_dir_access", "gpg_dir_access", "kube_dir_access",
                                          "docker_dir_access", "ssh_backdoor", "system_passwd_access"})
 _COMMENT_PREFIX = {'.py': '#', '.sh': '#', '.bash': '#', '.rb': '#', '.pl': '#', '.r': '#', '.jl': '#', '.yaml': '#',
-                   '.yml': '#', '.toml': '#', '.conf': '#', '.cfg': ('#', ';'), '.ini': ('#', ';'), '.js': '//',
-                   '.ts': '//', '.php': ('//', '#')}
+                   '.yml': '#', '.toml': '#', '.conf': '#', '.cfg': ('#', ';'), '.ini': ('#', ';'),
+                   '.js': '//', '.ts': '//', '.mjs': '//', '.cjs': '//', '.jsx': '//', '.tsx': '//',
+                   '.mts': '//', '.cts': '//', '.php': ('//', '#')}
 # `NAME = ...`, `NAME: Type = ...`, `const NAME = ...` or a mapping key `name:` whose name says "not these".
 _DENYLIST_OWNER_RE = re.compile(
     r'^\s*(?:(?:const|let|var|export)\s+)?[\w.\-]*(?:deny|black|block|skip|exclu|ignor|forbid|refus|reject|never'
@@ -490,7 +493,8 @@ MAX_FILE_COUNT, MAX_TOTAL_SIZE_KB, MAX_SINGLE_FILE_KB = 50, 5120, 256
 
 # Text extensions to scan; known binary extensions that should NOT be in a skill; script types allowed +x.
 SCANNABLE_EXTENSIONS = {
-    '.md', '.txt', '.py', '.sh', '.bash', '.js', '.ts', '.rb', '.yaml', '.yml', '.json', '.toml',
+    '.md', '.txt', '.py', '.sh', '.bash', '.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx', '.mts', '.cts',
+    '.rb', '.yaml', '.yml', '.json', '.toml',
     '.cfg', '.ini', '.conf', '.html', '.css', '.xml', '.tex', '.r', '.jl', '.pl', '.php'}
 SUSPICIOUS_BINARY_EXTENSIONS = {
     '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.com', '.msi', '.dmg', '.app', '.deb', '.rpm'}
