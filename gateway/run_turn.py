@@ -258,15 +258,28 @@ class GatewayTurnMixin:
                 thread_id=str(source.thread_id) if getattr(source, "thread_id", None) else None,
                 parent_id=str(source.parent_chat_id) if getattr(source, "parent_chat_id", None) else None,
             )
-            if ch:
-                if ch.model:
-                    model = ch.model
-                if ch.provider:
-                    runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(ch.provider, target_model=model or None)
+            if ch and ch.provider:
+                try:
+                    ch_runtime_kwargs = _resolve_runtime_agent_kwargs_for_provider(
+                        ch.provider, target_model=(ch.model or model) or None)
+                except Exception as exc:
+                    # Mirror the session /model override handling above: a static channel override
+                    # whose credentials fail must not abort the turn. Drop the override's model
+                    # together with its provider (sending it to the default route risks a
+                    # wrong-model 400) and run on the default route, which already falls through
+                    # fallback_providers (#123509).
+                    logger.warning("Channel override provider %s unavailable: %s", ch.provider, exc)
+                    if not self._pre_agent_fallback_notice:
+                        from hermes_cli.fallback_config import pre_agent_fallback_notice
+                        self._pre_agent_fallback_notice = pre_agent_fallback_notice(
+                            ch.provider, ch.model, runtime_kwargs.get("provider"), model)
+                else:
+                    runtime_kwargs = ch_runtime_kwargs
                     ch_runtime_model = runtime_kwargs.pop("model", None)
                     # Adopt the provider's bundled model only when the override named none.
-                    if ch_runtime_model and not ch.model:
-                        model = ch_runtime_model
+                    model = ch.model or ch_runtime_model or model
+            elif ch and ch.model:
+                model = ch.model
 
         if override and skey:
             model, runtime_kwargs = self._apply_session_model_override(skey, model, runtime_kwargs)

@@ -153,4 +153,51 @@ class TestResolveSessionAgentRuntimePriority:
         assert model == "channel/model"
         assert runtime["provider"] == "openrouter"
 
+    def test_channel_override_provider_failure_falls_back_to_default(self):
+        """A static channel_overrides provider whose credentials fail to resolve must not abort
+        the turn (#123509) — it should behave like the session /model override does above it and
+        fall back to the default route instead of propagating the exception."""
+        runner = object.__new__(GatewayRunner)
+        runner._session_model_overrides = {}
+        runner.config = GatewayConfig(
+            platforms={
+                Platform.DISCORD: PlatformConfig(
+                    enabled=True,
+                    channel_overrides={
+                        "chan_1": ChannelOverride(
+                            model="channel/model",
+                            provider="openai-codex",
+                        ),
+                    },
+                ),
+            },
+        )
+        source = SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="chan_1",
+            user_id="u1",
+        )
+
+        def _raise_for_override(provider, target_model=None):
+            raise RuntimeError("Credentials are still valid (codex_rate_limited)")
+
+        with patch("gateway.run._resolve_gateway_model", return_value="global/model"), \
+             patch("gateway.run._resolve_runtime_agent_kwargs", return_value={
+                 "provider": "anthropic",
+                 "api_key": "k",
+                 "base_url": "https://api.anthropic.com",
+                 "api_mode": "chat_completions",
+             }), \
+             patch(
+                 "gateway.run._resolve_runtime_agent_kwargs_for_provider",
+                 side_effect=_raise_for_override,
+             ):
+            model, runtime = runner._resolve_session_agent_runtime(
+                source=source,
+                user_config={"model": {"default": "global/model"}},
+            )
+        assert model == "global/model"
+        assert runtime["provider"] == "anthropic"
+        assert "openai-codex" in (runner._pre_agent_fallback_notice or "")
+
 
