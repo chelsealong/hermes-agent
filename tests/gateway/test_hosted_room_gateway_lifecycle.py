@@ -6,11 +6,13 @@ import asyncio
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from gateway import hosted_room_driver, hosted_rooms
+from gateway import channel_directory, hosted_room_driver, hosted_rooms, run_heartbeat_restore
 from gateway.run import GatewayRunner
+from tests.gateway.restart_test_helpers import make_restart_runner
 from tui_gateway.hosted_room_service import HostedRoomService
 
 
@@ -232,3 +234,45 @@ def test_dashboard_and_gateway_workers_share_one_fenced_execution_owner(tmp_path
     assert len(gateway_rpc.submits) + len(dashboard_rpc.submits) == 1
     events = hosted_rooms.read_events(db, room_id="room-1", since_seq=0)["events"]
     assert sum(event["kind"] == "message.member" for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_hosted_room_worker_start_waits_for_startup_warmup(monkeypatch):
+    """#123347: the room worker's own import (``tui_gateway.server`` -> ``tools.connectors``)
+    used to start on an executor thread while the startup warm-up's import (``run_agent`` ->
+    ``model_tools`` -> ``tools.connectors``) was still running on a SECOND executor thread —
+    the warm-up task was only awaited later, in ``_finish_startup_restore``. Two threads racing
+    to import overlapping module chains hit CPython's import-lock deadlock detector in
+    production. ``_start_post_connect_services`` must await the warm-up first, so the room
+    worker's import never starts while the warm-up's is still in flight."""
+    monkeypatch.setenv("HERMES_STARTUP_WARMUP_TIMEOUT", "5")
+    runner, _adapter = make_restart_runner()
+    runner._spawn_supervised = lambda *a, **k: None
+    runner._start_loop_heartbeat_task = lambda: None
+    runner._start_heartbeat_poller = lambda: None
+    runner._send_update_notification = AsyncMock(return_value=True)
+    monkeypatch.setattr(run_heartbeat_restore, "restore_heartbeat_watches", AsyncMock())
+    monkeypatch.setattr(channel_directory, "build_channel_directory", AsyncMock(return_value={}))
+
+    warmup_done = asyncio.Event()
+    runner._startup_warmup_task = asyncio.ensure_future(warmup_done.wait())
+
+    observed = {}
+
+    async def fake_ensure_hosted_room_worker():
+        observed["warmup_done"] = runner._startup_warmup_task.done()
+        return None
+
+    runner._ensure_hosted_room_worker = fake_ensure_hosted_room_worker
+
+    async def finish_warmup_soon():
+        await asyncio.sleep(0.05)
+        warmup_done.set()
+
+    finisher = asyncio.ensure_future(finish_warmup_soon())
+    try:
+        await asyncio.wait_for(runner._start_post_connect_services(connected_count=1), timeout=5)
+    finally:
+        await finisher
+
+    assert observed["warmup_done"] is True

@@ -1416,6 +1416,15 @@ class GatewayStartupMixin:
     async def _start_post_connect_services(self, connected_count: int) -> None:
         """Room worker, heartbeat, gateway:startup hook, channel directory, /update notice."""
         from gateway.run import _hermes_home
+        # The warm-up (``_start_startup_warmup``) imports the same heavy chain
+        # (``run_agent`` -> ``model_tools`` -> ``tools.connectors``) on its own executor
+        # thread and, until now, was only awaited later in ``_finish_startup_restore`` —
+        # well after this method's own ``import tui_gateway.server`` (which reaches
+        # ``tools.connectors`` too) had already started on a second executor thread. Two
+        # threads racing to import overlapping module chains hit CPython's import
+        # deadlock detector in production (#123347). Awaiting it here first serializes
+        # the two imports; a no-op once the warm-up (or its bounded timeout) has settled.
+        await self._await_startup_warmup()
         try:
             await self._ensure_hosted_room_worker()
         except Exception:
