@@ -345,6 +345,23 @@ def _project_for_session(
     return max((index.match(t) for t in candidates), key=lambda hit: hit[1])[0]
 
 
+def _project_path(project: dict) -> Optional[str]:
+    """``primary_path``, falling back to the folder marked primary, else the first folder.
+
+    Mirrors ``hermes_cli.projects_db.find_by_primary_path``'s fallback: removing a
+    project's primary folder nulls ``primary_path`` (``remove_folder``) while sibling
+    folders can remain, and the tree's ``path`` must still resolve to one of them —
+    else the sidebar's project-root "+" falls through to a detached session (#124808).
+    """
+    if project.get("primary_path"):
+        return project["primary_path"]
+    folders = project.get("folders") or []
+    primary_folder = next((f for f in folders if f.get("is_primary")), None)
+    if primary_folder:
+        return primary_folder.get("path")
+    return folders[0].get("path") if folders else None
+
+
 def _project_node(
     pid: str, label: str, path: Optional[str], repos: list[dict], session_count: int,
     last_active: float, preview_sessions: list[dict], sessions: Optional[list[dict]] = None,
@@ -450,7 +467,7 @@ def build_tree(
         repos = _build_repos(psessions, resolve, hydrate)
         repos = _seed_folder_repos(repos, project.get("folders") or [], resolve)
         result.append(_project_node(
-            project["id"], project.get("name") or project["id"], project.get("primary_path"), repos,
+            project["id"], project.get("name") or project["id"], _project_path(project), repos,
             len(psessions), _last_active(psessions), _previews(psessions), psessions,
             color=project.get("color"), icon=project.get("icon")))
 

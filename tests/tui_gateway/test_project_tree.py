@@ -738,3 +738,17 @@ def test_cwdless_session_with_repo_root_stays_in_its_explicit_project():
     assert owned["id"] in explicit["sessionIds"]
     assert owned["id"] in [s["id"] for s in _sessions_of(explicit)]
     assert _home_session_ids(tree) == [detached["id"]]
+
+
+def test_project_with_null_primary_path_falls_back_to_a_folder():
+    """``primary_path`` goes NULL when its folder is removed
+    (hermes_cli/projects_db.py remove_folder), but sibling folders can remain.
+    The tree's ``path`` must still resolve to one of them — the same fallback
+    ``find_by_primary_path`` already applies — so the sidebar's project-root
+    "+" anchors the new session instead of falling through to a detached one."""
+    project = _project("p_app", "App", ["/www/app", "/www/app2"], primary_path=None)
+
+    tree = pt.build_tree([project], [], [], resolve=lambda _cwd: None)
+
+    explicit = next(p for p in tree["projects"] if p["id"] == "p_app")
+    assert explicit["path"] == "/www/app"
