@@ -27,9 +27,17 @@
  *    the old length) starts the next slice mid-exchange.
  */
 
+import { $botMeta, $lastRoster } from './data'
 import { $groupChats, appendGroupChatEntry, updateGroupChat } from './group-chat'
 import type { GroupChatRoom } from './group-chat'
-import { groupMemberKey, groupSessionKey, groupSessionMemberKey, groupSessionThread } from './group-membership'
+import {
+  groupChatMemberBots,
+  groupMemberKey,
+  groupSessionKey,
+  groupSessionMemberKey,
+  groupSessionThread,
+  liveGroupChatNames
+} from './group-membership'
 import { GROUP_PROMPT_HEADER_PREFIX } from './group-round-prompt'
 import { requestForBot } from './routing'
 import type { GroupMember } from './types'
@@ -234,5 +242,22 @@ export async function sweepExternalGroupWrites(group: string, members: GroupMemb
         mirrorExternalGroupWrites(group, member, thread, state?.messages)
       }
     }
+  }
+}
+
+/** Background trigger: sweep every live room, not only the one the user has
+ *  open (#124417). A member's own session moves regardless of which room is
+ *  in front of the user — cron, the CLI, another window — and the mirror
+ *  (and the `@user` needs-you badge it sets via `appendGroupChatEntry`) used
+ *  to wait for `openGroupChat()` to notice. Wired to the gateway's
+ *  `sessions.changed` broadcast, which already fires on exactly that class of
+ *  write; each room's own idle/running guard in `sweepExternalGroupWrites`
+ *  still applies, so a room mid-round is left alone. */
+export async function sweepAllExternalGroupWrites() {
+  const roster = $lastRoster.get()
+  const metaByName = $botMeta.get()
+
+  for (const group of liveGroupChatNames()) {
+    await sweepExternalGroupWrites(group, groupChatMemberBots(group, roster, metaByName))
   }
 }

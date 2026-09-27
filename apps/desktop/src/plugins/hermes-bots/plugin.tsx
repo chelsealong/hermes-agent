@@ -65,6 +65,7 @@ import {
   sweepGroupChatMembersForRemovedConnection,
   updateGroupChat
 } from './group-chat'
+import { sweepAllExternalGroupWrites } from './group-external-writes'
 import { groupWorkspaceOwnerKey } from './group-membership'
 import { annotateOrphanedGroupChatMembers } from './hygiene'
 import { BOTS_LOCALES } from './i18n'
@@ -686,6 +687,20 @@ export default {
             })
           : null
 
+      // Background external-write sweep (#124417): `sessions.changed` already
+      // broadcasts on the same state.db movement a member's own session write
+      // makes, so a group room catches up (and badges `@user` lines) without
+      // the user opening it. Sweeping every live room per event is the same
+      // work `openGroupChat()` already does for one room; the gateway floors
+      // this broadcast to at most once per 2s, so it never turns into a poll
+      // loop. Feature-detected like the reclaim listener above.
+      const stopExternalWritesSync =
+        typeof host.onEvent === 'function'
+          ? host.onEvent('sessions.changed', () => {
+              void sweepAllExternalGroupWrites()
+            })
+          : null
+
       $botsPaneVisible.set(Boolean($sidebarVisible.get()))
       $botChatFocused.set(sessionOwnsWorkspace())
       // A persisted layout can boot directly into Bot Mode. Reconcile now,
@@ -701,6 +716,7 @@ export default {
           stopGroupSync()
           stopFocusSync?.()
           stopReclaimSync?.()
+          stopExternalWritesSync?.()
         })
       }
     } else {

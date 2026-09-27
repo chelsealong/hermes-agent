@@ -181,4 +181,36 @@ describe('external writes into a member session', () => {
     ])
     expect(room.gateway.calls).toHaveLength(2)
   })
+
+  it('reaches a room nobody opened, off the background sweep trigger (#124417)', async () => {
+    const gateway = createGroupGateway(options)
+    const room = await loadRoom(gateway)
+    const writes = await import('./group-external-writes')
+    const data = await import('./data')
+
+    const thread = await drive(room, 'hello room')
+    await drive(room, 'second', thread)
+
+    expect(texts(room)).toEqual(['hello room', 'room reply 1', 'second', 'room reply 2'])
+
+    // A peer asks the member something in its own session while nobody is
+    // looking at "Room" — no openGroupChat, no drive.
+    const key = room.membership.groupSessionKey(thread, MEMBER)
+    const session = gateway.sessions.get(String(room.chat.$groupChats.get().Room.sessions?.[key]))!
+    session.messages.push({ content: 'manager: status?', role: 'user' }, { content: 'status report: all green', role: 'assistant' })
+
+    data.$lastRoster.set([{ name: 'research' }] as never)
+    data.$botMeta.set({ research: { groups: ['Room'] } } as never)
+
+    await writes.sweepAllExternalGroupWrites()
+
+    expect(texts(room)).toEqual([
+      'hello room',
+      'room reply 1',
+      'second',
+      'room reply 2',
+      'manager: status?',
+      'status report: all green'
+    ])
+  })
 })
