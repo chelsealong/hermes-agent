@@ -159,11 +159,11 @@ terminal(command="grok --no-auto-update --always-approve -p 'Refactor the auth m
 # Returns session_id
 
 # Monitor
-process(action="poll", session_id="<id>")
-process(action="log", session_id="<id>")
+process_manage(action="poll", session_id="<id>")
+process_manage(action="log", session_id="<id>")
 
 # Kill if needed
-process(action="kill", session_id="<id>")
+process_manage(action="kill", session_id="<id>")
 ```
 
 For an interactive (TUI) background session, use `pty=true` + tmux and monitor
@@ -241,7 +241,7 @@ terminal(command="grok --no-auto-update --always-approve -p 'Fix issue #78: <des
 terminal(command="grok --no-auto-update --always-approve -p 'Fix issue #99: <description>. Commit when done.'", workdir="~/.hermes/cache/scratch/issue-99", background=true, notify_on_complete=true)
 
 # Monitor
-process(action="list")
+process_manage(action="list")
 
 # After completion: push and open PRs
 terminal(command="cd ~/.hermes/cache/scratch/issue-78 && git push -u origin fix/issue-78")

@@ -7,6 +7,7 @@ model ever sees offered as a callable tool. Regression for issue #124583.
 
 import re
 
+import agent.prompt_builder as prompt_builder
 import cron.lifecycle_guard as lifecycle_guard
 import tools.bot_mode_dm as bot_mode_dm
 import tools.close_terminal_tool as close_terminal_tool
@@ -16,8 +17,9 @@ import tools.terminal_tool as terminal_tool
 import tools.terminal_tool_background as terminal_tool_background
 from tools.registry import registry
 
-# Matches the bare legacy alias ("process(action=...)"), not "process_manage(action=...)".
-_BARE_PROCESS_ALIAS_RE = re.compile(r"(?<!_manage)\bprocess\(action=")
+# Matches the bare legacy alias ("process(action=...)" or "process(submit)"/"process(write)"
+# with the argument passed positionally), not "process_manage(action=...)".
+_BARE_PROCESS_ALIAS_RE = re.compile(r"(?<!_manage)\bprocess\((action=|submit\)|write\))")
 
 
 def _hint_strings():
@@ -38,6 +40,7 @@ def _hint_strings():
         "bot_mode_dm.message_agent_tool_schema": str(bot_mode_dm.message_agent_tool_schema()),
         "lifecycle_guard.HOST_INTERPRETER_KILL_REJECTION": lifecycle_guard.HOST_INTERPRETER_KILL_REJECTION,
         "process_registry_notifications.format_process_notification": notification,
+        "prompt_builder._WINDOWS_BASH_SHELL_HINT": prompt_builder._WINDOWS_BASH_SHELL_HINT,
     }
 
 

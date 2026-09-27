@@ -104,7 +104,7 @@ Background it and get notified on completion, the same as the `codex` skill:
 
 ```
 terminal(command="agy -p 'Implement the change described in TASK.md and run the tests' --dangerously-skip-permissions", workdir="/path/to/repo", background=true, notify_on_complete=true)
-# then: process(action="poll"/"log"/"wait", session_id=<id>)
+# then: process_manage(action="poll"/"log"/"wait", session_id=<id>)
 ```
 
 ### Interactive multi-turn (PTY + tmux)

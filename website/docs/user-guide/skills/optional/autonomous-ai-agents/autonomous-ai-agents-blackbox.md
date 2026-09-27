@@ -64,14 +64,14 @@ terminal(command="blackbox --prompt 'Refactor the auth module to use OAuth 2.0'"
 # Returns session_id
 
 # Monitor progress
-process(action="poll", session_id="<id>")
-process(action="log", session_id="<id>")
+process_manage(action="poll", session_id="<id>")
+process_manage(action="log", session_id="<id>")
 
 # Send input if Blackbox asks a question
-process(action="submit", session_id="<id>", data="yes")
+process_manage(action="submit", session_id="<id>", data="yes")
 
 # Kill if needed
-process(action="kill", session_id="<id>")
+process_manage(action="kill", session_id="<id>")
 ```
 
 ## Checkpoints & Resume
@@ -112,7 +112,7 @@ terminal(command="blackbox --prompt 'Fix the login bug'", workdir="~/.hermes/cac
 terminal(command="blackbox --prompt 'Add unit tests for auth'", workdir="~/.hermes/cache/scratch/issue-2", background=true, pty=true)
 
 # Monitor all
-process(action="list")
+process_manage(action="list")
 ```
 
 ## Multi-Model Mode

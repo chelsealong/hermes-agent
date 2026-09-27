@@ -134,7 +134,7 @@ kill "$(cat ~/.hermes/cache/scratch/pinggy-8000.pid)"
 pkill -f 'ssh -p 443 .* free@a\.pinggy\.io'
 ```
 
-If you have a session_id from `terminal(background=True)`, prefer `process(action='kill', session_id=...)`.
+If you have a session_id from `terminal(background=True)`, prefer `process_manage(action='kill', session_id=...)`.
 
 ## Access Control via Username Keywords
 
@@ -171,7 +171,7 @@ Then open `http://localhost:4300` in a browser to see live request/response pair
 - **Concurrent free tunnels are limited to one per source IP.** Starting a second tunnel from the same machine usually kills the first. Pro tier lifts this.
 - **`+` in usernames must be quoted.** Bare `ssh ... b:admin:secret+free@a.pinggy.io` works in bash but breaks under shells that treat `+` specially or when assembled programmatically. Always wrap in double quotes.
 - **Don't tunnel anything sensitive without an access-control flag.** A bare HTTP tunnel is reachable by anyone with the URL. Use `b:`, `k:`, or `w:` for non-public services.
-- **`process(action='log')` may miss SSH banner output.** Pinggy prints the URLs and then the SSH session goes interactive. Always redirect to a logfile and `grep` the file directly — same pattern as `cloudflared-quick-tunnel`.
+- **`process_manage(action='log')` may miss SSH banner output.** Pinggy prints the URLs and then the SSH session goes interactive. Always redirect to a logfile and `grep` the file directly — same pattern as `cloudflared-quick-tunnel`.
 - **Host-key prompt on first run.** Default OpenSSH config asks the user to accept Pinggy's host key. Always pass `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null` for unattended runs.
 - **TCP and TLS tunnels return a `<subdomain>.a.pinggy.online:<port>` pair, not an https URL.** Parse with a different regex (`tcp://` and a port). Don't assume every Pinggy tunnel is HTTP.
 - **Pro mode requires the token as the username, not a flag.** Use `"$PINGGY_TOKEN+a.pinggy.io"` (no `free@`). With a token you can also add `:persistent` for a stable subdomain — see `pinggy.io/docs/`.

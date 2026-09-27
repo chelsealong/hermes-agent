@@ -57,14 +57,14 @@ terminal(command="codex exec --sandbox workspace-write 'Refactor the auth module
 # Returns session_id
 
 # Monitor progress
-process(action="poll", session_id="<id>")
-process(action="log", session_id="<id>")
+process_manage(action="poll", session_id="<id>")
+process_manage(action="log", session_id="<id>")
 
 # Send input if Codex asks a question
-process(action="submit", session_id="<id>", data="yes")
+process_manage(action="submit", session_id="<id>", data="yes")
 
 # Kill if needed
-process(action="kill", session_id="<id>")
+process_manage(action="kill", session_id="<id>")
 ```
 
 ## Key Flags
@@ -116,7 +116,7 @@ terminal(command="codex --sandbox workspace-write exec 'Fix issue #78: <descript
 terminal(command="codex --sandbox workspace-write exec 'Fix issue #99: <description>. Commit when done.'", workdir="~/.hermes/cache/scratch/issue-99", background=true, pty=true)
 
 # Monitor
-process(action="list")
+process_manage(action="list")
 
 # After completion, push and create PRs
 terminal(command="cd ~/.hermes/cache/scratch/issue-78 && git push -u origin fix/issue-78")

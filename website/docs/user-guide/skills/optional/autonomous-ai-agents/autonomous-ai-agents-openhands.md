@@ -87,8 +87,8 @@ terminal(
 
 ```
 terminal(command="<same as above>", workdir="/path/to/project", background=true, notify_on_complete=true)
-process(action="poll", session_id="<id>")
-process(action="log", session_id="<id>")
+process_manage(action="poll", session_id="<id>")
+process_manage(action="log", session_id="<id>")
 ```
 
 ### Resume a previous conversation
