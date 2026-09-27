@@ -6,6 +6,7 @@ test patches on ``update_cmd`` stay effective).
 """
 
 import logging
+import os
 from contextlib import suppress
 import subprocess
 import sys
@@ -28,11 +29,13 @@ def _git_ok(git_cmd, args, cwd, **kw) -> bool:
     return _git_stdout(git_cmd, args, cwd, **kw) is not None
 
 
-def _git_run(git_cmd, args, cwd=None, *, check=False):
+def _git_run(git_cmd, args, cwd=None, *, check=False, env=None):
     """Run ``git_cmd + args`` and return the CompletedProcess.
 
     The updater's git runner: capture all output and decode as UTF-8 regardless of the
-    Windows ANSI code page (#52649). ``check=True`` raises on non-zero exit.
+    Windows ANSI code page (#52649). ``check=True`` raises on non-zero exit. ``env`` overlays
+    extra variables onto the inherited environment (e.g. ``NO_LAZY_FETCH_ENV``) without
+    dropping everything else a normal git invocation needs (``PATH``, ``HOME``, ...).
     """
     return subprocess.run(
         git_cmd + list(args),
@@ -40,6 +43,7 @@ def _git_run(git_cmd, args, cwd=None, *, check=False):
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         check=check,
+        env={**os.environ, **env} if env else None,
     )
 
 
@@ -143,11 +147,25 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
         return False, "unverifiable"
     if status.stdout.strip():
         return False, "dirty"
-    cherry = _git_run(git_cmd, ["cherry", f"origin/{target_branch}"], cwd)
-    if cherry.returncode != 0:
+    target_ref = f"origin/{target_branch}"
+    # ``git cherry`` walks patch-ids, which needs the diffed tree of every commit on both sides.
+    # On a treeless/blobless partial clone that forces a lazy fetch from the promisor remote; a
+    # single failed batch in a large delta (rate limiting, a network flake) fails the whole walk
+    # even though the branch and target are both perfectly fine (#124767). Deny the lazy fetch so
+    # a missing object fails fast instead of hammering the network, and on failure fall back to a
+    # commit-graph-only comparison — it only loses cherry-pick/rebase patch-equivalence detection
+    # (a real unmerged count may come back inflated), never safety: both outcomes are still (True, ...).
+    from hermes_cli._subprocess_compat import NO_LAZY_FETCH_ENV
+    cherry = _git_run(git_cmd, ["cherry", target_ref], cwd, env=NO_LAZY_FETCH_ENV)
+    if cherry.returncode == 0:
+        unmerged = [line for line in cherry.stdout.splitlines() if line.startswith("+")]
+        return True, f"unmerged:{len(unmerged)}" if unmerged else ""
+    graph_only = _git_run(git_cmd, ["rev-list", f"{target_ref}..HEAD", "--count"], cwd)
+    if graph_only.returncode != 0:
         return False, "unverifiable"
-    unmerged = [line for line in cherry.stdout.splitlines() if line.startswith("+")]
-    return True, f"unmerged:{len(unmerged)}" if unmerged else ""
+    count_text = graph_only.stdout.strip()
+    unmerged_count = int(count_text) if count_text.isdigit() else 0
+    return True, f"unmerged:{unmerged_count}" if unmerged_count else ""
 
 
 _PARKED_SKIP_WHY = {

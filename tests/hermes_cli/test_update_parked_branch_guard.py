@@ -149,6 +149,48 @@ def test_equivalent_cherry_picked_commit_is_still_safe(repo_pair):
     assert reason == ""
 
 
+def test_treeless_partial_clone_falls_back_to_commit_graph(tmp_path):
+    """#124767: on a treeless (``tree:0``) partial clone, ``git cherry``'s patch-id walk needs
+    tree objects the promisor remote was never asked to send up front. If that remote is
+    unreachable when the walk needs one (network flake, rate limiting — simulated here by
+    deleting the promisor repo after the initial fetch), the guard must not report
+    'unverifiable' and block the update: the commit graph alone (already fully present, no
+    trees required) is enough to tell the parked commit is not on origin/main."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "test@example.com")
+    _git(origin, "config", "user.name", "Test")
+    _git(origin, "config", "uploadpack.allowFilter", "true")
+    (origin / "a.txt").write_text("one\n")
+    _git(origin, "add", "a.txt")
+    _git(origin, "commit", "-qm", "c1")
+
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", "--filter=tree:0", f"file://{origin}", str(clone))
+    _git(clone, "config", "user.email", "test@example.com")
+    _git(clone, "config", "user.name", "Test")
+    _git(clone, "checkout", "-qb", "old-feature")
+
+    (origin / "a.txt").write_text("two\n")
+    _git(origin, "commit", "-aqm", "c2")
+    _git(clone, "fetch", "-q", "origin", "main")
+
+    (clone / "feature.txt").write_text("unmerged work\n")
+    _git(clone, "add", "feature.txt")
+    _git(clone, "commit", "-qm", "feature work")
+
+    # The promisor remote is now gone: any lazy fetch for a missing tree/blob fails.
+    import shutil
+    shutil.rmtree(origin)
+
+    safe, reason = update_cmd._assess_parked_branch_switch(
+        GIT, clone, "old-feature", "main"
+    )
+    assert safe is True
+    assert reason == "unmerged:1"
+
+
 def test_config_opt_out_blocks_auto_switch(repo_pair, monkeypatch):
     """updates.auto_switch_parked_branch: false disables auto-switch even
     when the branch is clean and merged."""
