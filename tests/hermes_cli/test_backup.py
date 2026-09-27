@@ -447,6 +447,79 @@ class TestBackup:
         assert [n for n in names if n == "state.db" or n.endswith("/state.db")] == ["state.db"]
 
 
+def _install_flaky_zip_write(monkeypatch, target_name: str, bytes_before_failure: int) -> None:
+    """Patch ``zipfile.ZipFile.write`` so writing *target_name* streams
+    *bytes_before_failure* real bytes into the member before raising ``OSError``,
+    modelling a source read that fails after the destination member has opened
+    (#124564). Untargeted files go through the real ``write``."""
+    real_write = zipfile.ZipFile.write
+
+    def _flaky_write(self, filename, arcname=None, compress_type=None, compresslevel=None):
+        if Path(filename).name == target_name:
+            zinfo = zipfile.ZipInfo.from_file(filename, arcname)
+            zinfo.compress_type = self.compression
+            with self.open(zinfo, "w") as dest, open(filename, "rb") as src:
+                dest.write(src.read(bytes_before_failure))
+            raise OSError(5, "Input/output error")
+        return real_write(
+            self, filename, arcname=arcname, compress_type=compress_type, compresslevel=compresslevel)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", _flaky_write)
+
+
+class TestBackupFailedMemberRollback:
+    """A source read failing mid-member must not leave a truncated, CRC-valid
+    member in the archive (#124564)."""
+
+    def test_failed_member_write_leaves_no_truncated_entry(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        _make_hermes_tree(hermes_home)
+        # Incompressible and large enough that the abandoned bytes exceed the ZIP
+        # end-of-central-directory record's 64 KiB backward search window.
+        (hermes_home / "flaky.bin").write_bytes(os.urandom(300_000))
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _install_flaky_zip_write(monkeypatch, "flaky.bin", 120_000)
+
+        from hermes_cli.backup import run_backup
+
+        out_zip = tmp_path / "backup.zip"
+        result = run_backup(Namespace(output=str(out_zip)))
+
+        assert result is False  # one file failed: the archive is reported incomplete
+        with zipfile.ZipFile(out_zip, "r") as zf:
+            assert zf.testzip() is None
+            assert "flaky.bin" not in zf.namelist()
+
+    def test_pre_update_zip_failed_member_leaves_no_truncated_entry(self, tmp_path, monkeypatch):
+        """Same failure, through the pre-update/pre-migration zip path
+        (``_write_full_zip_backup``), which ``hermes update`` and ``hermes claw
+        migrate`` use instead of ``run_backup``."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        _make_hermes_tree(hermes_home)
+        (hermes_home / "flaky.bin").write_bytes(os.urandom(300_000))
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _install_flaky_zip_write(monkeypatch, "flaky.bin", 120_000)
+
+        from hermes_cli.backup import _write_full_zip_backup
+
+        out_zip = hermes_home / "backups" / "pre-update-test.zip"
+        out_zip.parent.mkdir(parents=True, exist_ok=True)
+        skipped: list = []
+        result = _write_full_zip_backup(out_zip, hermes_home, skipped=skipped)
+
+        assert result is not None
+        assert any(str(rel) == "flaky.bin" for rel in skipped)
+        with zipfile.ZipFile(out_zip, "r") as zf:
+            assert zf.testzip() is None
+            assert "flaky.bin" not in zf.namelist()
+
+
 # ---------------------------------------------------------------------------
 # _validate_backup_zip tests
 # ---------------------------------------------------------------------------
@@ -1861,6 +1934,25 @@ class TestPreUpdateBackup:
 
 
 
+
+    def test_incomplete_backup_does_not_prune_the_last_good_generation(self, hermes_home, monkeypatch):
+        """A readable-but-partial archive (one member failed) must not count as a
+        complete replacement of the last good rollback generation (#124564)."""
+        from hermes_cli.backup import create_pre_update_backup
+
+        good = create_pre_update_backup(hermes_home=hermes_home, keep=1)
+        assert good is not None
+        _advance_backup_clock()
+
+        (hermes_home / "flaky.bin").write_bytes(os.urandom(300_000))
+        _install_flaky_zip_write(monkeypatch, "flaky.bin", 120_000)
+        partial = create_pre_update_backup(hermes_home=hermes_home, keep=1)
+        assert partial is not None
+        assert partial != good
+
+        remaining = {p.name for p in (hermes_home / "backups").glob("pre-update-*.zip")}
+        assert good.name in remaining, "an incomplete backup pruned the last good generation"
+        assert partial.name in remaining
 
     def test_skips_symlinked_files(self, hermes_home, tmp_path):
         """Pre-update backups must not dereference symlinks outside HERMES_HOME."""
