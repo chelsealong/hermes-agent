@@ -177,6 +177,74 @@ def test_external_worker_adopts_execution_and_runs_payload_once(
     assert not stderr_capture.exists()
 
 
+def test_external_worker_entry_bootstraps_before_touching_the_payload(tmp_path):
+    """#124827: ``-m cron.scheduler`` has no ``hermes_cli.main`` to import ``hermes_bootstrap``
+    first, so a pending interpreter/dependency relaunch used to happen only when something deep
+    inside ``run_one_job`` (``run_agent``) imported ``hermes_bootstrap`` for the first time in
+    this process -- by then the one-shot payload was already deleted and the execution already
+    acknowledged, so the relaunch silently strands the run as "unknown". Prove
+    ``hermes_bootstrap`` is now imported, and the payload file still exists, before the worker
+    entry point touches it.
+
+    A ``sys.meta_path`` finder loaded via ``sitecustomize.py`` (which the interpreter imports
+    before running any target code) intercepts ``import hermes_bootstrap`` and records whether
+    the payload was still present at that instant. A plain ``PYTHONPATH`` shadow can't do this:
+    ``cron/scheduler.py`` itself inserts the real repo root at ``sys.path[0]`` before any of its
+    own imports run, ahead of anything else on the path.
+    """
+    import cron.scheduler as scheduler
+
+    repo_root = Path(scheduler.__file__).resolve().parent.parent
+    stub_dir = tmp_path / "sitecustomize_stub"
+    stub_dir.mkdir()
+    marker_path = tmp_path / "bootstrap-marker.txt"
+    payload_path = tmp_path / "exec-1.json"
+    ack_path = tmp_path / "exec-1.ready"
+    payload_path.write_text(json.dumps({"not": "a real job"}), encoding="utf-8")
+
+    (stub_dir / "sitecustomize.py").write_text(
+        "import sys\n"
+        "import importlib.abc, importlib.machinery\n"
+        "from pathlib import Path\n"
+        "\n"
+        "class _Loader(importlib.abc.Loader):\n"
+        "    def create_module(self, spec):\n"
+        "        return None\n"
+        "    def exec_module(self, module):\n"
+        f"        marker = Path({str(marker_path)!r})\n"
+        f"        payload = Path({str(payload_path)!r})\n"
+        "        marker.write_text('present' if payload.exists() else 'absent', encoding='utf-8')\n"
+        "\n"
+        "class _Finder(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path, target=None):\n"
+        "        if name == 'hermes_bootstrap':\n"
+        "            return importlib.machinery.ModuleSpec(name, _Loader())\n"
+        "        return None\n"
+        "\n"
+        "sys.meta_path.insert(0, _Finder())\n",
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(stub_dir), str(repo_root)])
+    env["HERMES_HOME"] = str(tmp_path / "home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cron.scheduler",
+         "--external-worker-file", str(payload_path), "--ack-file", str(ack_path)],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=60,
+    )
+
+    assert marker_path.exists(), (
+        "hermes_bootstrap was never imported by the worker entry point "
+        f"(exit={result.returncode}, stderr={result.stderr})"
+    )
+    assert marker_path.read_text(encoding="utf-8") == "present", (
+        "the payload was already gone by the time hermes_bootstrap ran "
+        f"(stderr={result.stderr})"
+    )
+
+
 def test_external_worker_ack_is_never_observable_half_written(tmp_path, monkeypatch):
     """The gateway polls ``ack_path.exists()`` then reads it (#107184, #116164 form 1): the ack
     must appear atomically with its full body, or the parent logs "unreadable acknowledgement"

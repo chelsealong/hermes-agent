@@ -4196,6 +4196,21 @@ from cron.scheduler_preflight import (  # noqa: E402
 # tick paths see every name they need.
 if __name__ == "__main__":
     if "--external-worker-file" in sys.argv:
+        # hermes_bootstrap's own docstring lists cron/scheduler among the entry points that
+        # must import it first, but `-m cron.scheduler` has no hermes_cli.main to do that, so
+        # nothing ever settled a pending interpreter/dependency relaunch here. Left unimported,
+        # that relaunch instead happens lazily the first time something later in this worker
+        # (run_one_job -> run_agent) imports hermes_bootstrap transitively — by then the
+        # one-shot payload is already deleted and the execution already acknowledged, so the
+        # re-exec loses the handoff and strands the run as "unknown" (#124827). Doing it here,
+        # before the payload/ack files are touched, keeps a genuine relaunch safe: it re-execs
+        # with the same argv and an untouched payload, and the fresh process adopts normally.
+        try:
+            import hermes_bootstrap  # noqa: F401
+        except ModuleNotFoundError as exc:
+            if exc.name != "hermes_bootstrap":
+                raise  # the bootstrap exists but cannot load: skipping it would skip PM activation
+
         import argparse
 
         parser = argparse.ArgumentParser(add_help=False)
