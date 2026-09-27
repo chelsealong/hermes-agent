@@ -1917,6 +1917,11 @@ DEFAULT_CONFIG = {
         # Max triage tasks decomposed per tick, bounding the aux-LLM burst from a bulk load. Excess
         # defers to the next tick.
         "auto_decompose_per_tick": 3,
+        # Skip auto-decomposing triage cards older than this many days. None (default) = no bound,
+        # preserving prior behavior. A card left untouched in triage for a long time is commonly a
+        # parked idea note rather than a fresh request; set this to stop the auto-decomposer from
+        # fanning out dormant cards the moment auto_decompose is turned on (#124397).
+        "auto_decompose_max_age_days": None,
         # Running tasks with no heartbeat (last_heartbeat_at) for this many seconds are reclaimed to
         # ready on the next tick; a still-running local worker is terminated first. 0 = off.
         "dispatch_stale_timeout_seconds": 14400,

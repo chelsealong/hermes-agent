@@ -235,11 +235,14 @@ class _KanbanDispatcher:
                         conn.close()
         return False
 
-    def auto_decompose_tick(self, auto_decompose_per_tick: int) -> int:
+    def auto_decompose_tick(self, auto_decompose_per_tick: int, max_age_days: Optional[int] = None) -> int:
         """Auto-decompose up to N triage tasks across all boards into ready workgraphs.
 
         Runs before dispatch fans out; the per-tick cap keeps a bulk triage
-        load from burst-spending the aux LLM. Returns the number decomposed.
+        load from burst-spending the aux LLM. ``max_age_days``, when set,
+        skips triage cards older than that many days (#124397) — a card
+        nobody has touched in weeks is a parked idea, not a live trigger.
+        Returns the number decomposed.
         """
         try:
             from hermes_cli import kanban_decompose as _decomp
@@ -248,6 +251,7 @@ class _KanbanDispatcher:
             return 0
         attempted = 0
         successes = 0
+        list_kwargs = {"max_age_days": max_age_days} if max_age_days is not None else {}
         with _default_profile_secret_scope():
             for slug in self._board_slugs():
                 if attempted >= auto_decompose_per_tick:
@@ -258,7 +262,7 @@ class _KanbanDispatcher:
                 try:
                     os.environ["HERMES_KANBAN_BOARD"] = slug
                     try:
-                        triage_ids = _decomp.list_triage_ids()
+                        triage_ids = _decomp.list_triage_ids(**list_kwargs)
                     except Exception as exc:
                         logger.debug("kanban auto-decompose: list_triage_ids failed on board %s (%s)", slug, exc)
                         triage_ids = []

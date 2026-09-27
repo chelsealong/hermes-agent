@@ -63,11 +63,15 @@ def _positive_int_setting(kanban_cfg: dict, key: str) -> Optional[int]:
     return value
 
 
-def _resolve_auto_decompose_settings(load_config: Callable[[], Any]) -> "tuple[bool, int]":
-    """Live (enabled, per_tick) auto-decompose settings, re-read every dispatcher tick.
+def _resolve_auto_decompose_settings(load_config: Callable[[], Any]) -> "tuple[bool, int, Optional[int]]":
+    """Live (enabled, per_tick, max_age_days) auto-decompose settings, re-read every dispatcher tick.
 
-    Fails safe: a config read error returns ``(False, 3)`` rather than
+    Fails safe: a config read error returns ``(False, 3, None)`` rather than
     re-enabling a feature the user turned off. ``per_tick`` is clamped to ``>= 1``.
+    ``max_age_days`` (``kanban.auto_decompose_max_age_days``) is ``None`` unless
+    set to a positive int, in which case the auto-decomposer skips triage cards
+    older than that many days (#124397) — an idea card left untouched for weeks
+    is a parked note, not a live trigger.
 
     Read fresh from config on every dispatcher tick (#49638) so that flipping ``kanban.auto_decompose:
     false`` to STOP runaway fan-out takes effect on the next tick instead of requiring a gateway restart.
@@ -78,13 +82,14 @@ def _resolve_auto_decompose_settings(load_config: Callable[[], Any]) -> "tuple[b
     try:
         cfg = load_config()
     except Exception:
-        return False, 3
+        return False, 3, None
     kcfg = cfg.get("kanban", {}) if isinstance(cfg, dict) else {}
     try:
         per_tick = int(kcfg.get("auto_decompose_per_tick", 3) or 3)
     except (TypeError, ValueError):
         per_tick = 3
-    return bool(kcfg.get("auto_decompose", True)), max(per_tick, 1)
+    max_age_days = _positive_int_setting(kcfg, "auto_decompose_max_age_days")
+    return bool(kcfg.get("auto_decompose", True)), max(per_tick, 1), max_age_days
 
 
 def _gc_retention_days() -> int:

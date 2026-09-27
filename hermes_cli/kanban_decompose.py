@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -336,10 +337,20 @@ def decompose_task(
     return _apply_fanout(task_id, parsed, routing, audit_author)
 
 
-def list_triage_ids(*, tenant: Optional[str] = None) -> list[str]:
-    """Return task ids currently in the triage column."""
+def list_triage_ids(*, tenant: Optional[str] = None, max_age_days: Optional[int] = None) -> list[str]:
+    """Return task ids currently in the triage column.
+
+    ``max_age_days``, when set, excludes cards created more than that many
+    days ago (``kanban.auto_decompose_max_age_days``, #124397): a triage card
+    nobody has touched in weeks is a parked idea note, not a live trigger, and
+    the auto-decomposer must not fan it out on the next tick just because
+    ``triage`` is being used as a durable inbox.
+    """
     with kbc.connect_closing() as conn:
         rows = kb.list_tasks(conn, status="triage", tenant=tenant, limit=1000)
+    if max_age_days is not None:
+        cutoff = time.time() - max_age_days * 86400
+        rows = [row for row in rows if row.created_at >= cutoff]
     return [row.id for row in rows]
 
 

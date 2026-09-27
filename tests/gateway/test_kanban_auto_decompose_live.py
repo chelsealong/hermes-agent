@@ -16,9 +16,21 @@ from gateway.kanban_watchers_common import _resolve_auto_decompose_settings
 
 
 def test_disabled_when_flag_false():
-    enabled, per_tick = _resolve_auto_decompose_settings(
+    enabled, per_tick, max_age_days = _resolve_auto_decompose_settings(
         lambda: {"kanban": {"auto_decompose": False}}
     )
     assert enabled is False
 
 
+def test_max_age_days_unset_by_default():
+    _enabled, _per_tick, max_age_days = _resolve_auto_decompose_settings(
+        lambda: {"kanban": {}}
+    )
+    assert max_age_days is None
+
+
+def test_max_age_days_read_from_config():
+    _enabled, _per_tick, max_age_days = _resolve_auto_decompose_settings(
+        lambda: {"kanban": {"auto_decompose_max_age_days": 7}}
+    )
+    assert max_age_days == 7

@@ -256,3 +256,19 @@ def test_decompose_returns_false_when_task_not_triage(kanban_home):
     assert outcome.ok is False
 
 
+def test_list_triage_ids_max_age_days_excludes_stale_cards(kanban_home):
+    """#124397: a triage card left untouched for weeks must not be a live
+    auto-decompose trigger once ``kanban.auto_decompose_max_age_days`` is set."""
+    import time
+
+    with kbc.connect() as conn:
+        old_id = kb.create_task(conn, title="old idea", triage=True)
+        fresh_id = kb.create_task(conn, title="fresh idea", triage=True)
+        conn.execute(
+            "UPDATE tasks SET created_at = ? WHERE id = ?",
+            (int(time.time()) - 17 * 86400, old_id),
+        )
+        conn.commit()
+
+    assert set(decomp.list_triage_ids()) == {old_id, fresh_id}
+    assert decomp.list_triage_ids(max_age_days=7) == [fresh_id]
