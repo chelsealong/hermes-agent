@@ -1229,6 +1229,27 @@ def _is_executing_heredoc_receiver(word: str) -> bool:
     return os.path.basename(word).lower() in _SHELL_CARRIER_NAMES or _interpreter_family(word) is not None
 
 
+def _command_substitution_body_spans(command: str) -> list[tuple[int, int]]:
+    """Every ``$(...)``/backtick command-substitution BODY span, at any nesting depth and
+    regardless of surrounding quoting -- mirrors the subst descent in
+    ``_iter_shell_command_starts``. A heredoc whose operator falls inside one of these spans is not
+    a safe data sink even when its immediate receiver (cat/tee/a redirect) never executes: once the
+    substitution resolves, the enclosing shell (or an explicit eval) re-runs whatever that receiver
+    wrote to stdout as if it were typed there (#124551 hardline bypass)."""
+    spans: list[tuple[int, int]] = []
+
+    def scan(start: int, end: int) -> None:
+        for kind, i, j, quote in _scan_shell(command, start, end, subst="uq", stop_unterminated=True):
+            if kind == "subst":
+                body_start = i + (1 if command[i] == "`" else 2)
+                body_end = end if j is None else j - 1
+                spans.append((body_start, body_end))
+                scan(body_start, body_end)
+
+    scan(0, len(command))
+    return spans
+
+
 def _mask_heredoc_bodies(command: str) -> str:
     """Blank newlines AND quote characters inside a heredoc body handed to a non-executing sink
     (``cat``, ``tee``, a plain redirect, ...): the body is DATA to that receiver, so a data line that
@@ -1241,13 +1262,21 @@ def _mask_heredoc_bodies(command: str) -> str:
     after this one into believing it is still inside a string, silently masking a REAL newline later
     in the command and hiding a genuine follow-on command. ``$(...)``/backtick payloads are
     untouched either way: ``_CMDPOS`` matches ``\\$\\(``/backtick directly, with no dependency on a
-    preceding newline, so command substitution inside an unquoted-delimiter body stays caught."""
+    preceding newline, so command substitution inside an unquoted-delimiter body stays caught.
+
+    A non-executing receiver's stdout is only genuinely inert when nothing downstream re-runs it.
+    Two escapes stay raw (never masked) even though the immediate receiver is e.g. ``cat``: the
+    heredoc operator sitting inside a ``$(...)``/backtick span (its output is re-executed the
+    instant the substitution resolves, unquoted or not: quoting the substitution does not stop the
+    shell from resolving it, only what happens to the resolved text next) and a receiver piped, on
+    that same operator line, into a shell/interpreter (``cat <<EOF | bash``) (#124551 follow-up)."""
     if "<<" not in command:
         return command
     word_spans = sorted(
         (word_start, _deobfuscate_shell_word_for_detection(word))
         for word_start, _, word in _iter_shell_command_word_spans(command)
     )
+    subst_spans = _command_substitution_body_spans(command) if ("$(" in command or "`" in command) else []
     out: list[str] = []
     pos = search_from = 0
     while True:
@@ -1267,7 +1296,12 @@ def _mask_heredoc_bodies(command: str) -> str:
         if terminator_start is None:
             break  # unterminated heredoc consumes to end of string
         receiver = next((word for word_start, word in reversed(word_spans) if word_start <= op_start), "")
-        if not _is_executing_heredoc_receiver(receiver):
+        in_substitution = any(s <= op_start < e for s, e in subst_spans)
+        feeds_carrier_on_same_line = any(
+            op_start < word_start < line_start and _is_executing_heredoc_receiver(word)
+            for word_start, word in word_spans
+        )
+        if not (_is_executing_heredoc_receiver(receiver) or in_substitution or feeds_carrier_on_same_line):
             # Mask from line_start (the newline that ENDS the operator's own line, and so
             # immediately precedes the body's first line) through terminator_start: that leading
             # newline is just as much a body/first-line boundary as every newline after it.

@@ -325,6 +325,30 @@ def test_heredoc_body_line_start_still_blocked_for_executing_receiver(command):
     assert is_hl, f"heredoc into a shell leaked through the hardline floor: {command!r}"
 
 
+# A non-executing receiver (cat/tee) is only genuinely a data sink when nothing downstream
+# re-runs its stdout. Wrapping the same "data" heredoc in a bare command substitution, in
+# backticks, or piping it into a shell on the operator's own line all re-execute the body once
+# the receiver's output resolves — the hardline floor must still catch every one of these
+# (follow-up to #124551; a non-executing receiver alone is not sufficient to call something data).
+_HEREDOC_RECEIVER_OUTPUT_REEXECUTED = [
+    "$(cat <<EOF\nrm -rf /\nEOF\n)",
+    "$(cat <<EOF\npoweroff\nEOF\n)",
+    "$(cat <<EOF\nmkfs.ext4 /dev/sda1\nEOF\n)",
+    "`cat <<EOF\nrm -rf /\nEOF\n`",
+    "cat <<EOF | bash\nrm -rf /\nEOF\n",
+    "eval \"$(cat <<EOF\nrm -rf /\nEOF\n)\"",
+]
+
+
+@pytest.mark.parametrize("command", _HEREDOC_RECEIVER_OUTPUT_REEXECUTED)
+def test_heredoc_data_sink_output_reexecuted_still_blocked(command):
+    """A heredoc fed to cat/tee is not safe DATA when its stdout is itself re-executed via a
+    command substitution, backticks, or a same-line pipe into a shell — the receiver being a
+    non-executing sink does not make the construct inert."""
+    is_hl, desc = detect_hardline_command(command)
+    assert is_hl, f"heredoc receiver's re-executed output bypassed the hardline floor: {command!r}"
+
+
 # Commands that carry the literal string "rm -rf /" (or a sibling) as DATA in
 # another command's quoted argument — a PR title, a commit message, an echo /
 # printf argument. The shell never executes that text as an rm command, so the
