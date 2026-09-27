@@ -242,6 +242,40 @@ def test_activation_trusts_a_recorded_entry_a_deliberate_install_repairs(pm_env,
     assert binary.read_text(encoding="utf-8") == "good"
 
 
+def test_locked_previous_entry_does_not_fail_an_otherwise_good_repair(pm_env, monkeypatch):
+    """A repair renames the corrupt entry aside, publishes and verifies a
+    fresh one, then discards the displaced copy. If that discard hits a lock
+    on the displaced bytes (a WinError 5 from a DLL this same process still
+    has mapped is the reported case), the already-good repair must still
+    succeed — the displaced copy is simply left for the next install to
+    retry, not thrown away as a failed update."""
+    import importlib
+    from pm.cli import _install_names
+
+    ensure = importlib.import_module("pm.install")
+    lockfile_path, runtime, docroot, _ = pm_env
+    _, digest = make_tar(docroot, "faketool-1.0.tar.gz", {"bin/faketool": "good"})
+    _pin(lockfile_path, "faketool", "1.0", digest)
+    assert _install_names(["faketool"]) == 0
+
+    fact = Facts(runtime / "facts.json").get("faketool")
+    assert fact is not None
+    binary = runtime / fact["entry"] / "bin/faketool"
+    binary.write_text("corrupt", encoding="utf-8")
+
+    original_remove = ensure._remove_entry
+
+    def locked_remove(store, entry_name):
+        if entry_name.startswith(".previous-"):
+            raise PermissionError(5, "Access is denied")
+        return original_remove(store, entry_name)
+
+    monkeypatch.setattr(ensure, "_remove_entry", locked_remove)
+
+    assert _install_names(["faketool"]) == 0
+    assert binary.read_text(encoding="utf-8") == "good"
+
+
 def test_warm_install_verifies_shared_dependencies_once_under_lock(pm_env, monkeypatch):
     import importlib
     import os

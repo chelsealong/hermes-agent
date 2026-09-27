@@ -208,6 +208,20 @@ def _remove_entry(store: Store, entry_name: str) -> None:
             time.sleep(0.2 * (attempt + 1))
 
 
+def _discard_superseded_entry(store: Store, previous_entry) -> None:
+    """Drop an already-superseded entry; its successor is already published
+    and verified, so a stray lock on its bytes (e.g. a DLL this very process
+    still has mapped from the version it just replaced) must not undo a good
+    install. Leftover bytes are retried by the next install's
+    _settle_previous_entry.
+    """
+    try:
+        _remove_entry(store, previous_entry.name)
+    except OSError:
+        LOG.warning("could not remove superseded entry %s; left for the next install",
+                    previous_entry.name, exc_info=True)
+
+
 def _remove_downloads(store: Store, artifacts: list[dict]) -> None:
     """Release this package's archives after publication, under its store lock."""
     for artifact in artifacts:
@@ -257,7 +271,7 @@ def _publish_entry(package, store, staged, entry, previous_entry, target):
             _restore_previous_entry(store, entry, previous_entry)
         raise
     if previous_entry.exists():
-        _remove_entry(store, previous_entry.name)
+        _discard_superseded_entry(store, previous_entry)
 
 
 def _settle_previous_entry(package, store, entry, previous_entry, previous, target) -> None:
@@ -268,7 +282,7 @@ def _settle_previous_entry(package, store, entry, previous_entry, previous, targ
     # an interrupted stage always restores its prior usable bytes.
     if (previous and previous.get("entry") == entry.name
             and _entry_verified(package, previous, store, target)):
-        _remove_entry(store, previous_entry.name)
+        _discard_superseded_entry(store, previous_entry)
     else:
         _restore_previous_entry(store, entry, previous_entry)
 
