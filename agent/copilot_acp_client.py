@@ -13,6 +13,7 @@ import os
 import queue
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
 import threading
@@ -304,12 +305,26 @@ class CopilotACPClient:
 
     @staticmethod
     def _terminate_process(proc: subprocess.Popen[str]) -> None:
+        from agent.deadline import kill_process_tree
+
+        # The npm-installed CLI launcher execs a platform-native descendant that does not
+        # share the launcher's fate: killing only the tracked launcher leaves it running and,
+        # under a PID-1 gateway (Kubernetes), reparented and leaked (#124835). ``_spawn()``
+        # gives the launcher its own process group via ``start_new_session=True``, so
+        # ``kill_process_tree`` can signal the whole group/tree while it is still queryable —
+        # a plain terminate()+wait() would reap the launcher first and orphan the descendant
+        # before it could be discovered.
+        with contextlib.suppress(Exception):
+            if proc.poll() is None:
+                kill_process_tree(proc.pid, sig=signal.SIGTERM)
         try:
-            proc.terminate()
             proc.wait(timeout=2)
         except Exception:
             with contextlib.suppress(Exception):
-                proc.kill()
+                if not kill_process_tree(proc.pid):
+                    proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=1)
 
     def _release_process(self, proc: subprocess.Popen[str]) -> None:
         """Reap one session's own child. ``is_closed`` flips only when the last live
@@ -361,11 +376,13 @@ class CopilotACPClient:
             from hermes_cli._subprocess_compat import windows_hide_flags  # hide the Windows console flash (#56747); pipes intact for the ACP wire
 
             # Hide the console the CLI child would otherwise flash on Windows (#56747). Hide-only — stdio
-            # pipes stay intact for the ACP wire.
+            # pipes stay intact for the ACP wire. ``start_new_session=True`` gives the launcher its own
+            # process group (silently ignored on Windows) so ``_terminate_process`` can signal the
+            # native descendant the npm launcher execs, not just the tracked launcher pid (#124835).
             proc = subprocess.Popen(
                 [self._acp_command] + self._acp_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding='utf-8', errors='replace', bufsize=1, cwd=self._acp_cwd, env=_build_subprocess_env(),
-                creationflags=windows_hide_flags(),
+                creationflags=windows_hide_flags(), start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(f"Could not start Copilot ACP command '{self._acp_command}'. Install GitHub Copilot CLI or set "

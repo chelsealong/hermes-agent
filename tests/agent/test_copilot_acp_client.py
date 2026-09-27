@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
+import signal
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -588,3 +591,61 @@ def test_cli_death_is_reported_as_a_crash_not_a_timeout(tmp_path):
         assert "exited early: fatal: agent segfaulted" in str(exc)
     else:
         raise AssertionError("session on a dead CLI must raise")
+
+
+# Mimics the npm Copilot CLI launcher: it execs a platform-native descendant and then just
+# idles on stdio, the way a real ACP server would. Nothing here reacts to SIGTERM specially —
+# the point is that a signal sent only to the launcher's own pid must not need cooperation from
+# either process to also reach the descendant.
+_LAUNCHER_WITH_NATIVE_DESCENDANT = """
+import subprocess, sys, time
+descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+print(descendant.pid, flush=True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        time.sleep(0.05)
+"""
+
+
+def _pid_alive(pid: int) -> bool:
+    """True while ``pid`` is a live (non-zombie) process (Linux ``/proc`` check)."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (FileNotFoundError, ProcessLookupError, IndexError):
+        return False
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "POSIX process-group + /proc pid checks")
+@pytest.mark.live_system_guard_bypass
+def test_terminate_process_kills_the_launchers_native_descendant(tmp_path):
+    """Reproduces #124835: the npm Copilot CLI launcher execs a native descendant that does not
+    share the launcher's fate. Tearing down the tracked launcher pid must not leave that
+    descendant running (and, under a PID-1 gateway, leaked to init)."""
+    launcher = tmp_path / "launcher_with_descendant.py"
+    launcher.write_text(_LAUNCHER_WITH_NATIVE_DESCENDANT, encoding="utf-8")
+    client = CopilotACPClient(command=sys.executable, args=[str(launcher)], acp_cwd=str(tmp_path))
+
+    proc = client._spawn()
+    descendant_pid = None
+    try:
+        descendant_pid = int(proc.stdout.readline().strip())
+        assert _pid_alive(descendant_pid), "test setup: descendant did not start"
+
+        client._terminate_process(proc)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and _pid_alive(descendant_pid):
+            time.sleep(0.05)
+
+        assert proc.poll() is not None, "the tracked launcher must be reaped"
+        assert not _pid_alive(descendant_pid), (
+            "the launcher's native descendant leaked past _terminate_process"
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            proc.kill()
+        if descendant_pid is not None and _pid_alive(descendant_pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(descendant_pid, signal.SIGKILL)
