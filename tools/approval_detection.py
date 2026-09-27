@@ -1191,7 +1191,92 @@ def _mask_quoted_newlines(command: str) -> str:
     exactly as the shell would, so masking them cannot hide a runnable command."""
     if "\n" not in command:
         return command
-    return _mask_quoted_newlines_span(command, 0, len(command))
+    return _mask_quoted_newlines_span(_mask_heredoc_bodies(command), 0, len(command))
+
+
+_HEREDOC_OPERATOR_RE = re.compile(r"<<(-)?[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z_]\w*))")
+
+
+def _find_unquoted_heredoc_operator(command: str, start: int) -> int | None:
+    """Return the offset of the next real (unquoted, uncommented) ``<<`` at or after *start*."""
+    for kind, i, _, quote in _scan_shell(command, start, comments=True):
+        if kind == "char" and quote is None and command.startswith("<<", i):
+            return i
+    return None
+
+
+def _heredoc_terminator_span(command: str, body_start: int, delimiter: str, strip_tabs: bool) -> tuple[int | None, int]:
+    """Find the heredoc terminator line -> (its start offset, offset right after its newline).
+    An unterminated heredoc (no line ever matches *delimiter*) consumes to end of string, exactly
+    as a real shell would keep reading forever without a matching terminator."""
+    n = len(command)
+    pos = body_start
+    while pos <= n:
+        line_end = command.find("\n", pos)
+        at_end = line_end == -1
+        line_end = n if at_end else line_end
+        candidate = command[pos:line_end].lstrip("\t") if strip_tabs else command[pos:line_end]
+        if candidate == delimiter:
+            return pos, n if at_end else line_end + 1
+        if at_end:
+            return None, n
+        pos = line_end + 1
+    return None, n
+
+
+def _is_executing_heredoc_receiver(word: str) -> bool:
+    """Whether *word* (already deobfuscated) genuinely executes a heredoc body handed to it."""
+    return os.path.basename(word).lower() in _SHELL_CARRIER_NAMES or _interpreter_family(word) is not None
+
+
+def _mask_heredoc_bodies(command: str) -> str:
+    """Blank newlines AND quote characters inside a heredoc body handed to a non-executing sink
+    (``cat``, ``tee``, a plain redirect, ...): the body is DATA to that receiver, so a data line that
+    merely begins with a hardline/dangerous command word (``poweroff``, ``mkfs``, ...) must not be
+    read as a command start by the flat, newline-anchored ``_CMDPOS`` class (#124551). A heredoc
+    handed to a shell or interpreter (bash/sh/.../python/perl/...) is left completely untouched: it
+    genuinely executes its body line by line, so the existing command-position scan must still see
+    it raw. Quote characters inside a masked body are blanked too, not just newlines: an unbalanced
+    quote in ordinary prose ("It's ...") would otherwise flip the real quote-tracking pass that runs
+    after this one into believing it is still inside a string, silently masking a REAL newline later
+    in the command and hiding a genuine follow-on command. ``$(...)``/backtick payloads are
+    untouched either way: ``_CMDPOS`` matches ``\\$\\(``/backtick directly, with no dependency on a
+    preceding newline, so command substitution inside an unquoted-delimiter body stays caught."""
+    if "<<" not in command:
+        return command
+    word_spans = sorted(
+        (word_start, _deobfuscate_shell_word_for_detection(word))
+        for word_start, _, word in _iter_shell_command_word_spans(command)
+    )
+    out: list[str] = []
+    pos = search_from = 0
+    while True:
+        op_start = _find_unquoted_heredoc_operator(command, search_from)
+        if op_start is None:
+            break
+        match = _HEREDOC_OPERATOR_RE.match(command, op_start)
+        if not match:
+            search_from = op_start + 2
+            continue
+        delimiter = next(g for g in match.groups()[1:] if g is not None)
+        line_start = command.find("\n", match.end())
+        if line_start == -1:
+            break  # the operator's own line never ends; nothing left to scan
+        body_start = line_start + 1
+        terminator_start, resume_at = _heredoc_terminator_span(command, body_start, delimiter, bool(match.group(1)))
+        if terminator_start is None:
+            break  # unterminated heredoc consumes to end of string
+        receiver = next((word for word_start, word in reversed(word_spans) if word_start <= op_start), "")
+        if not _is_executing_heredoc_receiver(receiver):
+            # Mask from line_start (the newline that ENDS the operator's own line, and so
+            # immediately precedes the body's first line) through terminator_start: that leading
+            # newline is just as much a body/first-line boundary as every newline after it.
+            out.append(command[pos:line_start])
+            out.append(re.sub(r"[\n'\"]", " ", command[line_start:terminator_start]))
+            pos = terminator_start
+        search_from = resume_at
+    out.append(command[pos:])
+    return "".join(out)
 
 
 def _mask_quoted_newlines_span(command: str, start: int, end: int) -> str:

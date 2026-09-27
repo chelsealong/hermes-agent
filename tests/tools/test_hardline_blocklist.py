@@ -284,6 +284,47 @@ def test_quoted_newline_data_not_blocked_by_full_guard_chain(clean_session):
     )
 
 
+# A heredoc body LINE ITSELF can begin with a hardline command word (not just
+# mention one mid-line, already covered above): a real newline inside a heredoc
+# body is still not a shell command boundary when the receiving command is a
+# non-executing sink (cat, tee, a plain redirect) — the shell never runs that
+# line, only writes/pipes it as text (#124551).
+_HEREDOC_BODY_LINE_START_DATA_ALLOW = [
+    "cat > /tmp/note.md <<'EOF'\n维护笔记\npoweroff 之前请先确认所有工作已存档\nEOF",
+    "cat > /tmp/note.md <<EOF\nline one\npoweroff\nEOF",
+    "tee /tmp/note.md <<'EOF'\nreboot\nEOF",
+    "cat >> /tmp/note.md <<-'EOF'\n\tshutdown -h now\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", _HEREDOC_BODY_LINE_START_DATA_ALLOW)
+def test_heredoc_body_line_start_data_not_blocked(command):
+    """A data-only heredoc payload written to a file is not a command, even
+    when a line inside it BEGINS with a hardline command word (#124551)."""
+    is_hl, desc = detect_hardline_command(command)
+    assert not is_hl, (
+        f"heredoc data payload false-positived the hardline floor: {command!r} (got: {desc})"
+    )
+
+
+# The same body-line-start shape must still block when the heredoc is fed to
+# something that genuinely executes it line by line, or when the body (even
+# fed to a non-executing sink) contains a real command substitution.
+_HEREDOC_BODY_LINE_START_STILL_BLOCKED = [
+    "bash <<'EOF'\nreboot\nEOF",
+    "sh <<'EOF'\npoweroff -h now\nEOF",
+    "cat > /tmp/x <<EOF\n$(poweroff)\nEOF",
+]
+
+
+@pytest.mark.parametrize("command", _HEREDOC_BODY_LINE_START_STILL_BLOCKED)
+def test_heredoc_body_line_start_still_blocked_for_executing_receiver(command):
+    """A heredoc handed to a shell, or a command substitution inside an
+    unquoted-delimiter body, genuinely executes — it must still block."""
+    is_hl, desc = detect_hardline_command(command)
+    assert is_hl, f"heredoc into a shell leaked through the hardline floor: {command!r}"
+
+
 # Commands that carry the literal string "rm -rf /" (or a sibling) as DATA in
 # another command's quoted argument — a PR title, a commit message, an echo /
 # printf argument. The shell never executes that text as an rm command, so the
