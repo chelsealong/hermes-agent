@@ -60,3 +60,40 @@ class TestRichMessageTableProtection:
         assert "  \n" not in md
         assert md == content
 
+
+class TestRichOrderedListAfterProse:
+    """CommonMark only lets an ordered list interrupt a paragraph when it starts at 1, so
+    ``**Label**\\n7. item`` parsed as one paragraph with literal numbers (issue #124552)."""
+
+    def test_non_one_ordered_list_after_prose_becomes_a_list(self, adapter):
+        from markdown_it import MarkdownIt
+
+        content = "**Facts and Evidence**\n7. First\n8. Second"
+        md = adapter._rich_message_payload(content)["markdown"]
+        tokens = [t.type for t in MarkdownIt("commonmark").parse(md)]
+
+        assert md == "**Facts and Evidence**\n\n7. First  \n8. Second"
+        assert tokens.count("ordered_list_open") == 1
+        assert tokens.count("list_item_open") == 2
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "1. a\n2. b\n3. c",  # already starts at 1 — no interruption to fix
+            "1. a\n   continued\n2. b",  # list continuation, not a fresh paragraph
+            "```text\nLabel\n7. literal\n```",  # fenced code stays verbatim
+            "Streaming draft\n```text\nLabel\n7. literal",  # unclosed draft fence
+        ],
+    )
+    def test_lists_and_code_gain_no_blank_line(self, adapter, content):
+        md = adapter._rich_message_payload(content)["markdown"]
+        assert md.count("\n\n") == content.count("\n\n")
+
+    def test_idempotent_on_repeated_separation(self, adapter):
+        from plugins.platforms.telegram.adapter import _rich_separate_ordered_lists
+
+        content = "**Facts and Evidence**\n7. First\n8. Second"
+        once = _rich_separate_ordered_lists(content)
+        twice = _rich_separate_ordered_lists(once)
+        assert once == twice
+

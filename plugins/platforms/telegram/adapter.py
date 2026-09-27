@@ -384,18 +384,63 @@ _RICH_PROTECTED_REGION_RE = re.compile(
     re.MULTILINE)
 
 
+# CommonMark only lets an ordered list interrupt a paragraph when it starts at 1, so a prose
+# line (e.g. a bold label) immediately followed by "7. item" parses as one paragraph with
+# literal numbers instead of a list — hard-break normalization alone can't fix that, since it
+# never introduces the blank line CommonMark needs to open a new block.
+_RICH_NON_ONE_ORDERED_ITEM_RE = re.compile(r'[ \t]{0,3}(?!1[.)])\d{1,9}[.)][ \t]+\S')
+_RICH_CONTAINER_OR_INDENT_RE = re.compile(r'[ \t]{0,3}(?:>|[-+*][ \t]|\d{1,9}[.)][ \t])|[ \t]')
+_RICH_FENCE_LINE_RE = re.compile(r'[ \t]{0,3}(?:```|~~~)')
+
+
+def _rich_separate_ordered_lists(text: str) -> str:
+    """Insert a blank line before an ordered list item starting above 1 that directly follows a
+    plain prose line, so it opens its own list block instead of being absorbed as paragraph text.
+
+    Lines that continue a list/blockquote, indented lines, and fenced code (including an
+    unclosed fence in a streaming draft) are passed through unchanged.
+    """
+    out: list[str] = []
+    in_fence = False
+    prose = False
+    for line in text.split('\n'):
+        if in_fence:
+            out.append(line)
+            if _RICH_FENCE_LINE_RE.match(line):
+                in_fence = False
+                prose = False
+            continue
+        if _RICH_FENCE_LINE_RE.match(line):
+            in_fence = True
+            out.append(line)
+            prose = False
+            continue
+        if prose and _RICH_NON_ONE_ORDERED_ITEM_RE.match(line):
+            out.append('')
+            prose = False
+        elif not line.strip() or _RICH_CONTAINER_OR_INDENT_RE.match(line):
+            prose = False
+        else:
+            prose = True
+        out.append(line)
+    return '\n'.join(out)
+
+
 def _rich_normalize_linebreaks(text: str) -> str:
     """Convert lone ``\\n`` (a Markdown soft break) to hard breaks for sendRichMessage; ``\\n\\n``,
-    fenced code and pipe tables are left untouched."""
+    fenced code and pipe tables are left untouched. A non-1 ordered list directly following prose
+    is first given the blank-line separation CommonMark requires to parse it as a list."""
     if not text or '\n' not in text:
         return text
     out: list[str] = []
     pos = 0
     for m in _RICH_PROTECTED_REGION_RE.finditer(text):
-        out.append(re.sub(r'(?<!\n)\n(?!\n)', '  \n', text[pos:m.start()]))
+        prose = _rich_separate_ordered_lists(text[pos:m.start()])
+        out.append(re.sub(r'(?<!\n)\n(?!\n)', '  \n', prose))
         out.append(m.group(0))  # protected region kept verbatim
         pos = m.end()
-    out.append(re.sub(r'(?<!\n)\n(?!\n)', '  \n', text[pos:]))
+    tail = _rich_separate_ordered_lists(text[pos:])
+    out.append(re.sub(r'(?<!\n)\n(?!\n)', '  \n', tail))
     return ''.join(out)
 
 
