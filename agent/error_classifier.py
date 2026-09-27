@@ -679,6 +679,7 @@ class _Ctx:
     num_messages: int
     base_url: str = ""  # the route the call went to; "" when the caller did not say
     anonymous: bool = False
+    outgoing_messages: Any = None  # the wire-format request messages, when the caller has them
 
     def __post_init__(self) -> None:
         self.error_type = type(self.error).__name__
@@ -937,7 +938,13 @@ def _by_transport(c: _Ctx) -> Optional[Verdict]:
     if c.error_type == "RuntimeError" and "consecutive stale attempts" in msg and "aborting this call" in msg:
         return _v(_R.timeout, **_ABORT_FALLBACK)
     transport = c.error_type in _TRANSPORT_ERROR_TYPES or isinstance(c.error, (TimeoutError, ConnectionError, OSError))
-    return _V_TIMEOUT if transport else None
+    if not transport:
+        return None
+    # A provider that enforces its image-size cap by dropping the connection reports no status
+    # code and no wording — the only signal left is the request we sent (#124833).
+    if _has_oversized_outgoing_image(c.outgoing_messages):
+        return _V_IMAGE_TOO_LARGE
+    return _V_TIMEOUT
 
 
 def _by_status(c: _Ctx) -> Optional[Verdict]:
@@ -963,13 +970,16 @@ def classify_api_error(
     approx_tokens: int = 0, context_length: int = 200000, num_messages: int = 0,
     base_url: str = "",
     api_key: Any = None,
+    api_messages: Any = None,
 ) -> ClassifiedError:
     """Classify an API error into a structured recovery recommendation (see ``_STAGES``).
 
     ``base_url`` (optional) is the route the call went to; the Nous welcome tier keys its
     dark-tier 403 on it because that refusal carries no distinguishing message.
     ``api_key`` identifies an anonymous request; a host or fairshare reason alone does not.
-    The credential is never included in the returned context."""
+    The credential is never included in the returned context. ``api_messages`` (optional) is the
+    outgoing wire-format request; only consulted when a connection drop or a content-less 400
+    carries no size signal of its own (#124833)."""
     from hermes_cli.anon_auth import is_anonymous_request
     status_code = _extract_status_code(error)
     # Copilot/GitHub Models RateLimitError may not set .status_code; force 429.
@@ -979,7 +989,7 @@ def classify_api_error(
     c = _Ctx(
         error, status_code, body, _build_error_msg(error, body), provider, model,
         approx_tokens, context_length, num_messages, str(base_url or ""),
-        anonymous=is_anonymous_request(provider, api_key),
+        anonymous=is_anonymous_request(provider, api_key), outgoing_messages=api_messages,
     )
     verdict = next((v for v in (stage(c) for stage in _STAGES) if v is not None), _V_UNKNOWN)
     message = _extract_message(error, body)
@@ -1104,6 +1114,18 @@ def _has_large_inline_image(content: Any) -> bool:
     return False
 
 
+def _has_oversized_outgoing_image(messages: Any) -> bool:
+    """True when the outgoing request (``_Ctx.outgoing_messages``) itself carries an oversized
+    inline image — used to reclassify a connection drop or a content-less 400 as
+    ``image_too_large`` when the provider's rejection names no size and echoes back no body
+    (#124833). ``_has_large_inline_image`` alone cannot see this: it only reads a rejected
+    field's echoed content, and a dropped connection or a generic body has none."""
+    for msg in messages if isinstance(messages, list) else ():
+        if isinstance(msg, dict) and _has_large_inline_image(msg.get("content")):
+            return True
+    return False
+
+
 def _oversized_message_content_rejection(body: Any) -> bool:
     """400 rejecting a *message* ``content`` field whose rejected value carries a large inline image.
 
@@ -1196,6 +1218,11 @@ def _classify_400(c: _Ctx) -> Verdict:
     is_generic = len(body_msg) < 30 or body_msg in {"error", ""}
     if is_generic and c.large_session(0.4, 80000, 80):
         return _V_CONTEXT_OVERFLOW
+    # A bare 400 ("failed to read request body") that names no field or size at all can still be
+    # the provider's size cap — the connection-drop case's sibling, just answered with a status
+    # code instead of a dropped socket (#124833).
+    if is_generic and _has_oversized_outgoing_image(c.outgoing_messages):
+        return _V_IMAGE_TOO_LARGE
     return _V_FORMAT_ERROR
 
 

@@ -1116,7 +1116,50 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.timeout
 
+    # ── #124833: a size cap enforced with no observable signal at all ──
 
+    _BIG_DATA_URL = "data:image/jpeg;base64," + "A" * (11 * 1024 * 1024)
+    _SMALL_DATA_URL = "data:image/jpeg;base64," + "A" * (64 * 1024)
+
+    @staticmethod
+    def _messages_with_image(url):
+        return [{"role": "user", "content": [
+            {"type": "text", "text": "see attached"},
+            {"type": "image_url", "image_url": {"url": url}},
+        ]}]
+
+    def test_connection_drop_with_oversized_image_is_image_too_large(self):
+        """A provider that caps image size by dropping the connection (no status code, no
+        wording) must still reach the shrink recovery instead of looping as a bare timeout."""
+        class APIConnectionError(MockTransportError):
+            pass
+
+        e = APIConnectionError("Connection error.")
+        messages = self._messages_with_image(self._BIG_DATA_URL)
+        result = classify_api_error(e, provider="ollama-cloud", api_messages=messages)
+        assert result.reason == FailoverReason.image_too_large
+        assert result.retryable is True
+
+        # Control: the same connection drop with no oversized image stays a plain timeout.
+        result = classify_api_error(e, provider="ollama-cloud", api_messages=self._messages_with_image(self._SMALL_DATA_URL))
+        assert result.reason == FailoverReason.timeout
+        result = classify_api_error(e, provider="ollama-cloud")
+        assert result.reason == FailoverReason.timeout
+
+    def test_generic_400_with_oversized_image_is_image_too_large(self):
+        """A 400 that names no field or size at all ("failed to read request body") is the
+        connection-drop case's sibling — the cap enforced with a status code instead."""
+        e = MockAPIError("failed to read request body", status_code=400)
+        messages = self._messages_with_image(self._BIG_DATA_URL)
+        result = classify_api_error(e, provider="ollama-cloud", api_messages=messages)
+        assert result.reason == FailoverReason.image_too_large
+        assert result.retryable is True
+
+        # Control: the same bare 400 with no oversized image stays format_error.
+        result = classify_api_error(e, provider="ollama-cloud", api_messages=self._messages_with_image(self._SMALL_DATA_URL))
+        assert result.reason == FailoverReason.format_error
+        result = classify_api_error(e, provider="ollama-cloud")
+        assert result.reason == FailoverReason.format_error
 
 
     # ── Error code classification ──
