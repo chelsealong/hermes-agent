@@ -77,3 +77,43 @@ def test_retry_succeeds_after_a_failed_add(repo: Path, tmp_path: Path):
 
     assert target.is_dir()
     assert (target / "README.md").exists(), "retry must produce a real checkout"
+
+
+def test_failed_add_reusing_an_existing_branch_does_not_delete_it(repo: Path, tmp_path: Path):
+    """A task branch that already carries real commits (from an earlier, successful
+    dispatch attempt) must survive a failed *retry* of ``worktree add``.
+
+    Once ``branch_name`` already exists, ``_ensure_git_worktree`` takes the reuse
+    arm (no ``-b``) — it did not create the branch, so a failed add must not let
+    ``_cleanup_failed_worktree_add`` delete it out from under the real work.
+    """
+    branch = "wt/task_with_real_work"
+    _git(repo, "branch", branch)
+    _git(repo, "checkout", branch)
+    (repo / "progress.txt").write_text("real work already done on this task\n", encoding="utf-8")
+    _git(repo, "add", "progress.txt")
+    _git(repo, "commit", "-m", "real work on task")
+    _git(repo, "checkout", "main")
+    commit_sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", branch],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    # A non-empty, non-worktree target makes the reuse-arm `worktree add` fail,
+    # mirroring the retry-after-a-stale-leftover scenario this fix targets.
+    target = tmp_path / "external_target"
+    target.mkdir(parents=True)
+    (target / "stray.txt").write_text("leftover from a stale target\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="git worktree add failed"):
+        kbw._ensure_git_worktree(repo, target, branch)
+
+    branches = subprocess.run(
+        ["git", "-C", str(repo), "branch", "--list", branch],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert branch in branches, "pre-existing task branch must survive a failed reuse-arm add"
+    assert subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "-e", commit_sha],
+        capture_output=True,
+    ).returncode == 0, "the real commit on the task branch must not be discarded"

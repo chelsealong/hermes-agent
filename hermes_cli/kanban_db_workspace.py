@@ -490,26 +490,32 @@ def _ensure_git_worktree(repo_root: Path, target: Path, branch_name: str) -> Non
     content, so an uncleaned partial target would satisfy this function's own
     "already a matching worktree" fast path on the next call and get silently
     reused as a valid (but incomplete) workspace instead of retried.
+
+    ``branch_name`` is the task's persistent branch and may already carry commits
+    from earlier work on this task, so cleanup must only delete it when THIS call
+    is the one that created it (the fresh-branch ``-b`` arm) — never when reusing
+    a pre-existing branch.
     """
     target = target.expanduser()
     repo_common = _git_common_dir(repo_root)
     if target.exists() and repo_common is not None and _path_key(_git_common_dir(target)) == _path_key(repo_common):
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    if _git_branch_exists(repo_root, branch_name):
-        args = ["worktree", "add", str(target), branch_name]
-    else:
+    created_branch = not _git_branch_exists(repo_root, branch_name)
+    if created_branch:
         args = ["worktree", "add", "-b", branch_name, str(target), "HEAD"]
+    else:
+        args = ["worktree", "add", str(target), branch_name]
     try:
         result = _git(repo_root, *args, timeout=60)
     except Exception as exc:
-        _cleanup_failed_worktree_add(str(repo_root), target, branch_name)
+        _cleanup_failed_worktree_add(str(repo_root), target, branch_name, delete_branch=created_branch)
         raise RuntimeError(
             f"git worktree add failed for {target} on branch {branch_name}: {exc}"
         ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
-        _cleanup_failed_worktree_add(str(repo_root), target, branch_name)
+        _cleanup_failed_worktree_add(str(repo_root), target, branch_name, delete_branch=created_branch)
         raise RuntimeError(
             f"git worktree add failed for {target} on branch {branch_name}: {stderr}"
         )

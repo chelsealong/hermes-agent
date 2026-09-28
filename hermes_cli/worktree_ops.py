@@ -93,12 +93,18 @@ def release_lsp_clients(wt_path: str) -> None:
         logger.debug("LSP release for worktree %s failed: %s", wt_path, e)
 
 
-def _cleanup_failed_worktree_add(repo_root: str, wt_path: Path, branch_name: str) -> None:
+def _cleanup_failed_worktree_add(
+    repo_root: str, wt_path: Path, branch_name: str, *, delete_branch: bool = True,
+) -> None:
     """Sweep the leftovers of a failed/timed-out ``git worktree add`` (fail-soft).
 
     ``worktree add`` is not transactional: killed mid-checkout it leaves the partial dir, a
     LOCKED admin entry naming the *live* pid (immune to the pruner's dead-pid unlock) and
     sometimes the branch, so any retry of the same name fails.
+
+    ``delete_branch`` must be ``False`` when the failed call did not create ``branch_name``
+    itself (i.e. it reused a pre-existing branch rather than passing ``-b``) — that branch may
+    carry commits from earlier work and this helper must never destroy them.
     """
     try:
         # Unlock first: `worktree remove --force` refuses a locked tree.
@@ -108,7 +114,8 @@ def _cleanup_failed_worktree_add(repo_root: str, wt_path: Path, branch_name: str
             shutil.rmtree(wt_path, ignore_errors=True)
         # `remove` needs the dir; `prune` drops the admin entry when it is already gone.
         _git_quiet(["worktree", "prune"], repo_root, timeout=15)
-        _git_quiet(["branch", "-D", branch_name], repo_root, timeout=15)
+        if delete_branch:
+            _git_quiet(["branch", "-D", branch_name], repo_root, timeout=15)
     except Exception as e:
         logger.debug("cleanup after failed worktree add: %s", e)
 
