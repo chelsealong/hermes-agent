@@ -6,6 +6,7 @@ adapters plus LLM/MCP clients that walks into the default 256 fd limit.
 ``platform_httpx_limits()`` returns tighter ``httpx.Limits``: 10 keepalive
 connections (platform APIs rarely parallelise beyond this), 2.0s expiry.
 Override via ``HERMES_GATEWAY_HTTPX_KEEPALIVE_EXPIRY`` / ``HERMES_GATEWAY_HTTPX_MAX_KEEPALIVE``.
+``HERMES_GATEWAY_HTTPX_MAX_KEEPALIVE=0`` disables keepalive pooling entirely.
 """
 
 from __future__ import annotations
@@ -34,13 +35,29 @@ def _positive_env(name: str, default, cast):
     return val if val > 0 else default
 
 
+def _non_negative_env(name: str, default, cast):
+    """``cast(env)`` when set, parseable and >= 0; else *default*.
+
+    Unlike ``_positive_env``, 0 is a meaningful value here (disable keepalive
+    pooling entirely) rather than an invalid one.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        val = cast(raw)
+    except (TypeError, ValueError):
+        return default
+    return val if val >= 0 else default
+
+
 def platform_httpx_limits() -> "httpx.Limits | None":
     """``httpx.Limits`` tuned for persistent platform-adapter clients; ``None`` without httpx."""
     if httpx is None:
         return None
     # max_connections stays at the httpx default (100) — plenty of headroom.
     return httpx.Limits(
-        max_keepalive_connections=_positive_env(
+        max_keepalive_connections=_non_negative_env(
             "HERMES_GATEWAY_HTTPX_MAX_KEEPALIVE", _DEFAULT_MAX_KEEPALIVE, int),
         keepalive_expiry=_positive_env(
             "HERMES_GATEWAY_HTTPX_KEEPALIVE_EXPIRY", _DEFAULT_KEEPALIVE_EXPIRY_S, float),
