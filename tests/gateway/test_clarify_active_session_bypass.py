@@ -139,3 +139,31 @@ async def test_active_session_bypass_uses_profile_namespaced_key_under_multiplex
     assert adapter._pending_messages == {}
 
 
+@pytest.mark.asyncio
+async def test_active_session_internal_event_does_not_bypass_into_clarify_intercept():
+    """Regression for issue #125781: a synthetic internal event (e.g. a background-task
+    completion notification) must never be routed to the clarify text-intercept, even while
+    a choice clarify is pending. Only a real human reply may answer or cancel it — an internal
+    event must fall through to the ordinary busy-session queue instead."""
+    _clear_clarify_state()
+    from tools import clarify_gateway as cm
+
+    adapter = _ClarifyBypassAdapter()
+    adapter._message_handler = AsyncMock(return_value="")
+    adapter._busy_session_handler = AsyncMock(return_value=True)
+    event = _event("background task completed")
+    event.internal = True
+    session_key = build_session_key(
+        event.source,
+        group_sessions_per_user=adapter.config.extra.get("group_sessions_per_user", True),
+        thread_sessions_per_user=adapter.config.extra.get("thread_sessions_per_user", False),
+    )
+    adapter._active_sessions[session_key] = asyncio.Event()
+    cm.register("clarify-1", session_key, "Pick one", ["A", "B"])
+
+    await adapter.handle_message(event)
+
+    adapter._message_handler.assert_not_awaited()
+    adapter._busy_session_handler.assert_awaited_once_with(event, session_key)
+    # The pending clarify must remain untouched by the internal event.
+    assert cm.get_pending_for_session(session_key, include_choice_prompts=True) is not None
