@@ -18,7 +18,7 @@ from typing import Optional
 from typing import TYPE_CHECKING
 import contextlib
 
-from hermes_cli.worktree_ops import release_lsp_clients
+from hermes_cli.worktree_ops import _cleanup_failed_worktree_add, release_lsp_clients
 
 if TYPE_CHECKING:
     from hermes_cli.kanban_db import Task
@@ -483,7 +483,14 @@ def _repo_root_for_worktree_target(path: Path) -> Optional[Path]:
 
 
 def _ensure_git_worktree(repo_root: Path, target: Path, branch_name: str) -> None:
-    """Materialize ``target`` as a linked git worktree under ``repo_root``."""
+    """Materialize ``target`` as a linked git worktree under ``repo_root``.
+
+    A killed/failed ``worktree add`` is swept with ``_cleanup_failed_worktree_add``
+    before raising: git writes the ``.git`` pointer file before materializing
+    content, so an uncleaned partial target would satisfy this function's own
+    "already a matching worktree" fast path on the next call and get silently
+    reused as a valid (but incomplete) workspace instead of retried.
+    """
     target = target.expanduser()
     repo_common = _git_common_dir(repo_root)
     if target.exists() and repo_common is not None and _path_key(_git_common_dir(target)) == _path_key(repo_common):
@@ -493,9 +500,16 @@ def _ensure_git_worktree(repo_root: Path, target: Path, branch_name: str) -> Non
         args = ["worktree", "add", str(target), branch_name]
     else:
         args = ["worktree", "add", "-b", branch_name, str(target), "HEAD"]
-    result = _git(repo_root, *args, timeout=60)
+    try:
+        result = _git(repo_root, *args, timeout=60)
+    except Exception as exc:
+        _cleanup_failed_worktree_add(str(repo_root), target, branch_name)
+        raise RuntimeError(
+            f"git worktree add failed for {target} on branch {branch_name}: {exc}"
+        ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
+        _cleanup_failed_worktree_add(str(repo_root), target, branch_name)
         raise RuntimeError(
             f"git worktree add failed for {target} on branch {branch_name}: {stderr}"
         )
