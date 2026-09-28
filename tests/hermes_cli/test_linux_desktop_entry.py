@@ -697,19 +697,24 @@ def test_unchanged_entry_still_aliases_a_legacy_entry(tmp_path, xdg_home, monkey
     assert _parse(legacy.read_text(encoding="utf-8"))["NoDisplay"] == "true"
 
 
-def test_install_prints_repin_notice_on_first_migration(tmp_path, xdg_home, monkeypatch, capsys):
-    """GNOME filters ``NoDisplay`` entries out of the favourites map, so a pin created against
-    the pre-rename ``hermes.desktop`` disappears silently once it becomes an alias (#125924).
-    The user must be told the entry was migrated so they know to re-pin.
-    """
-    _stub_install(tmp_path, monkeypatch)
-    root = _make_project(tmp_path)
+def _write_legacy_entry(xdg_home) -> None:
     legacy = xdg_home / "applications" / lde.LEGACY_DESKTOP_ENTRY_NAME
     legacy.parent.mkdir(parents=True)
     legacy.write_text(
         "[Desktop Entry]\nType=Application\nName=Hermes\nExec=hermes desktop\n",
         encoding="utf-8",
     )
+
+
+def test_install_prints_repin_notice_on_first_migration(tmp_path, xdg_home, monkeypatch, capsys):
+    """GNOME filters ``NoDisplay`` entries out of the favourites map, so a pin created against
+    the pre-rename ``hermes.desktop`` disappears silently once it becomes an alias (#125924).
+    The user must be told the entry was migrated so they know to re-pin.
+    """
+    _stub_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(lde.shutil, "which", lambda name: None)  # no notify-send in this test
+    root = _make_project(tmp_path)
+    _write_legacy_entry(xdg_home)
 
     lde.install_desktop_entry(root)
 
@@ -720,19 +725,53 @@ def test_install_does_not_reprint_notice_once_already_aliased(tmp_path, xdg_home
     """A later refresh of an already-hidden legacy entry (e.g. the checkout moved) is not a new
     migration — re-printing the hint every launch would be noise, not a notice."""
     _stub_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(lde.shutil, "which", lambda name: None)  # no notify-send in this test
     root = _make_project(tmp_path)
-    legacy = xdg_home / "applications" / lde.LEGACY_DESKTOP_ENTRY_NAME
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text(
-        "[Desktop Entry]\nType=Application\nName=Hermes\nExec=hermes desktop\n",
-        encoding="utf-8",
-    )
+    _write_legacy_entry(xdg_home)
     lde.install_desktop_entry(root)
     capsys.readouterr()  # discard the first-migration notice
 
     lde.install_desktop_entry(root)
 
     assert "re-pin" not in capsys.readouterr().out
+
+
+def test_install_sends_desktop_notification_on_first_migration(tmp_path, xdg_home, monkeypatch, capsys):
+    """The print() above is invisible when the migration is triggered the way #125924 actually
+    happens: clicking an existing GNOME dock/taskbar pin launches with no controlling TTY
+    (``Terminal=false``) and, once ``DESKTOP_STARTUP_ID`` is set, runs the install on
+    ``DeferredDesktopEntryInstall``'s daemon thread — nothing tails that process's stdout. A
+    ``notify-send`` call reaches the desktop's own notification daemon instead, independent of
+    stdout, so the user actually sees it in that scenario.
+    """
+    _stub_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(lde.shutil, "which", lambda name: "/usr/bin/notify-send" if name == "notify-send" else None)
+    calls = []
+    monkeypatch.setattr(lde, "_run_quiet", lambda cmd, **kwargs: calls.append(cmd) or True)
+    root = _make_project(tmp_path)
+    _write_legacy_entry(xdg_home)
+
+    lde.install_desktop_entry(root)
+
+    notify_calls = [cmd for cmd in calls if cmd[0] == "/usr/bin/notify-send"]
+    assert len(notify_calls) == 1
+    assert "re-pin" in " ".join(notify_calls[0])
+
+
+def test_install_skips_notification_when_notify_send_missing(tmp_path, xdg_home, monkeypatch, capsys):
+    """No notification daemon reachable (headless, minimal WM): don't crash, just skip it —
+    the terminal print() is still the fallback for whoever can see this process's stdout."""
+    _stub_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(lde.shutil, "which", lambda name: None)
+    calls = []
+    monkeypatch.setattr(lde, "_run_quiet", lambda cmd, **kwargs: calls.append(cmd) or True)
+    root = _make_project(tmp_path)
+    _write_legacy_entry(xdg_home)
+
+    lde.install_desktop_entry(root)
+
+    assert not any("notify-send" in cmd[0] for cmd in calls)
+    assert "re-pin" in capsys.readouterr().out
 
 
 def test_install_keeps_foreign_files_at_the_legacy_path(tmp_path, xdg_home, monkeypatch):

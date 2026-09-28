@@ -710,11 +710,31 @@ def install_desktop_entry(project_root: Path) -> Optional[Path]:
     if migrated_now:
         # The alias keeps the file launchable, but shells that filter NoDisplay out of the
         # favourites map (GNOME) drop an existing pin's icon with no other signal (#125924).
-        print(
-            "ℹ The old 'hermes.desktop' launcher entry was migrated to keep old pins launchable. "
-            "If Hermes disappeared from your taskbar or dock, re-pin it from the app grid."
-        )
+        _notify_repin_needed()
     return entry_path
+
+
+_REPIN_NOTICE = (
+    "The old 'hermes.desktop' launcher entry was migrated to keep old pins launchable. "
+    "If Hermes disappeared from your taskbar or dock, re-pin it from the app grid."
+)
+
+
+def _notify_repin_needed() -> None:
+    """Tell the user a re-pin is needed, on whatever channel reaches them.
+
+    The migration that needs this notice is triggered overwhelmingly by clicking an EXISTING
+    GNOME dock/taskbar pin, which launches with ``Terminal=false`` and no controlling TTY; when
+    that launch also sets ``DESKTOP_STARTUP_ID`` (see ``launched_from_shell``), the install runs
+    on ``DeferredDesktopEntryInstall``'s daemon thread, where a bare ``print()`` reaches nobody
+    (#125924). ``notify-send`` talks to the desktop's notification daemon directly, independent
+    of stdout, so it surfaces in exactly that scenario; ``print()`` still covers a terminal
+    launch (no notification daemon expected) and gives headless/CI output something to capture.
+    """
+    print(f"ℹ {_REPIN_NOTICE}")
+    notify_send = shutil.which("notify-send")
+    if notify_send:
+        _run_quiet([notify_send, "--app-name=Hermes", "--icon", APP_ID, "Hermes", _REPIN_NOTICE], timeout=5)
 
 
 def launched_from_shell(environ: Optional[Mapping[str, str]] = None) -> bool:
