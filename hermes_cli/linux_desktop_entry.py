@@ -612,33 +612,41 @@ def _launcher_entry_management_enabled() -> bool:
         return True
 
 
-def _alias_legacy_desktop_entry(applications_dir: Path, exec_command: str, icon: str) -> bool:
+def _alias_legacy_desktop_entry(applications_dir: Path, exec_command: str, icon: str) -> "tuple[bool, bool]":
     """Keep the pre-rename ``hermes.desktop`` as a hidden alias of the app-id entry.
 
     Shells resolve a taskbar pin by the entry file name it was pinned against: deleting the
     file makes GNOME drop the favourite and Plasma leave an inert item, and nothing can
     re-pin for the user. The alias stays launchable for old pins without listing Hermes
     twice. Only a file that still names this app is converted; anything else at that path
-    is left alone. True when the legacy file was (re)written.
+    is left alone.
+
+    Returns ``(wrote, migrated_now)``: *wrote* is True when the legacy file's bytes changed;
+    *migrated_now* is True only the first time a still-visible legacy entry is hidden behind
+    ``NoDisplay=true`` — GNOME filters ``NoDisplay`` entries out of the favourites map, so that
+    transition is exactly when an existing taskbar pin goes dark (#125924). A later refresh of
+    an already-aliased file (e.g. the checkout moved) does not re-fire the notice.
     """
     legacy = applications_dir / LEGACY_DESKTOP_ENTRY_NAME
     try:
         text = legacy.read_text(encoding="utf-8-sig")
     except OSError:
-        return False
-    if not any(line.strip() == "Name=Hermes" for line in text.splitlines()):
-        return False
+        return False, False
+    lines = [line.strip() for line in text.splitlines()]
+    if "Name=Hermes" not in lines:
+        return False, False
+    was_visible = "NoDisplay=true" not in lines
     alias_contents = _render_legacy_alias_entry(exec_command, icon)
     if text == alias_contents:
-        return False
+        return False, False
     try:
         from utils import atomic_write_text
 
         atomic_write_text(legacy, alias_contents, create_mode=0o755)
         legacy.chmod(0o755)
     except OSError:
-        return False
-    return True
+        return False, False
+    return True, was_visible
 
 
 def install_desktop_entry(project_root: Path) -> Optional[Path]:
@@ -692,9 +700,20 @@ def install_desktop_entry(project_root: Path) -> Optional[Path]:
     # Converting the old entry is management too: with the opt-out set, an existing
     # launcher stays untouched even here, in the missing-entry path where the new
     # entry is still created.
-    aliased = manage_enabled and _alias_legacy_desktop_entry(entry_path.parent, exec_command, icon_value)
+    aliased, migrated_now = (
+        _alias_legacy_desktop_entry(entry_path.parent, exec_command, icon_value)
+        if manage_enabled
+        else (False, False)
+    )
     if aliased or not unchanged:
         refresh_desktop_databases(entry_path.parent)
+    if migrated_now:
+        # The alias keeps the file launchable, but shells that filter NoDisplay out of the
+        # favourites map (GNOME) drop an existing pin's icon with no other signal (#125924).
+        print(
+            "ℹ The old 'hermes.desktop' launcher entry was migrated to keep old pins launchable. "
+            "If Hermes disappeared from your taskbar or dock, re-pin it from the app grid."
+        )
     return entry_path
 
 

@@ -697,6 +697,44 @@ def test_unchanged_entry_still_aliases_a_legacy_entry(tmp_path, xdg_home, monkey
     assert _parse(legacy.read_text(encoding="utf-8"))["NoDisplay"] == "true"
 
 
+def test_install_prints_repin_notice_on_first_migration(tmp_path, xdg_home, monkeypatch, capsys):
+    """GNOME filters ``NoDisplay`` entries out of the favourites map, so a pin created against
+    the pre-rename ``hermes.desktop`` disappears silently once it becomes an alias (#125924).
+    The user must be told the entry was migrated so they know to re-pin.
+    """
+    _stub_install(tmp_path, monkeypatch)
+    root = _make_project(tmp_path)
+    legacy = xdg_home / "applications" / lde.LEGACY_DESKTOP_ENTRY_NAME
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "[Desktop Entry]\nType=Application\nName=Hermes\nExec=hermes desktop\n",
+        encoding="utf-8",
+    )
+
+    lde.install_desktop_entry(root)
+
+    assert "re-pin" in capsys.readouterr().out
+
+
+def test_install_does_not_reprint_notice_once_already_aliased(tmp_path, xdg_home, monkeypatch, capsys):
+    """A later refresh of an already-hidden legacy entry (e.g. the checkout moved) is not a new
+    migration — re-printing the hint every launch would be noise, not a notice."""
+    _stub_install(tmp_path, monkeypatch)
+    root = _make_project(tmp_path)
+    legacy = xdg_home / "applications" / lde.LEGACY_DESKTOP_ENTRY_NAME
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "[Desktop Entry]\nType=Application\nName=Hermes\nExec=hermes desktop\n",
+        encoding="utf-8",
+    )
+    lde.install_desktop_entry(root)
+    capsys.readouterr()  # discard the first-migration notice
+
+    lde.install_desktop_entry(root)
+
+    assert "re-pin" not in capsys.readouterr().out
+
+
 def test_install_keeps_foreign_files_at_the_legacy_path(tmp_path, xdg_home, monkeypatch):
     """Only our own entry is converted to an alias; another app's file is not ours to rewrite."""
     _stub_install(tmp_path, monkeypatch)
