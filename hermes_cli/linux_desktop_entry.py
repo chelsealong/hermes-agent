@@ -115,6 +115,13 @@ def resolve_exec_command(project_root: Optional[Path] = None) -> str:
     """Build the absolute ``Exec=`` command line for ``hermes desktop``.
 
     Prefer the real ``hermes`` launcher; fall back to ``<python> -m hermes_cli.main desktop``.
+
+    Always appends ``--skip-build``: this entry is only ever (re)written from inside
+    ``cmd_gui`` AFTER that same invocation already built (or confirmed fresh) the packaged
+    app, so the next launch it spawns is guaranteed to find one on disk. Without it, every
+    menu/taskbar click re-runs the source-tree freshness check and rebuilds on a false
+    "stale" (any local checkout dirtiness), turning a ~4s packaged launch into a 60s+
+    npm/electron-builder pass that frequently fails outright (#126009).
     """
     from hermes_cli.relaunch import resolve_hermes_bin
 
@@ -130,7 +137,7 @@ def resolve_exec_command(project_root: Optional[Path] = None) -> str:
         # lineage, commit 4150501f641) — cached here per-process so a desktop launch pays the subprocess
         # cost at most once.
         interpreter = _running_interpreter_fallback()
-    argv = [interpreter, "-m", "hermes_cli.main", "desktop"]
+    argv = [interpreter, "-m", "hermes_cli.main", "desktop", "--skip-build"]
     if bin_path:
         resolved = Path(bin_path).resolve()
         # A Python launcher whose shebang points OUTSIDE the venv (e.g. the repo's `hermes` script
@@ -138,7 +145,7 @@ def resolve_exec_command(project_root: Optional[Path] = None) -> str:
         # Terminal=false — run it under the venv interpreter explicitly.
         prefix = [interpreter] if _needs_interpreter(resolved) else []
         # See #90292.
-        argv = [*prefix, str(resolved), "desktop"]
+        argv = [*prefix, str(resolved), "desktop", "--skip-build"]
     return " ".join(_quote_exec_arg(a) for a in argv)
 
 
