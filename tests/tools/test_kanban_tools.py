@@ -1280,3 +1280,16 @@ def test_worker_outliving_a_reclaim_resolves_against_the_current_run(monkeypatch
     assert "error" not in landed
     with kbc.connect_closing() as conn:
         assert kb.get_task(conn, worker_env).status == "done"
+
+
+def test_handoff_keeps_the_run_fence_after_the_run_ends(monkeypatch, worker_env):
+    """A worker's own review/block handoff clears current_run_id; a later lifecycle call from
+    the same worker must still be refused rather than bypass the human gate."""
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    assert "error" not in json.loads(kt._handle_request_review({"summary": "impl"}))
+    assert "error" in json.loads(kt._handle_complete({"summary": "done"}))
+    with kbc.connect_closing() as conn:
+        assert kb.get_task(conn, worker_env).status == "review"

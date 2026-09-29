@@ -219,13 +219,17 @@ def _worker_run_id(task_id: str) -> Optional[int]:
 def _lifecycle_run_id(kb, conn, task_id: str) -> Optional[int]:
     """Run id to fence a lifecycle write with. The env pin goes stale once the
     card is reclaimed: while a successor run owns the card the pin is kept so
-    the write is refused; once the card is unclaimed the work is still real, so
+    the write is refused; once the card is back in ready unclaimed the work is still real, so
     the write lands unfenced rather than being lost."""
     pinned = _worker_run_id(task_id)
     if pinned is None:
         return None
     task = kb.get_task(conn, task_id)
-    return None if task is not None and task.current_run_id is None else pinned
+    # Only an unclaimed ``ready`` card was reclaimed out from under the worker.
+    # review/blocked also clear current_run_id, but those are handoffs the
+    # fence must keep guarding.
+    unclaimed = task is not None and task.status == "ready" and task.current_run_id is None
+    return None if unclaimed else pinned
 
 
 def _stale_run_detail(kb, conn, task_id: str, fallback: str) -> str:
