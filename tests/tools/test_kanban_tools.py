@@ -1250,3 +1250,33 @@ def test_attach_url_happy_path_public_host(worker_env, default_url_guard, monkey
         assert Path(atts[0].stored_path).read_bytes() == payload
     finally:
         conn.close()
+
+
+def test_worker_outliving_a_reclaim_resolves_against_the_current_run(monkeypatch, worker_env):
+    """Regression for #127630: the env run pin goes stale after a reclaim. An unclaimed card
+    accepts the finished work; a live successor claim still refuses it, and the refusal never
+    quotes a prior run's crash text."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    with kbc.connect_closing() as conn:
+        _expire_claim(conn, worker_env)
+        assert kb.release_stale_claims(conn) == 1
+        conn.execute("UPDATE tasks SET last_failure_error = 'PREVIOUS RUN CRASHED' WHERE id = ?",
+                     (worker_env,))
+        conn.commit()
+        kb.claim_task(conn, worker_env)  # live successor run R2
+
+    refused = json.loads(kt._handle_complete({"summary": "done"}))
+    assert "error" in refused and "PREVIOUS RUN CRASHED" not in refused["error"]
+    with kbc.connect_closing() as conn:
+        assert kb.get_task(conn, worker_env).status == "running"
+        conn.execute("UPDATE tasks SET status = 'ready', current_run_id = NULL, claim_lock = NULL "
+                     "WHERE id = ?", (worker_env,))
+        conn.commit()
+
+    landed = json.loads(kt._handle_complete({"summary": "done"}))
+    assert "error" not in landed
+    with kbc.connect_closing() as conn:
+        assert kb.get_task(conn, worker_env).status == "done"

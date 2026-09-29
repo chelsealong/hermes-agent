@@ -216,6 +216,31 @@ def _worker_run_id(task_id: str) -> Optional[int]:
         return None
 
 
+def _lifecycle_run_id(kb, conn, task_id: str) -> Optional[int]:
+    """Run id to fence a lifecycle write with. The env pin goes stale once the
+    card is reclaimed: while a successor run owns the card the pin is kept so
+    the write is refused; once the card is unclaimed the work is still real, so
+    the write lands unfenced rather than being lost."""
+    pinned = _worker_run_id(task_id)
+    if pinned is None:
+        return None
+    task = kb.get_task(conn, task_id)
+    return None if task is not None and task.current_run_id is None else pinned
+
+
+def _stale_run_detail(kb, conn, task_id: str, fallback: str) -> str:
+    """Rejection text about this caller's own run state, never a prior run's
+    ``last_failure_error``."""
+    task = kb.get_task(conn, task_id)
+    pinned = _worker_run_id(task_id)
+    if task is not None and pinned is not None and task.current_run_id not in (None, pinned):
+        return (f"{fallback}: run {pinned} was superseded by run {task.current_run_id}, "
+                f"which now owns the card")
+    if task is not None:
+        return f"{fallback} (task status is {task.status!r})"
+    return fallback
+
+
 def _stamp_worker_session_metadata(task_id: str, metadata: Optional[dict]) -> Optional[dict]:
     """Add trusted worker session id metadata for this worker's own task."""
     session_id = _own_task_env(task_id, "HERMES_SESSION_ID")
@@ -713,7 +738,8 @@ def _handle_complete(args: dict, **kw) -> str:
         try:
             ok = kb.complete_task(
                 conn, tid, result=result, summary=summary, metadata=metadata,
-                created_cards=created_cards, expected_run_id=_worker_run_id(tid))
+                created_cards=created_cards,
+                expected_run_id=_lifecycle_run_id(kb, conn, tid))
         except kb.ArtifactPreservationError as artifact_err:
             # Structured rejection — surface the phantom ids so the worker can retry with a corrected list
             # or drop the field. Audit event already landed in the DB. The task itself was NOT mutated (the
@@ -759,8 +785,8 @@ def _handle_complete(args: dict, **kw) -> str:
                 raise _Reject(
                     f"could not complete {tid}: unsatisfied parent dependencies: "
                     f"{detail}; complete the parents first (done or archived)")
-            _check(False, (task.last_failure_error if task else None) or
-                   f"could not complete {tid} (unknown id, stale run, or already terminal)")
+            _check(False, _stale_run_detail(
+                kb, conn, tid, f"could not complete {tid} (unknown id, stale run, or already terminal)"))
         run = kb.latest_run(conn, tid)
         # Artifact staging is atomic with the completion write, so a worker that
         # read `kanban_attachments` before completing saw an empty list and has
@@ -798,7 +824,8 @@ def _handle_block(args: dict, **kw) -> str:
                f"{sorted(_GOAL_MODE_BLOCK_ALLOWED_KINDS)} (got {kind!r}). If the task is actually "
                f"finished or cannot proceed for another reason, call kanban_complete instead — "
                f"the completion judge will evaluate it.")
-        ok = kb.block_task(conn, tid, reason=reason, kind=kind, expected_run_id=_worker_run_id(tid))
+        ok = kb.block_task(conn, tid, reason=reason, kind=kind,
+                           expected_run_id=_lifecycle_run_id(kb, conn, tid))
         _check(ok, f"could not block {tid} (unknown id or not in running/ready)")
         landed_kind = kb.get_task(conn, tid).block_kind
         extra: dict = {"block_kind": landed_kind}
@@ -844,7 +871,7 @@ def _handle_request_review(args: dict, **kw) -> str:
         try:
             ok, fail_reason = kb.request_review(
                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
-                expected_run_id=_worker_run_id(tid), with_reason=True)
+                expected_run_id=_lifecycle_run_id(kb, conn, tid), with_reason=True)
         except kb.ArtifactPreservationError as artifact_err:
             # Same contract as kanban_complete (#22923): the transition rolled
             # back, the task is untouched and retryable — say so explicitly or
@@ -867,7 +894,8 @@ def _handle_request_changes(args: dict, **kw) -> str:
         _require_text(args, "reason", "reason is required — describe the changes needed"))
     with _board(args.get("board")) as (kb, conn):
         ok, detail = kb.request_changes(
-            conn, tid, reason=reason, expected_run_id=_worker_run_id(tid))
+            conn, tid, reason=reason,
+            expected_run_id=_lifecycle_run_id(kb, conn, tid))
         _check(ok, f"could not request changes for {tid}: {detail or 'invalid review state'}")
         return _ok_landed(kb, conn, tid, "ready", implementer=detail)
 
@@ -884,7 +912,8 @@ def _handle_heartbeat(args: dict, **kw) -> str:
         # claimer covers locally-driven workers that bypassed the dispatcher.
         kb.heartbeat_claim(conn, tid, claimer=os.environ.get("HERMES_KANBAN_CLAIM_LOCK"))
         ok = kbd.heartbeat_worker(
-            conn, tid, note=args.get("note"), expected_run_id=_worker_run_id(tid))
+            conn, tid, note=args.get("note"),
+            expected_run_id=_lifecycle_run_id(kb, conn, tid))
         _check(ok, f"could not heartbeat {tid} (unknown id or not running)")
         return _ok(task_id=tid)
 
