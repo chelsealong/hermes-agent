@@ -390,10 +390,10 @@ class Download:
             raise DownloadPaused("download paused during retry backoff")
 
     def _probe(self, url: str) -> _Remote:
-        def request():
+        def request(ranged: bool = True):
             self._check_pause()
-            req = urllib.request.Request(url, headers={**_UA, "Range": "bytes=0-0"})
-            with _OPENER.open(req, timeout=60) as response:
+            headers = {**_UA, "Range": "bytes=0-0"} if ranged else _UA
+            with _OPENER.open(urllib.request.Request(url, headers=headers), timeout=60) as response:
                 etag = _strong_etag(response)
                 if response.status == 206:
                     total = _validate_range(response, 0, 1)
@@ -406,8 +406,17 @@ class Download:
                 if response.status != 200:
                     raise DownloadError(f"unexpected download probe status: {response.status}")
                 return _Remote(int(response.headers.get("Content-Length") or 0), False, etag)
+        def probe():
+            try:
+                return request()
+            except urllib.error.HTTPError as exc:
+                # Some corporate proxies refuse any Range header; a plain GET
+                # still works and takes the single-stream path.
+                if exc.code not in (401, 403):
+                    raise
+            return request(ranged=False)
         try:
-            return retry_network(request, wait=self._wait_retry)
+            return retry_network(probe, wait=self._wait_retry)
         except (OSError, http.client.HTTPException) as exc:
             raise DownloadTransportError(url, exc) from exc
         except DownloadError:

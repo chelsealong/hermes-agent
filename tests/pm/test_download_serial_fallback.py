@@ -35,3 +35,22 @@ def test_serial_fallback_survives_a_transient_retry(tmp_path, dl_server, monkeyp
     assert modes[1:] == [1, 1], "a network retry must not undo the CDN downgrade"
     assert len(waits) == 1
     assert dl.connections == modes[0], "the downgrade belongs to this source, not later downloads"
+
+
+def test_range_refusing_proxy_falls_back_to_single_stream(tmp_path, dl_server, monkeypatch):
+    """A proxy that 403s every Range request must not abort the download."""
+    payload = b"proxied bytes" * 100
+    RangeHandler.payloads["/tool"] = payload
+    original_get = RangeHandler.do_GET
+
+    def respond(handler):
+        if handler.headers.get("Range"):
+            handler.send_error(403)
+            return
+        original_get(handler)
+
+    monkeypatch.setattr(RangeHandler, "do_GET", respond)
+    dest = tmp_path / "tool"
+    Download([Source(url(dl_server, "/tool"), dest, hashlib.sha256(payload).hexdigest())],
+             partials_dir=tmp_path / "partials").run()
+    assert dest.read_bytes() == payload
