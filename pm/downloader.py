@@ -412,8 +412,9 @@ class Download:
             except urllib.error.HTTPError as exc:
                 # Some corporate proxies refuse any Range header; a plain GET
                 # still works and takes the single-stream path.
-                if exc.code not in (401, 403):
+                if exc.code != 403:
                     raise
+                exc.close()
             return request(ranged=False)
         try:
             return retry_network(probe, wait=self._wait_retry)

@@ -13,6 +13,7 @@ from tests.pm._range_server import RangeHandler, dl_server, url  # noqa: F401
 
 @pytest.mark.parametrize("failure,phase", [
     (failure, phase) for failure in ("503", "404", "403") for phase in ("probe", "ranged", "single")
+    if (failure, phase) != ("403", "probe")  # a Range-only 403 falls back to a plain GET
 ] + [("hash", "ranged"), ("hash", "single"), ("disk", "probe")])
 def test_download_failure_never_publishes_partial_bytes(tmp_path, dl_server, monkeypatch, failure, phase):
     payload = b"verified bytes"
@@ -60,6 +61,24 @@ def test_download_failure_never_publishes_partial_bytes(tmp_path, dl_server, mon
             assert not waits
             if failure != "hash":
                 assert len(error_requests) == 1
+
+
+def test_403_on_every_request_still_fails_after_plain_get_fallback(tmp_path, dl_server, monkeypatch):
+    RangeHandler.payloads["/tool"] = b"nope"
+    requests = []
+
+    def respond(handler):
+        requests.append(handler.headers.get("Range"))
+        handler.send_error(403)
+
+    monkeypatch.setattr(RangeHandler, "do_GET", respond)
+    dest = tmp_path / "tool"
+    dl = Download([Source(url(dl_server, "/tool"), dest)], partials_dir=tmp_path / "partials", connections=1)
+    with pytest.raises(DownloadTransportError) as error:
+        dl.run()
+    assert error.value.status == 403
+    assert requests == ["bytes=0-0", None]
+    assert not dest.exists()
 
 
 @pytest.mark.parametrize("phase", ["probe", "ranged", "single"])
