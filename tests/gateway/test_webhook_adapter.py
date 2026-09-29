@@ -535,6 +535,24 @@ class TestIdempotency:
             data = await resp2.json()
             assert data["status"] == "duplicate"
 
+    @pytest.mark.asyncio
+    async def test_hermes_outbound_delivery_round_trip(self):
+        """A delivery built by the outbound sender is accepted, event-filtered and de-duplicated."""
+        from agent.outbound_webhooks import WebhookTarget, _build_delivery
+
+        routes = {"peer": {"secret": "shared", "events": ["post_tool_call"], "prompt": "test"}}
+        adapter = _make_adapter(routes=routes)
+        adapter.handle_message = AsyncMock()
+        target = WebhookTarget(url="http://x/webhooks/peer", events=["post_tool_call"], secret="shared")
+        delivery = _build_delivery("post_tool_call", target, b'{"tool_name": "t"}', "d-1")
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp1 = await cli.post("/webhooks/peer", data=delivery["body"], headers=delivery["headers"])
+            assert resp1.status == 202
+            resp2 = await cli.post("/webhooks/peer", data=delivery["body"], headers=delivery["headers"])
+            assert (await resp2.json())["status"] == "duplicate"
+
 
 # ===================================================================
 # Rate limiting
