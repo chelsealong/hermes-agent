@@ -4848,16 +4848,18 @@ class TelegramAdapter(BasePlatformAdapter):
             edit_text = t("platform.telegram.approval.expired_detail", label=label)
         await query.answer(text=label[:_TOAST_LIMIT])
         # Keep the command visible: append the decision to the original card rather than replacing it.
+        edited = False
         original = getattr(query.message, "text_html", None)
         if isinstance(original, str) and original:
             appended = f"{original}\n\n— {_html.escape(edit_text)}"
             if utf16_len(appended) <= self.MAX_MESSAGE_LENGTH:
                 try:
                     await query.edit_message_text(text=appended, parse_mode=ParseMode.HTML, reply_markup=None)
-                    return
+                    edited = True
                 except Exception:
                     logger.debug("Telegram approval card edit failed; falling back to short label", exc_info=True)
-        await self._edit_md_quiet(query, edit_text)
+        if not edited:
+            await self._edit_md_quiet(query, edit_text)
         # Typing was paused when the approval was sent; the text /approve and /deny paths resume it too.
         if count and cb["chat_id"] is not None:
             self.resume_typing_for_chat(str(cb["chat_id"]))

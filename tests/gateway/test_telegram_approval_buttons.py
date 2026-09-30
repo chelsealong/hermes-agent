@@ -285,10 +285,12 @@ class TestTelegramApprovalCallback:
         update = MagicMock()
         update.callback_query = query
 
+        adapter.resume_typing_for_chat = MagicMock()
         with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
             with patch("tools.approval.resolve_gateway_approval", return_value=1):
                 await adapter._handle_callback_query(update, MagicMock())
 
+        adapter.resume_typing_for_chat.assert_called_once_with("12345")
         edit_kwargs = query.edit_message_text.call_args[1]
         assert "rm -rf build/" in edit_kwargs["text"]
         assert "Alice" in edit_kwargs["text"]
