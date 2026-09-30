@@ -2370,3 +2370,44 @@ describe('applyStoredSessionPreviewRuntimeInfo does not persist the preview', ()
     expect(localStorage.getItem('hermes.desktop.composer.provider')).toBe('anthropic')
   })
 })
+
+describe('overlayConcurrentMessageChanges against a committed tool fold', () => {
+  const tool = (id: string) => ({ type: 'tool-call', toolCallId: id, toolName: 'terminal', result: 'ok' }) as ChatMessagePart
+
+  const fold = {
+    id: '9-assistant',
+    role: 'assistant',
+    rowId: 9,
+    parts: [textPart('lead-in'), tool('c1'), tool('c2'), textPart('final answer')]
+  } as ChatMessage
+
+  const page = [msg('8-user', 'user', 'prompt', { rowId: 8 }), fold]
+
+  it('retires the live interim and settled tail the fold already carries', () => {
+    const interim = msg('assistant-stream-1-34', 'assistant', 'lead-in', { interim: true })
+
+    const tail = {
+      id: 'assistant-stream-1-35',
+      role: 'assistant',
+      pending: false,
+      parts: [tool('c1'), tool('c2'), textPart('final answer')]
+    } as ChatMessage
+
+    const overlaid = overlayConcurrentMessageChanges(page, page, [...page, interim, tail])
+
+    expect(overlaid.map(message => message.id)).toEqual(['8-user', '9-assistant'])
+  })
+
+  it('keeps a live tail that ran past the fold', () => {
+    const grown = {
+      id: 'assistant-stream-1-35',
+      role: 'assistant',
+      pending: false,
+      parts: [tool('c1'), tool('c2'), tool('c3'), textPart('final answer')]
+    } as ChatMessage
+
+    const overlaid = overlayConcurrentMessageChanges(page, page, [...page, grown])
+
+    expect(overlaid.map(message => message.id)).toEqual(['8-user', '9-assistant', 'assistant-stream-1-35'])
+  })
+})

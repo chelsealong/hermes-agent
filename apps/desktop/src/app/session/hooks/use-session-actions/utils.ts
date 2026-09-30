@@ -1681,6 +1681,28 @@ export function overlayConcurrentMessageChanges(
       }
     }
 
+    // A tool-heavy turn's committed fold carries the live run's segments (the
+    // interim's lead-in, the tail's tools + answer) that match nothing on
+    // their own; retire a sealed live row the page's folds already cover.
+    // Text-only settled rows have no tool anchor and stay with the check above.
+    if (
+      current.role === 'assistant' &&
+      !current.error &&
+      isLiveTailRow(current) &&
+      (current.pending !== true || current.interim === true) &&
+      (current.interim === true || toolCallIdsOf(current).length > 0)
+    ) {
+      const lastUser = overlaid.findLastIndex(message => message.role === 'user')
+
+      const folds = overlaid.filter(
+        (message, index) => index > lastUser && message.role === 'assistant' && !isLiveTailRow(message)
+      )
+
+      if (durableFoldCoversLiveResponse(folds, current)) {
+        continue
+      }
+    }
+
     if (activationStreamIndex >= 0 && current.role === 'assistant' && current.id.startsWith('assistant-stream-')) {
       const activationStream = overlaid[activationStreamIndex]
       const activationText = chatMessageText(activationStream)
