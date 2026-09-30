@@ -3075,6 +3075,25 @@ _ACK_WORKSPACE_MARKERS = (
 )
 
 
+# A reply that hands the decision back to the user ("Give me a clear go", "Want me to proceed?") is a
+# valid stop: the synthetic user-role continuation nudge would read as the missing approval.
+_AWAITS_USER_GO_RE = re.compile(
+    r"\b(?:give me (?:a |the )?(?:clear |explicit )?(?:go|green light|go-ahead|approval)"
+    r"|(?:waiting|wait) for (?:your|a) (?:go|approval|confirmation|green light|go-ahead)"
+    r"|(?:let me know|tell me) (?:if|when) (?:you(?:['\u2019]d| would)? (?:like|want)|to (?:proceed|go))"
+    r"|(?:want|would you like) me to (?:proceed|go ahead|start|run|do (?:that|it|this))"
+    r"|(?:say|reply|send) (?:go|yes|ok|okay|proceed)"
+    r"|(?:once|if) you (?:approve|confirm|say go))\b",
+    re.IGNORECASE,
+)
+
+
+def awaits_user_go(text: str) -> bool:
+    """Whether a short text-only reply explicitly asks the user for approval before acting."""
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 1200 and bool(_AWAITS_USER_GO_RE.search(t[-400:]))
+
+
 def looks_like_codex_intermediate_ack(
     agent, user_message: Any, assistant_content: str, messages: List[Dict[str, Any]],
     require_workspace: bool = True,
@@ -3085,7 +3104,7 @@ def looks_like_codex_intermediate_ack(
     if any(isinstance(msg, dict) and msg.get("role") == "tool" for msg in messages):
         return False
     assistant_text = agent._strip_think_blocks(assistant_content or "").strip().lower()
-    if not assistant_text or len(assistant_text) > 1200:
+    if not assistant_text or len(assistant_text) > 1200 or awaits_user_go(assistant_text):
         return False
     if not _ACK_FUTURE_RE.search(assistant_text):
         return False
@@ -3173,7 +3192,7 @@ _TRAILING_CONTINUE_INTENT_MAX_CHARS = 400
 def trailing_continue_intent(text: str) -> bool:
     """Whether ``text`` is a short reply ENDING on an announced next action (stall-guard re-prompt trigger)."""
     t = (text or "").strip()
-    if not t or len(t) > _TRAILING_CONTINUE_INTENT_MAX_CHARS:
+    if not t or len(t) > _TRAILING_CONTINUE_INTENT_MAX_CHARS or awaits_user_go(t):
         return False
     return bool(_TRAILING_CONTINUE_INTENT_RE.search(t[-160:]))
 

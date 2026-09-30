@@ -117,3 +117,18 @@ def test_all_path_drops_workspace_requirement():
 
 
 
+
+
+def test_ask_for_go_is_not_an_unfinished_ack():
+    """A reply that waits for the user's approval must end the turn, not get a synthetic "continue" nudge."""
+    from agent.agent_runtime_helpers import trailing_continue_intent
+
+    ask = "I'll check the files read-only first. Give me a clear go for that check, or steer the scope."
+    for require_workspace in (True, False):
+        assert not looks_like_codex_intermediate_ack(
+            _agent(True), CODE_USER, ask, [], require_workspace=require_workspace
+        )
+    assert not trailing_continue_intent("Let me now run the recon. Want me to proceed?")
+    # A genuine unfinished acknowledgment still continues.
+    assert looks_like_codex_intermediate_ack(_agent(True), CODE_USER, CODE_ACK, [])
+    assert trailing_continue_intent("Found it. Let me now run the tests.")
