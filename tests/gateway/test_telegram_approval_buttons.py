@@ -266,6 +266,36 @@ class TestTelegramApprovalCallback:
 
 
     @pytest.mark.asyncio
+    async def test_approval_resolution_keeps_command_text(self):
+        """Resolving an approval appends the decision to the card instead of erasing the command."""
+        adapter = _make_adapter()
+        adapter._approval_state[4] = "agent:main:telegram:group:12345:99"
+
+        query = AsyncMock()
+        query.data = "ea:once:4"
+        query.message = MagicMock()
+        query.message.chat_id = 12345
+        query.message.text_html = "<pre>rm -rf build/</pre>"
+        query.from_user = MagicMock()
+        query.from_user.first_name = "Alice"
+        query.from_user.id = "12345"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = MagicMock()
+        update.callback_query = query
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
+            with patch("tools.approval.resolve_gateway_approval", return_value=1):
+                await adapter._handle_callback_query(update, MagicMock())
+
+        edit_kwargs = query.edit_message_text.call_args[1]
+        assert "rm -rf build/" in edit_kwargs["text"]
+        assert "Alice" in edit_kwargs["text"]
+        assert edit_kwargs["reply_markup"] is None
+
+
+    @pytest.mark.asyncio
     async def test_update_prompt_callback_not_affected(self, tmp_path):
         """Ensure update prompt callbacks still work."""
         adapter = _make_adapter()
