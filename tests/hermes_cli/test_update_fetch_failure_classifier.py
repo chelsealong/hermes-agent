@@ -143,7 +143,22 @@ def test_update_and_upstream_network_calls_disable_terminal_prompts(monkeypatch,
         calls.append((cmd[1:], kwargs))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
+    class _Popen:
+        def __init__(self, cmd, **kwargs):
+            self.returncode = 0
+            calls.append((cmd[1:], kwargs))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def communicate(self, timeout=None):
+            return "", ""
+
     monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", _Popen)
     update_cmd._git_run(["git"], ["fetch", "origin", "main"], cwd=tmp_path, network=True, check=True)
     assert update_cmd_git._sync_with_upstream_if_needed(["git"], tmp_path, assume_yes=True)
     assert [args[0] for args, _ in calls] == ["fetch", "fetch", "pull", "push"]
