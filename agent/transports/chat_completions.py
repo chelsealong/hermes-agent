@@ -256,7 +256,7 @@ def _model_consumes_thought_signature(model: Any) -> bool:
     return "gemini" in m or "gemma" in m
 
 
-def _route_replays_reasoning_details(base_url: Any) -> bool:
+def _route_replays_reasoning_details(base_url: Any, model: Any = None) -> bool:
     """True when the target route reads replayed ``reasoning_details`` (OpenRouter's unified
     reasoning array, also consumed by the Nous Portal).
 
@@ -266,10 +266,16 @@ def _route_replays_reasoning_details(base_url: Any) -> bool:
     request with HTTP 400/422 — so a reasoning turn produced earlier in the session wedges every
     later turn once the model is switched (#70233). The stored history keeps the field; only the
     wire copy drops it.
+
+    OpenRouter is a transit host: it forwards the field to the resolved upstream. Gemini/Gemma
+    upstreams consume ``thought_signature``, not ``reasoning_details``, and 400 on it, so those
+    models are not replayed even through ``openrouter.ai``.
     """
     from utils import base_url_host_matches
 
-    return base_url_host_matches(base_url, "openrouter.ai") or base_url_host_matches(base_url, "nousresearch.com")
+    if base_url_host_matches(base_url, "openrouter.ai"):
+        return not _model_consumes_thought_signature(model)
+    return base_url_host_matches(base_url, "nousresearch.com")
 
 
 def _has_replayable_thought_signature(extra_content: Any) -> bool:
@@ -453,7 +459,7 @@ class ChatCompletionsTransport(ProviderTransport):
         strip_extra_content = not _model_consumes_thought_signature(kwargs.get("model"))
         # A profile declaring a native carrier type consumes replayed details by contract.
         native_type = getattr(kwargs.get("provider_profile"), "native_reasoning_details_type", None) or None
-        strip_reasoning_details = not (native_type or _route_replays_reasoning_details(kwargs.get("base_url")))
+        strip_reasoning_details = not (native_type or _route_replays_reasoning_details(kwargs.get("base_url"), kwargs.get("model")))
         sanitized_pairs = [(m, _sanitize_message(m, strip_extra_content, strip_reasoning_details, native_type))
                            for m in messages]
         if all(s is None for _, s in sanitized_pairs):
