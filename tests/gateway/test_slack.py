@@ -3222,6 +3222,24 @@ class TestSlashCommands:
         msg = adapter.handle_message.call_args[0][0]
         assert msg.text == "/compress"
 
+    @pytest.mark.asyncio
+    async def test_slash_event_carries_message_channel_prompt_and_names(self, adapter):
+        """Slash and ordinary turns in one channel must agree on prompt and names, or the
+        session's prompt pins flip (and the cached agent rebuilds) on every slash turn."""
+        adapter.config.extra["channel_prompts"] = {"C1": "Answer in haiku."}
+        await adapter._handle_slash_command(
+            {"command": "/hermes", "text": "what broke?", "user_id": "U1", "channel_id": "C1"})
+        slash = adapter.handle_message.call_args[0][0]
+        adapter.handle_message.reset_mock()
+        await adapter._handle_slack_message(
+            {"text": "<@U_BOT> what broke?", "user": "U1", "channel": "C1",
+             "ts": "1700000000.000100", "channel_type": "channel"})
+        msg = adapter.handle_message.call_args[0][0]
+        assert "Answer in haiku." in msg.channel_prompt
+        assert slash.channel_prompt == msg.channel_prompt
+        assert slash.source.user_name and slash.source.user_name == msg.source.user_name
+        assert slash.source.chat_name == msg.source.chat_name
+
 
 
     # ------------------------------------------------------------------

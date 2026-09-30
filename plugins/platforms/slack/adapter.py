@@ -6058,13 +6058,18 @@ class SlackAdapter(BasePlatformAdapter):
                 "[Slack] Ignoring slash command from DM because Slack DMs are disabled: channel=%s user=%s",
                 channel_id, user_id)
             return
+        # Same names and channel prompt as ordinary messages, so a slash turn does not flip the
+        # session's prompt pins (and rebuild the cached agent) against the surrounding messages.
+        user_name = await self._resolve_user_name(user_id, chat_id=channel_id, team_id=team_id)
+        channel_name = await self._resolve_channel_name(channel_id, team_id=team_id)
         source = self.build_source(
-            chat_id=channel_id, chat_type="dm" if is_dm else "group", user_id=user_id,
-            thread_id=thread_id, scope_id=team_id or None)
+            chat_id=channel_id, chat_name=channel_name, chat_type="dm" if is_dm else "group",
+            user_id=user_id, user_name=user_name, thread_id=thread_id, scope_id=team_id or None)
         event = MessageEvent(
             text=text,
             message_type=(MessageType.COMMAND if text.startswith("/") else MessageType.TEXT),
-            source=source, raw_message=command)
+            source=source, raw_message=command,
+            channel_prompt=self._channel_prompt_with_identity(channel_id, team_id))
         # Stash response_url so the first reply for this channel+user goes ephemeral. COMMAND
         # events only: free-form "/hermes <question>" replies must stay public.
         response_url = command.get("response_url", "")
