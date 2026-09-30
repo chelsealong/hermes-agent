@@ -2577,6 +2577,20 @@ def _session_auth_user_id(session: dict | None) -> str | None:
     return _transport_auth_user_id(session.get("transport"))
 
 
+def _stored_gateway_session_key(db, session_id: str) -> str | None:
+    """The messaging chat key of a stored session, so a desktop turn scopes memory like the gateway's turns.
+    Desktop-born rows carry no key (or a non-gateway one) and stay None."""
+    if db is None:
+        return None
+    try:
+        row = db.get_session(session_id)
+    except Exception:
+        logger.debug("gateway session key lookup failed for %s", session_id, exc_info=True)
+        return None
+    stored = (row or {}).get("session_key")
+    return stored if isinstance(stored, str) and stored.startswith("agent:") else None
+
+
 def _make_agent(
     sid: str, key: str, session_id: str | None = None, session_db=None,
     model_override: dict | str | None = None, provider_override: str | None = None,
@@ -2606,6 +2620,7 @@ def _make_agent(
     ignore_rules = is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))
     with _sessions_lock:
         session = _sessions.get(sid)
+    db = session_db if session_db is not None else _get_db()
     agent = AIAgent(
         model=model, max_iterations=_cfg_max_turns(cfg, 500), provider=runtime.get("provider"),
         requested_provider=runtime.get("requested_provider"),
@@ -2626,7 +2641,8 @@ def _make_agent(
         # The dashboard login identity reaches memory providers as the runtime user, like a gateway user id.
         # Builds that run before the record exists (branch, eager resume, compute host) pass it explicitly.
         user_id=auth_user_id if auth_user_id is not None else _session_auth_user_id(session),
-        session_db=session_db if session_db is not None else _get_db(), ephemeral_system_prompt=system_prompt or None,
+        gateway_session_key=_stored_gateway_session_key(db, session_id or key),
+        session_db=db, ephemeral_system_prompt=system_prompt or None,
         checkpoints_enabled=is_truthy_value(os.environ.get("HERMES_TUI_CHECKPOINTS")),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
         skip_context_files=ignore_rules, skip_memory=ignore_rules, fallback_model=_load_fallback_model(),
