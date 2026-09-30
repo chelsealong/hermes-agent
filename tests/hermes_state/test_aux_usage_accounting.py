@@ -56,6 +56,14 @@ class TestRecordAuxiliaryUsage:
         assert r["output_tokens"] == 50
         assert r["api_call_count"] == 1
 
+    def test_late_write_after_delete_does_not_resurrect_session(self, db):
+        """Regression for #128978: a late title/review thread must not re-create a deleted row."""
+        db.create_session("s1", source="cli")
+        assert db.delete_session("s1")
+        db.record_auxiliary_usage("s1", "title_generation", model="m", input_tokens=5)
+        assert db.get_session("s1") is None
+        assert _usage_rows(db, "s1") == []
+
     def test_accumulates_same_task_and_model(self, db):
         db.create_session("s1", source="cli")
         for _ in range(3):

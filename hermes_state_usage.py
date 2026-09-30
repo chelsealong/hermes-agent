@@ -383,10 +383,14 @@ class SessionUsageMixin:
         if not session_id or not task:
             return
         usage["api_call_count"] = 1 if api_call_count is None else int(api_call_count)
-        # FK to sessions.id: same guard as update_token_counts; the aux path carries no surface, so
-        # the placeholder stays repairable by the creator's upsert (_insert_session_row).
-        self._insert_session_row(session_id, "unknown")
-        self._execute_write(lambda conn: self._record_model_usage(conn, session_id, task=task, **usage))
+        # Never mint a placeholder row: this runs from late daemon threads (auto-title upgrade,
+        # background review) that can outlive the session, and re-inserting the row resurrects a
+        # session the user deleted. A usage delta for a row that is gone is dropped.
+        def _do(conn):
+            if conn.execute("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", (session_id,)).fetchone() is None:
+                return
+            self._record_model_usage(conn, session_id, task=task, **usage)
+        self._execute_write(_do)
 
     def auxiliary_usage_by_task(self, session_id: str) -> Dict[str, Dict[str, float]]:
         """Per-task auxiliary usage (``task != ''``: vision, compression, title_generation, ...) summed
