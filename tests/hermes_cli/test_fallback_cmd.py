@@ -53,6 +53,24 @@ class TestReadChain:
         result[0]["provider"] = "mutated"
         assert cfg["fallback_providers"][0]["provider"] == "nous"
 
+class TestWriteChain:
+
+    def test_drops_legacy_key_at_both_depths(self):
+        from hermes_cli.fallback_cmd import _write_chain
+        cfg = {"fallback_model": {}, "model": {"default": "x", "fallback_model": ""}}
+        chain = [{"provider": "nous", "model": "foo"}]
+        _write_chain(cfg, chain)
+        assert cfg["fallback_providers"] == chain
+        assert "fallback_model" not in cfg
+        assert "fallback_model" not in cfg["model"]
+        assert cfg["model"]["default"] == "x"
+
+    def test_string_model_cfg_is_left_alone(self):
+        from hermes_cli.fallback_cmd import _write_chain
+        cfg = {"model": "some/model"}
+        _write_chain(cfg, [])
+        assert cfg["model"] == "some/model"
+
 # ---------------------------------------------------------------------------
 # _extract_fallback_from_model_cfg
 # ---------------------------------------------------------------------------
