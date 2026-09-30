@@ -74,6 +74,12 @@ def static_verdicts(entries: list[Entry], python_version: str) -> tuple[dict[Pat
     return reasons, waiting
 
 
+def _bundled_memory_provider(name: str) -> bool:
+    from plugins.memory import _MEMORY_PLUGINS_DIR
+
+    return (_MEMORY_PLUGINS_DIR / name / "__init__.py").exists()
+
+
 class PluginEviction:
     """Config edits disabling the plugins in *reasons*; published like a plugin selection."""
 
@@ -104,7 +110,9 @@ class PluginEviction:
                 if name not in disabled:
                     disabled.append(name)
                 # plugins.disabled does not veto memory.provider; the provider joins the union on its own.
-                if isinstance(memory, dict) and str(memory.get("provider") or "").strip() == name:
+                # A bundled provider outranks the evicted copy at load, so clearing would drop a working one.
+                if (isinstance(memory, dict) and str(memory.get("provider") or "").strip() == name
+                        and not _bundled_memory_provider(name)):
                     memory["provider"] = ""
             output = io.StringIO()
             yaml.dump(config, output)
