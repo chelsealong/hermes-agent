@@ -85,4 +85,17 @@ describe('displayRequest', () => {
     await expect(displayRequest(orphan, 'display.status')).rejects.toThrow(/no connection owner/)
     expect(host.requestProfile).not.toHaveBeenCalled()
   })
+
+  it('names the bot profile so a remote gateway does not fall back to its launch profile', async () => {
+    const route = { connectionId: 'c1', profile: 'kensho-a' }
+    routeMock.mockReturnValue(route)
+
+    await displayRequest(orphan, 'display.start')
+
+    expect(host.requestProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: 'c1' }),
+      'display.start',
+      { profile: 'kensho-a' }
+    )
+  })
 })

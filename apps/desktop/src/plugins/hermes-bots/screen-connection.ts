@@ -121,7 +121,11 @@ export function displayRequest<T>(bot: RosterRow, method: string, params: Record
     return Promise.reject(new Error(`Bot ${bot.name} has no connection owner`))
   }
 
-  return host.requestProfile<T>(route, method, params)
+  // A registry-secondary socket does not scope the request itself, and `_profile_scoped` on the
+  // gateway falls back to the launch profile without `params.profile`, so name the bot's profile.
+  const scoped = typeof route === 'string' ? params : { profile: route.targetProfile || route.profile, ...params }
+
+  return host.requestProfile<T>(route, method, scoped)
 }
 
 /**
