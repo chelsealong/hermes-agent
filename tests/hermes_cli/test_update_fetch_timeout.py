@@ -28,11 +28,12 @@ def _root(monkeypatch, tmp_path):
     monkeypatch.setattr(update_cmd, "_m", lambda: MagicMock(PROJECT_ROOT=tmp_path))
 
 
+@pytest.mark.live_system_guard_bypass
 def test_stalled_fetch_kills_the_pipe_holding_grandchild(monkeypatch, tmp_path):
-    monkeypatch.setattr(update_cmd, "NETWORK_GIT_TIMEOUT_SECONDS", 2)
     pidfile = tmp_path / "grandchild.pid"
     start = time.monotonic()
-    result = update_cmd._git_run(_HUNG_TREE[:1], _HUNG_TREE[1:] + ["fetch", str(pidfile)], network=True)
+    result = update_cmd._run_network_git_tree_kill(
+        _HUNG_TREE + ["fetch", str(pidfile)], None, False, {"timeout": 2}, "fetch")
 
     assert time.monotonic() - start < 30
     assert result.returncode == 124
@@ -50,10 +51,11 @@ def test_stalled_fetch_kills_the_pipe_holding_grandchild(monkeypatch, tmp_path):
         pytest.fail("the timed-out fetch's grandchild survived holding the pipes")
 
 
+@pytest.mark.live_system_guard_bypass
 def test_timeout_with_check_raises_and_local_git_is_unbounded(monkeypatch, tmp_path):
-    monkeypatch.setattr(update_cmd, "NETWORK_GIT_TIMEOUT_SECONDS", 1)
     with pytest.raises(subprocess.CalledProcessError) as exc:
-        update_cmd._git_run(_HUNG_TREE[:1], _HUNG_TREE[1:] + ["fetch", str(tmp_path / "p")], network=True, check=True)
+        update_cmd._run_network_git_tree_kill(
+            _HUNG_TREE + ["fetch", str(tmp_path / "p")], None, True, {"timeout": 1}, "fetch")
     assert exc.value.returncode == 124
 
     ok = update_cmd._git_run([sys.executable], ["-c", "import time;time.sleep(1.5);print('ok')"])

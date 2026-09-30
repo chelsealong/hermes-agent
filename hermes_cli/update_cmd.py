@@ -276,17 +276,38 @@ def _git_run(git_cmd, args, cwd=None, *, check=False, network=False):
     # calls, so layer them instead of passing the keyword twice.
     spawn_kwargs = {"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}
     spawn_kwargs.setdefault("creationflags", windows_hide_flags())
-    if not network:
+    from hermes_cli._subprocess_compat import IS_WINDOWS
+    if network and IS_WINDOWS:
+        return _run_network_git_tree_kill(git_cmd + args, cwd, check, spawn_kwargs, args[0])
+    try:
         return subprocess.run(
             git_cmd + args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", check=check, **spawn_kwargs)
+            text=True, encoding="utf-8", errors="replace", check=check,
+            **spawn_kwargs)
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run already killed the child; the checkout stays consistent because
+        # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
+        # so every caller's existing stderr path prints one clear line.
+        return _timed_out_git_result(exc.cmd, args[0], check, exc)
+
+
+def _timed_out_git_result(cmd, verb, check, exc):
+    result = subprocess.CompletedProcess(
+        cmd, 124, stdout="",
+        stderr=f"git {verb} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
+    if check:
+        raise subprocess.CalledProcessError(124, cmd, output="", stderr=result.stderr) from exc
+    return result
+
+
+def _run_network_git_tree_kill(cmd, cwd, check, spawn_kwargs, verb):
+    """Windows: subprocess.run's post-timeout cleanup calls an unbounded communicate() after
+    killing only git.exe, so a surviving git-remote-https.exe holding the pipes wedges it forever."""
     from hermes_cli._subprocess_compat import IS_WINDOWS, kill_process_tree
+    spawn_kwargs = dict(spawn_kwargs)
     if not IS_WINDOWS:
         spawn_kwargs.setdefault("process_group", 0)  # own group so the tree-kill can reach it
     timeout = spawn_kwargs.pop("timeout")
-    cmd = git_cmd + args
-    # Not subprocess.run: on Windows its post-timeout cleanup calls an unbounded communicate() after
-    # killing only git.exe, and a surviving git-remote-https.exe holding the pipes wedges it forever.
     with subprocess.Popen(
             cmd, cwd=_m().PROJECT_ROOT if cwd is None else cwd, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
@@ -294,17 +315,10 @@ def _git_run(git_cmd, args, cwd=None, *, check=False, network=False):
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            # The checkout stays consistent because fetch writes to tmp_pack_* and only renames on
-            # success. Report as a failed run so every caller's existing stderr path prints one line.
             kill_process_tree(proc)
             with suppress(subprocess.TimeoutExpired):
                 proc.communicate(timeout=10)
-            result = subprocess.CompletedProcess(
-                cmd, 124, stdout="",
-                stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
-            if check:
-                raise subprocess.CalledProcessError(124, cmd, output="", stderr=result.stderr) from exc
-            return result
+            return _timed_out_git_result(cmd, verb, check, exc)
         except BaseException:
             kill_process_tree(proc)
             raise
