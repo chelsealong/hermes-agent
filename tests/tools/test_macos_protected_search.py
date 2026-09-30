@@ -1,5 +1,8 @@
 """macOS TCC-safe behavior for broad file searches."""
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -142,6 +145,7 @@ def test_rg_multi_root_scopes_protected_globs_and_restores_absolute_paths(monkey
     command = commands[0]
     assert command.startswith("set -o pipefail; cd '/' && ")
     assert "--sortr=modified" in command
+    assert "'!Users/alice/Downloads'" in command
     assert "'!Users/alice/Downloads/**'" in command
     assert "'!repo/Downloads/**'" not in command
     assert "'Users/alice' 'repo'" in command
@@ -194,3 +198,24 @@ def test_real_ripgrep_does_not_descend_into_protected_folder(tmp_path, monkeypat
     paths = [match.path for match in result.matches]
     assert any("visible.txt" in path for path in paths)
     assert all("protected.txt" not in path for path in paths)
+
+
+@pytest.mark.skipif(shutil.which("rg") is None or os.geteuid() == 0, reason="needs rg and non-root")
+def test_rg_exclusion_globs_prune_the_folder_entry_itself(tmp_path, monkeypatch):
+    """Regression for #129733: ``!<dir>/**`` alone leaves the folder, so rg opendir()s it
+    (what TCC gates). A mode-000 folder stands in: rg must not report Permission denied."""
+    root = tmp_path.resolve()
+    (root / "Downloads").mkdir()
+    (root / "Downloads" / "f.txt").write_text("x")
+    (root / "keep.txt").write_text("x")
+    (root / "Downloads").chmod(0o000)
+    ops = ShellFileOperations(RecordingEnvironment(root))
+    monkeypatch.setattr(ops, "_macos_search_exclusions", lambda _path: ["Downloads"])
+    try:
+        result = subprocess.run(
+            ["rg", "--files", *[a.strip("'") for a in ops._rg_exclusion_globs(str(root))], str(root)],
+            cwd=root, capture_output=True, text=True)
+    finally:
+        (root / "Downloads").chmod(0o755)
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [str(root / "keep.txt")]
