@@ -940,6 +940,16 @@ class TestClassifyApiError:
         )
         assert gated.reason != FailoverReason.reasoning_mandatory
 
+    def test_chinese_reasoning_mandatory_400_is_floor_retry_not_strip(self):
+        """Z.ai BigModel words the refusal in Chinese (code 1214). CJK chars are ``\\w``, so the
+        field token must be exempt from the leading lookbehind; unrelated Chinese 400s stay out."""
+        from agent.error_classifier import is_reasoning_field_rejection, is_reasoning_required_rejection
+
+        msg = '{"error":{"code":"1214","message":"该模型始终思考，不支持关闭思考；请使用 low、high 或 max"}}'
+        assert is_reasoning_required_rejection(msg)
+        assert not is_reasoning_field_rejection(msg)
+        assert not is_reasoning_required_rejection('{"error":{"message":"该模型不存在"}}')
+
     def test_structured_invalid_reasoning_effort_400_never_compresses(self):
         """A custom Responses relay rejects an unsupported ``reasoning.effort`` with a message-less
         structured 400 (``param`` + ``error_code: invalid_reasoning_effort``, #100536). No wording rule

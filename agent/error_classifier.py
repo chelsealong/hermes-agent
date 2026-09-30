@@ -508,6 +508,8 @@ UNSUPPORTED_PARAM_MARKERS = (
 _REASONING_FIELD_TOKEN = re.compile(
     r"(?<![\w\-/])(?:reasoning_effort|thinking_config|thinking_budget|enable_thinking|thinkingconfig"
     r"|thinkingbudget|reasoning|thinking|think)(?![\w\-/])(?!\s+models?\b)"
+    # CJK chars are \w, so the lookbehind above can never pass for them.
+    r"|思考(?!\s+models?\b)"
 )
 
 # Structured rejection of a reasoning field, read from the stringified body: OpenAI-style
@@ -524,6 +526,8 @@ _REASONING_PARAM_REJECTION = re.compile(
 _REASONING_REQUIRED_MARKERS = (
     "mandatory", "cannot be disabled", "can't be disabled", "must be enabled", "is required",
     "always enabled", "cannot be turned off",
+    # Z.ai / BigModel (GLM): "该模型始终思考，不支持关闭思考；请使用 low、high 或 max"
+    "始终思考", "不支持关闭",
 )
 
 
