@@ -68,3 +68,26 @@ def test_build_uninstall_parser_accepts_dry_run():
 
     assert args.dry_run is True
     assert args.full is True
+
+
+def test_gui_dry_run_removes_nothing(monkeypatch, tmp_path, capsys):
+    """Regression: ``uninstall --gui --dry-run`` used to delete the GUI artifacts."""
+    node_modules = tmp_path / "hermes-agent" / "node_modules"
+    node_modules.mkdir(parents=True)
+    summary = {
+        "gui_installed": True,
+        "source_built_artifacts": [str(node_modules)],
+        "packaged_app_paths": [],
+        "userdata_exists": False,
+    }
+    removed = []
+    monkeypatch.setattr(uninstall, "_refuse_if_steward_owned", lambda: None)
+    monkeypatch.setattr(uninstall, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr("hermes_cli.gui_uninstall.gui_install_summary", lambda *a, **k: summary)
+    monkeypatch.setattr("hermes_cli.gui_uninstall.uninstall_gui", lambda *a, **k: removed.append(a))
+
+    uninstall.run_gui_uninstall(SimpleNamespace(dry_run=True, yes=True))
+
+    assert removed == []
+    assert node_modules.exists()
+    assert "Dry run" in capsys.readouterr().out
