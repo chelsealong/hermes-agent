@@ -16,6 +16,8 @@ import {
   pumpStreamToFile,
   resolveGatewayFileBackend,
   saveDialogFilters,
+  saveResultOrError,
+  withTimeout,
   writeBufferToFile
 } from './gateway-file-download'
 
@@ -319,7 +321,6 @@ test('isNotFoundError matches only HTTP 404', () => {
   assert.equal(isNotFoundError(null), false)
 })
 
-
 test('resolveGatewayFileBackend pins registered files to their owning connection', async () => {
   const calls: string[] = []
 
@@ -431,3 +432,30 @@ test('saveDialogFilters reads the basename, not a directory component', () => {
   })
 })
 
+test('saveResultOrError turns any rejection into a structured-cloneable result', async () => {
+  class AuthError extends Error {
+    response = { socket: { destroy() {} } }
+  }
+
+  for (const failure of [new AuthError('401: unauthorized'), 'plain string', { response: {} }]) {
+    const result = await saveResultOrError(() => Promise.reject(failure))
+
+    assert.deepEqual(structuredClone(result), result)
+    assert.equal(result.saved, false)
+    assert.ok(result.error)
+  }
+
+  assert.equal(
+    (await saveResultOrError(() => Promise.reject(new AuthError('401: unauthorized')))).error,
+    '401: unauthorized'
+  )
+  assert.deepEqual(await saveResultOrError(async () => ({ canceled: true, saved: false })), {
+    canceled: true,
+    saved: false
+  })
+})
+
+test('withTimeout rejects a phase that never settles', async () => {
+  await assert.rejects(withTimeout(new Promise(() => {}), 20, 'backend unreachable'), /backend unreachable/)
+  assert.equal(await withTimeout(Promise.resolve(7), 1000, 'x'), 7)
+})

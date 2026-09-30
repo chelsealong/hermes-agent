@@ -348,6 +348,7 @@ export async function gatewayImageProxyDataUrl(url: string, owner?: OwnerScope):
 
 export interface GatewayFileSaveResult {
   canceled?: boolean
+  error?: string
   path?: string
   saved: boolean
 }
@@ -408,6 +409,10 @@ export async function downloadGatewayMediaFile(
 export async function downloadGatewayFileWithFeedback(path: string, origin?: GatewayFileOrigin): Promise<void> {
   try {
     const result = await downloadGatewayMediaFile(path, origin)
+
+    if (result.error) {
+      throw new Error(result.error)
+    }
 
     if (result.saved) {
       notify({ durationMs: 1500, kind: 'info', message: translateNow('fileMenu.downloadSaved') })

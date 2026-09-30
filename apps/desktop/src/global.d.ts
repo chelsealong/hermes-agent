@@ -310,6 +310,7 @@ declare global {
         suggestedName?: string
       }) => Promise<{
         canceled?: boolean
+        error?: string
         path?: string
         saved: boolean
       }>

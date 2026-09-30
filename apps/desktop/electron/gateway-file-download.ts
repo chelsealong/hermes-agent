@@ -383,6 +383,7 @@ export interface GatewaySaveDialogResult {
 
 export interface GatewayFileSaveResult {
   canceled?: boolean
+  error?: string
   path?: string
   saved: boolean
 }
@@ -519,4 +520,31 @@ export async function saveGatewayDownload(
 // to trigger the data-URL compatibility fallback (and nothing else).
 export function isNotFoundError(error: unknown): boolean {
   return Boolean(error) && (error as { statusCode?: number }).statusCode === 404
+}
+
+export const GATEWAY_BACKEND_RESOLVE_TIMEOUT_MS = 30_000
+
+/** Reject if `work` has not settled within `ms`, so a dead or still-spawning
+ *  remote backend cannot leave an IPC invocation without a reply. */
+export function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** Electron cannot structured-clone arbitrary rejection values (custom auth
+ *  error classes, response objects), which surfaces in the renderer as the
+ *  opaque "reply was never sent". Normalize every failure to a plain result. */
+export async function saveResultOrError(save: () => Promise<GatewayFileSaveResult>): Promise<GatewayFileSaveResult> {
+  try {
+    return await save()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+
+    return { error: message || 'Download failed', saved: false }
+  }
 }

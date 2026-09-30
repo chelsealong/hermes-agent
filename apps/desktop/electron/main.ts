@@ -265,7 +265,10 @@ import type {
 import {
   gatewayFilePath,
   gatewayFileRequestPaths,
+  GATEWAY_BACKEND_RESOLVE_TIMEOUT_MS,
   resolveGatewayFileBackend,
+  saveResultOrError,
+  withTimeout,
   saveGatewayDownload
 } from './gateway-file-download'
 import { downloadViaOauthSessionToFile, downloadViaTokenToFile } from './gateway-file-download-transport'
@@ -8243,10 +8246,14 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}): Promise<Ga
     throw new Error('Missing gateway file path')
   }
 
-  const { connection, connectionId, profile } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
-    ensureLegacy: ensureBackend,
-    ensureRegistry: ensureRegistryBackend
-  })
+  const { connection, connectionId, profile } = await withTimeout(
+    resolveGatewayFileBackend<GatewayFileConnection>(payload, {
+      ensureLegacy: ensureBackend,
+      ensureRegistry: ensureRegistryBackend
+    }),
+    GATEWAY_BACKEND_RESOLVE_TIMEOUT_MS,
+    'Timed out waiting for the backend; it may be unreachable'
+  )
 
   const suggested = String(payload.suggestedName || '').trim()
   const fallbackName = path.basename(filePath) || suggested || 'download'
@@ -8260,7 +8267,9 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}): Promise<Ga
 
   const deps: GatewayFileSaveDeps = {
     showSaveDialog: (options: GatewaySaveDialogOptions): Promise<GatewaySaveDialogResult> =>
-      dialog.showSaveDialog(mainWindow, options)
+      mainWindow && !mainWindow.isDestroyed()
+        ? dialog.showSaveDialog(mainWindow, options)
+        : Promise.resolve({ canceled: true })
   }
 
   return saveGatewayDownload(requestPaths, ctx, {
@@ -17955,7 +17964,7 @@ ipcMain.handle('hermes:selectSavePath', async (_event, options: any = {}) => {
 // canvas. The main process has no such gate.
 ipcMain.handle('hermes:readClipboard', () => clipboard.readText())
 
-ipcMain.handle('hermes:saveGatewayFile', (_event, payload) => saveGatewayFile(payload))
+ipcMain.handle('hermes:saveGatewayFile', (_event, payload) => saveResultOrError(() => saveGatewayFile(payload)))
 
 ipcMain.handle('hermes:saveImageFromUrl', (_event, url) => saveImageFromUrl(String(url || '')))
 
