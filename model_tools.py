@@ -32,7 +32,7 @@ _post_tool_call_hook_suppressed: ContextVar[bool] = ContextVar("post_tool_call_h
 
 @contextmanager
 def suppress_post_tool_call_hook():
-    """Let an outer executor own the terminal post-tool event."""
+    """Let an outer executor own the terminal post-tool event and the transform that follows it."""
     token = _post_tool_call_hook_suppressed.set(True)
     try:
         yield
@@ -957,6 +957,8 @@ def handle_function_call(
                                enabled_tools=enabled_tools, skip_tool_execution_middleware=skip_tool_execution_middleware)
         duration_ms = _elapsed_ms(start)
         _emit(result, duration_ms=duration_ms)
+        if _post_tool_call_hook_suppressed.get():
+            return result  # the owning executor emits post_tool_call, then transforms
         return _apply_transform_tool_result_hook(function_name, function_args, result, duration_ms, ids)
 
     except Exception as e:

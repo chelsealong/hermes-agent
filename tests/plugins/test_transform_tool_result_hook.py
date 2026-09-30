@@ -132,6 +132,23 @@ def test_transform_tool_result_runs_after_post_tool_call(monkeypatch):
     ]
 
 
+def test_transform_deferred_to_executor_when_post_hook_suppressed(monkeypatch):
+    """The sequential executor owns post_tool_call, so it must also own the transform
+    that follows it; handle_function_call fires neither while suppressed."""
+    fired = []
+
+    def _hook(hook_name, **kw):
+        fired.append(hook_name)
+        return ["rewritten"] if hook_name == "transform_tool_result" else []
+
+    with model_tools.suppress_post_tool_call_hook():
+        out = _run_handle_function_call(
+            monkeypatch, dispatch_result='{"raw": "value"}', invoke_hook=_hook,
+        )
+    assert out == '{"raw": "value"}'
+    assert "transform_tool_result" not in fired
+
+
 def test_transform_tool_result_integration_with_real_plugin(monkeypatch, tmp_path):
     """End-to-end: load a real plugin from HERMES_HOME and verify it rewrites results."""
     import hermes_yaml as yaml
