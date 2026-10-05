@@ -826,7 +826,8 @@ class GatewayShutdownMixin:
         _maybe_update_status(force=True)
         if not self._running_agents and not (_cron0 or _api0 or _deferred0):
             return snapshot, False
-        # Cron has its own deadline: a chat turn is announced+resumable; a killed cron run is a permanent failure.
+        # Non-chat work has its own deadline: unlike chat turns, API requests, cron jobs, and
+        # deferred workers cannot rely on the next user message to resume after interruption.
         # ``timeout`` (``restart_drain_timeout``) defaults to 0 because interrupting a chat turn is
         # announced and resumable; a cron run killed mid-flight is recorded in jobs.json as a permanent
         # failure nobody is waiting on. Sharing one budget meant the default config could report
@@ -839,7 +840,7 @@ class GatewayShutdownMixin:
         def _still_draining() -> bool:
             now = loop.time()
             agents, cron, api, deferred = self._drain_work_counts()
-            return bool(((agents or api or deferred) and now < deadline) or (cron and now < cron_deadline))
+            return bool((agents and now < deadline) or ((cron or api or deferred) and now < cron_deadline))
 
         # Both budgets at 0 = an expired deadline (loop unentered), so timed_out still comes from real state.
         while _still_draining():

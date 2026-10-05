@@ -118,6 +118,26 @@ class TestAPIServerAdapterWorkCount:
 class TestDrainWaitsForApiWork:
 
     @pytest.mark.asyncio
+    async def test_default_chat_budget_waits_for_api_run_to_finish(self):
+        runner, _adapter = make_restart_runner()
+        api = _make_api_adapter(queued_ids=["run-1"])
+        runner.adapters = {Platform.API_SERVER: api}
+
+        async def finish_run():
+            await asyncio.sleep(0.12)
+            api._active_run_tasks["run-1"]._done = True
+
+        task = asyncio.create_task(finish_run())
+        try:
+            _snapshot, timed_out = await runner._drain_active_agents(
+                runner._restart_drain_timeout, runner._cron_drain_timeout
+            )
+        finally:
+            await task
+
+        assert timed_out is False
+
+    @pytest.mark.asyncio
     async def test_drain_waits_for_real_queued_run_before_agent_creation(self):
         """A live /v1/runs task must block drain before it has an agent."""
         runner, _adapter = make_restart_runner()
