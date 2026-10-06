@@ -614,7 +614,9 @@ If a Desktop chat or bot stops responding while the connection still shows **Con
 
 ### The app vanished after `hermes update`
 
-An earlier update that replaced the checkout without keeping `apps/desktop/release/` leaves no packaged app to launch. As long as `HERMES_HOME/desktop-build-stamp.json` (written only by a successful Desktop build) still exists, the next `hermes update` notices the missing app and rebuilds it. To rebuild by hand: `hermes desktop --build-only --force-build`. On Windows the ZIP fallback also keeps the built app, its renderer bundle and its Electron `node_modules` across the swap.
+An earlier update that replaced the checkout without keeping `apps/desktop/release/` leaves no packaged app to launch. To rebuild by hand, run `hermes desktop --build-only --force-build`. On Windows the ZIP fallback also keeps the built app, its renderer bundle and its Electron `node_modules` across the swap.
+
+Older installs may still have `HERMES_HOME/desktop-build-stamp.json`. This is a legacy file: current builds neither read nor update it, so its date does not tell you whether Desktop is current. You can delete it. For a source install, check `apps/desktop/build/install-stamp.json` for the build's source commit and `apps/desktop/dist/hermes-build.json` for the build receipt; Hermes also checks the packaged app when deciding whether to rebuild.
 
 ### The local backend stopped in the background
 
