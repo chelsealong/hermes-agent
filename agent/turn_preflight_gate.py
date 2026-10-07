@@ -62,8 +62,24 @@ def run_preflight_gate(
     # failure cooldown, then should_compress().
     _compressor = agent.context_compressor
     _preflight_threshold = int(getattr(_compressor, "threshold_tokens", 0) or 0)
+    if _provider_overflow_recovery_pending and _preflight_threshold <= 0:
+        # A plugin may miss update_model() and leave its threshold unset. Resolve
+        # the runtime window without the config pin, which can exceed a local
+        # server's loaded window, then honor the smaller of the two limits.
+        from agent.model_metadata import get_model_context_length
+
+        _api_key = getattr(agent, "api_key", "")
+        _preflight_threshold = get_model_context_length(
+            agent.model, base_url=agent.base_url,
+            api_key=_api_key if isinstance(_api_key, str) else "",
+            provider=agent.provider,
+            custom_providers=getattr(agent, "_custom_providers", None),
+        )
+        _configured_window = getattr(agent, "_config_context_length", None)
+        if isinstance(_configured_window, int) and _configured_window > 0:
+            _preflight_threshold = min(_preflight_threshold, _configured_window)
     _provider_overflow_preflight = _provider_overflow_recovery_pending and (
-        _preflight_threshold <= 0 or request_pressure_tokens >= _preflight_threshold
+        request_pressure_tokens >= _preflight_threshold
     )
     if _provider_overflow_recovery_pending and not _provider_overflow_preflight:
         # The outer-loop rebuild includes system prompt, request-only injections and

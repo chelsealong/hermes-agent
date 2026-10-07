@@ -1084,6 +1084,43 @@ class TestPreflightCompression:
         assert mock_compress.call_count == 2
         assert agent.client.chat.completions.create.call_count == 1
 
+    @pytest.mark.parametrize(
+        "pressure, expected_action, expected_pending",
+        [(52_500, "fallthrough", False), (100_000, "return", True)],
+    )
+    def test_provider_overflow_with_unknown_engine_threshold_uses_host_window(
+        self, agent, pressure, expected_action, expected_pending,
+    ):
+        """A missing plugin threshold honors a smaller runtime window (#134321)."""
+        from agent.turn_preflight_gate import run_preflight_gate
+
+        agent.context_compressor.context_length = 0
+        agent.context_compressor.threshold_tokens = 0
+        agent.context_compressor.should_compress = lambda _tokens: False
+        agent._config_context_length = 272_000
+        messages = [{"role": "user", "content": "summary"}]
+        assert agent.context_compressor.threshold_tokens == 0
+
+        # The configured 272k pin wins inside get_model_context_length unless
+        # the recovery gate explicitly asks for the endpoint's runtime limit.
+        def runtime_window(_model, *, config_context_length=None, **_kwargs):
+            return config_context_length or 65_536
+
+        with patch("agent.model_metadata.get_model_context_length", side_effect=runtime_window):
+            verdict = run_preflight_gate(
+                agent, request_pressure_tokens=pressure, _moa_prepared_request=None,
+                pending_moa_prepared_request=None, messages=messages,
+                system_message=None, user_message="continue", active_system_prompt="prompt",
+                conversation_history=[], api_call_count=1, compression_attempts=1,
+                max_compression_attempts=2, effective_task_id=None,
+                final_response="", failed=False, _turn_exit_reason=None,
+                _compression_timeout_exhausted=False, _preflight_compression_blocked=False,
+                _provider_overflow_recovery_pending=True, _last_preflight_pressure=None,
+            )
+
+        assert verdict.action == expected_action
+        assert verdict._provider_overflow_recovery_pending is expected_pending
+
     def test_long_context_tier_recovery_rechecks_complete_request_before_retry(self, agent):
         """The Anthropic long-context 429 handler is the same recovery class.
 
