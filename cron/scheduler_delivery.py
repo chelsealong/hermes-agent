@@ -1907,6 +1907,10 @@ def _deliver_result(
                                                 cleaned_delivery_content, diagnostic=for_failure)
             if local_error:
                 delivery_errors.append(local_error)
+            if media_files:
+                _note_target_error(
+                    job, f"{len(media_files)} media attachment(s) not delivered to "
+                    f"local chat {target['chat_id']}: local notes accept text only", delivery_errors)
             continue
 
         t = _prepare_target_delivery(
